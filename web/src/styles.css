@@ -243,3 +243,7 @@ pre.diff {
 .md .md-figure img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
 .md .md-figure figcaption { color: var(--muted); font-size: 11px; margin-top: 4px; }
 .md a { color: var(--accent); }
+
+.hint.ok-text { color: var(--ok); }
+.hint.warn-text { color: var(--warn); }
+

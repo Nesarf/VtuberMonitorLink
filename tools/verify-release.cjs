@@ -35,8 +35,12 @@ const SECRET_PATTERNS = [
   [/\bsk-[A-Za-z0-9]{16,}/, 'looks like an API key'],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key block'],
   [/[Aa]uthorization"?\s*:\s*"?[Bb]earer\s+[A-Za-z0-9._-]{20,}/, 'bearer token'],
-  [/[Cc]ookie"?\s*:\s*"?[^"\n]{40,}/, 'long cookie string'],
+  // A literal cookie value: a long run of cookie-safe characters straight after
+  // the key. Deliberately excludes spaces/commas/quotes so ordinary source like
+  // `cookie: r.cookieHeader, via: ...` is not mistaken for a leaked value.
+  [/[Cc]ookie"?:?\s*[:=]\s*"?[A-Za-z0-9_%.\-]{40,}/, 'literal cookie value'],
   [/sessionid=[A-Za-z0-9%]{16,}/, 'session cookie'],
+  [/\bSESSDATA=[A-Za-z0-9%*._-]{20,}/, 'bilibili session cookie value'],
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, 'email address'],
 ];
 

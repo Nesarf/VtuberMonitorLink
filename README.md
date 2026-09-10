@@ -54,6 +54,21 @@
 - `x/polymer/web-dynamic/v1/feed/space`（带配图的完整动态）风控极严，只有**复用登录态**才拿得到 → 那个来源标为「需登录」，走浏览器渲染。
 - `x/relation/stat` 提供粉丝数，用来做关注量增长追踪。
 
+### 登录态怎么拿（不需要关浏览器）
+
+有些来源（B 站带配图动态、X 推文正文）必须登录。传统做法是「关掉浏览器 → Playwright 复用 profile」，
+但那只为了拿一个 Cookie 头，代价太大。所以这里多了一条更轻的路：
+
+**只读复制一份浏览器的 cookie 库来解密提取**，浏览器开着也没关系，不会锁定、不会改动它。
+
+- 路径：`设置 → 浏览器 → 检查登录态`，填要读的域名（默认 `bilibili.com`）即可。
+- 实测：Opera / Chromium 内核 130+ 走 `v10`（AES-256-GCM，密钥由 DPAPI 保护）能正常读出，
+  明文前 32 字节的域名绑定哈希会自动剥掉。
+- **Chrome 127+ 默认开启 App-Bound Encryption**（`v20`），这种在外部无法解密 ——
+  工具会明确告诉你，并让你退回「关掉浏览器 + Playwright」那条路，而不是静默失败。
+- 拿到的登录态只用于调用对应站点的接口；**cookie 值不会进日志、不会进报告、不会进 `feeds/`**，
+  复制出来的临时库用完即删。接口只回报「读到了哪些 cookie 的名字」，从不回传值。
+
 ### LLM 自定义
 
 - 内置 9 个提供商预设：DeepSeek / OpenAI / Moonshot·Kimi / 智谱 GLM / 阿里通义 / SiliconFlow / OpenRouter / **本地 Ollama** / 自定义。
@@ -154,6 +169,25 @@ What the measurements forced:
 - `x/polymer/web-dynamic/v1/opus/feed/space` needs **no login and no wbi signature** and reliably returns text/image dynamics (text, likes, opus link) — that is the main path.
 - `x/polymer/web-dynamic/v1/feed/space` (full dynamics *with* pictures) is heavily rate/risk-controlled and only works with **a reused login** → that source is marked login-required and rendered in a browser.
 - `x/relation/stat` provides the follower count used for growth tracking.
+
+### Getting a login without closing your browser
+
+Some sources need a login (bilibili dynamics with pictures, X post bodies). The old answer was
+"close the browser, then let Playwright reuse the profile" — a steep price for one Cookie header.
+So there is a lighter path:
+
+**Copy the browser's cookie store and decrypt it read-only.** The browser can stay open; nothing is
+locked or modified.
+
+- Settings → Browser → *Check login*, with the domain to read (defaults to `bilibili.com`).
+- Measured: on Opera / Chromium 130+ the `v10` scheme (AES-256-GCM, key protected by DPAPI) reads
+  fine, including stripping the 32-byte domain-binding prefix Chromium 130+ prepends.
+- **Chrome 127+ enables App-Bound Encryption by default** (`v20`), which cannot be decrypted from
+  outside. The tool says so explicitly and points you back at the close-the-browser route instead
+  of failing silently.
+- The login is used only to call that site's own API. **Cookie values never reach a log, a report
+  or `feeds/`**, the copied store is deleted immediately, and the HTTP endpoint only ever reports
+  cookie *names*, never values.
 
 ### LLM
 

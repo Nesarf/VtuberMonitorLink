@@ -1,5 +1,45 @@
 # 发行说明 / Release notes
 
+## v1.2.0
+
+**登录态不必再关浏览器**，B 站带配图动态从此可开箱使用。
+
+### 新增 / Added
+
+1. **只读 cookie 提取**（`server/src/cookies.js`）：把浏览器的 cookie 库复制一份再解密，
+   浏览器开着也能读，**不锁定、不改动原 profile**。实测 Opera / Chromium 130+ 的 `v10`
+   方案（AES-256-GCM + DPAPI）可解，并自动剥掉 Chromium 130+ 加的 32 字节域名绑定哈希。
+2. **Chrome 127+ 的 App-Bound Encryption 会被显式识别**（`v20` / `app_bound_encrypted_key`），
+   给出可执行的替代方案，而不是静默失败。
+3. **`POST /api/cookies/check`** 与「设置 → 浏览器 → 检查登录态」：只回报读到哪些 cookie 的
+   **名字**与数量，**从不回传值**。
+4. **B 站完整动态解析改进**：`feed/space` 加上 `features=itemOpusStyle`，
+   正文覆盖 3→11（泠鸢）/ 0→7（嘉然）；转发动态的原文也拼进正文。
+5. `bili-dynamic-login` 默认 uid 改为**确实会发图的 UP**，让「含配图」开箱可见
+   （实测 7/12 条带配图、11/12 条有正文、12/12 条有发布时间）。
+
+### 本次验证 / Verification evidence
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 源码隐私自检 | `npm run sanitize-check` | 57 个文本文件，0 处硬编码路径 / 密钥 / 私人名字 |
+| 发行包校对 | `npm run verify` | clean |
+| HTTP 端点遍历 | `npm run traverse` | **73/73**（新增登录态探测的契约检查与「绝不回传值」断言） |
+| UI 遍历 | `npm run traverse:ui` | **48/48** |
+| 真实登录态端到端 | 手工脚本 | 登录态识别为 `Nesarf_Mollor`；`feed/space` 由 `-352` 变 `code=0`；12 条动态 7 条带配图；`feeds/` 与报告里**均未出现任何 cookie 值** |
+
+### 校对期间发现并修掉的问题
+
+1. **`features=itemOpusStyle` 缺失导致正文全丢**：不带这个参数时新版图文动态的
+   `major.draw.items` 为空且 `desc` 为 null，正文一条都取不到。已对比验证配上它之后
+   配图数量与 URL 完全不变，只补齐正文。
+2. **判别字段用错**：`it.type` 有时是 `DYNAMIC_TYPE_DRAW` 而真实结构在 `major.type`。
+3. **转发动态内容为空**：正文在被转发的 `orig` 里，已拼接。
+4. **默认演示来源选得不合适**：原先指向只发表情码的 UP，导致「含配图」这个特性
+   开箱看不到，已改为会发图的 UP。
+
+---
+
 ## v1.1.0
 
 功能扩展版：**网页内完成 LLM 选择与情报呈现、自定义监视对象、B 站纳入情报源**。

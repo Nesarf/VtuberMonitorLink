@@ -35,6 +35,7 @@ export const api = {
   // 环境
   getBrowsers: () => j('/api/browsers'),
   detectProxy: () => j('/api/proxy/detect'),
+  checkCookies: (payload) => post('/api/cookies/check', payload),
 
   // 运行
   getState: () => j('/api/state'),

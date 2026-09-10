@@ -202,6 +202,13 @@ async function main() {
     const px = await api('GET', '/api/proxy/detect');
     check('GET /api/proxy/detect responds', px.status === 200 && Array.isArray(px.json.found) && typeof px.json.probed === 'number', 'probed ' + (px.json && px.json.probed) + ', found ' + JSON.stringify((px.json && px.json.found) || []));
 
+    // 登录态探测：有没有登录取决于这台机器，所以只检查「契约」而不是结果
+    const ck = await api('POST', '/api/cookies/check', { domains: ['bilibili.com'] });
+    check('POST /api/cookies/check answers with a contract', ck.status === 200 && typeof ck.json.ok === 'boolean' && Array.isArray(ck.json.names), ck.json.ok ? ck.json.cookieCount + ' cookies, SESSDATA=' + ck.json.hasSession : String(ck.json.error).slice(0, 60));
+    check('the cookie endpoint never returns values', !JSON.stringify(ck.json).includes('SESSDATA='), 'names only');
+    const ckBad = await api('POST', '/api/cookies/check', { profileDir: 'C:\\No\\Such\\Profile', domains: ['bilibili.com'] });
+    check('a bogus profileDir fails cleanly', ckBad.status === 200 && ckBad.json.ok === false && !!ckBad.json.error, String(ckBad.json.error).slice(0, 60));
+
     // ---------------------------------------------------------- 5. llm + intel
     process.stdout.write('\n5. LLM profiles & intel\n');
     const llm = await api('GET', '/api/llm/presets');

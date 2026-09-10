@@ -58,6 +58,35 @@ npm run sanitize-check
 两者都不会进版本库（`config.json` 在 `.gitignore` 里），也不会进发行包。
 `.sanitize-names` 里的私人名字清单同理。
 
+## 浏览器登录态（`server/src/cookies.js`）
+
+有些来源必须登录才能抓（B 站带配图动态、X 推文正文）。本工具提供了两条路，
+**默认都不会把 cookie 写到任何持久化位置**：
+
+### 路线 A：只读提取（推荐，浏览器可以开着）
+
+把浏览器的 cookie 库**复制一份**到临时目录再解密：临时副本用完即删，
+原 profile 不会被锁定、不会被改动。
+
+- 只读取你指定的域名（默认 `bilibili.com`），其余域名一律不碰；
+- 解密出的明文只在本进程内存里拼成一个 Cookie 头，直接发给对应站点；
+- **不写日志、不写报告、不进 `feeds/`**；`POST /api/cookies/check` 只回传
+  「读到了哪些 cookie 的名字」，从不回传值；
+- DPAPI 解密钥这一步会调用一次本机 `powershell.exe`（离线、不走网络）；
+  失败就明确报错，不会静默降级。
+
+实测：Opera / Chromium 130+ 的 `v10` 方案可解；**Chrome 127+ 默认启用
+App-Bound Encryption（`v20`）时无法在外部解密** —— 这时工具会直接说明，
+并引导你改用路线 B。
+
+### 路线 B：Playwright 复用 profile
+
+把 `profileDir` 指向已登录的浏览器，Playwright 以持久化上下文启动。
+**要求该浏览器完全关闭**（否则 profile 被锁），代价更大但兼容所有浏览器。
+
+> 如果你不希望任何工具去读你的 cookie，就不要配置 `profileDir`：
+> 未配置时不会执行任何提取，需要登录的来源会如实失败并给出提示。
+
 ## 上线前请确认
 
 `npm run verify` 与 `npm run traverse*` 全绿只代表**程序本身**没问题，不代表

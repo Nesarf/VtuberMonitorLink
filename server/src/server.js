@@ -89,6 +89,26 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ detected: detectBrowsers(), config: getConfig().browser });
   });
 
+  // ── 登录态探测 / login availability ──────────────────────────────
+  // 只回报「读到了哪些 cookie 的名字」，**绝不回传任何值**。
+  app.post('/api/cookies/check', async (req, res) => {
+    const cfg = getConfig();
+    const profileDir = req.body?.profileDir ?? cfg.browser?.profileDir ?? '';
+    const domains = Array.isArray(req.body?.domains) && req.body.domains.length ? req.body.domains : ['bilibili.com'];
+    const { readBrowserCookies } = await import('./cookies.js');
+    const r = await readBrowserCookies(profileDir, domains);
+    res.json({
+      ok: r.ok,
+      error: r.error ?? null,
+      warning: r.warning ?? null,
+      profile: r.profile ?? null,
+      domains,
+      cookieCount: (r.names ?? []).length,
+      hasSession: (r.names ?? []).includes('SESSDATA'),
+      names: r.names ?? [],
+    });
+  });
+
   // ── 代理探测 / proxy detection ───────────────────────────────────
   // 逐个试探本机常见代理端口，返回真正能出网的地址（不写死任何端口为唯一答案）
   app.get('/api/proxy/detect', async (_req, res) => {

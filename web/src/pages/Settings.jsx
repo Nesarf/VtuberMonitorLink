@@ -12,6 +12,9 @@ export default function Settings() {
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [newPreset, setNewPreset] = useState('deepseek');
+  const [domain, setDomain] = useState('bilibili.com');
+  const [loginMsg, setLoginMsg] = useState('');
+  const [loginOk, setLoginOk] = useState(false);
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
@@ -128,6 +131,25 @@ export default function Settings() {
     });
   };
 
+  // 只读提取登录态：回报 cookie 数量与名字，不回传任何值
+  const checkLogin = async () => {
+    setBusy(true);
+    setLoginMsg(t('checkingLogin'));
+    try {
+      const r = await api.checkCookies({ profileDir: cfg.browser.profileDir, domains: [domain.trim() || 'bilibili.com'] });
+      setLoginOk(!!(r.ok && r.hasSession));
+      if (r.ok && r.hasSession) setLoginMsg(`✅ ${t('loginOk')}: ${r.cookieCount} 个（含 SESSDATA）· ${r.profile ?? ''}`);
+      else if (r.ok) setLoginMsg(`⚠️ ${t('loginNoSession')}: ${r.cookieCount} 个 · ${(r.names ?? []).slice(0, 8).join(', ')}`);
+      else setLoginMsg(`❌ ${t('loginNone')}: ${r.error ?? ''}`);
+      if (r.warning) setLoginMsg((m) => `${m} ｜ ${r.warning}`);
+    } catch (e) {
+      setLoginOk(false);
+      setLoginMsg(`❌ ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const detectProxy = async () => {
     setBusy(true);
     flash(t('proxyDetecting'), 0);
@@ -212,6 +234,23 @@ export default function Settings() {
             </div>
           </div>
         )}
+
+        {/* ── 登录态探测：只读提取，浏览器开着也行 ── */}
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 150px' }}>
+            <label>{t('domainLabel')}</label>
+            <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="bilibili.com" />
+          </div>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <button className="ghost" onClick={checkLogin} disabled={busy || !cfg.browser.profileDir}>
+              {busy ? t('checkingLogin') : t('checkLogin')}
+            </button>
+          </div>
+          <div className="field" style={{ flex: 1 }}>
+            <div className="hint" style={{ margin: 0 }}>{t('loginHint')}</div>
+            {loginMsg && <div className={loginOk ? 'hint ok-text' : 'hint warn-text'} style={{ margin: 0 }}>{loginMsg}</div>}
+          </div>
+        </div>
       </section>
 
       {/* ── LLM 多档位 ── */}

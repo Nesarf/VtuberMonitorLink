@@ -50,6 +50,16 @@ export const STRINGS = {
     profileHint: '留空则用临时干净配置（不携带任何登录）。浏览器开着时该目录会被锁，无法复用。',
     headless: '无头模式',
     waitMs: '渲染后等待(ms)',
+    checkLogin: '检查登录态',
+    checkingLogin: '检查中…',
+    loginOk: '读到登录 cookie',
+    loginNoSession: '读到 cookie 但没有 SESSDATA（可能没登录）',
+    loginNone: '没读到登录 cookie',
+    loginHint:
+      '这里会**只读地**复制一份浏览器的 cookie 库来取登录态（浏览器开着也没关系，不会锁定或改动它）。' +
+      '日志与报告里都不会出现 cookie 内容。若浏览器启用了 App-Bound Encryption（Chrome 127+ 默认），' +
+      '外部无法解密，这时只能关掉浏览器让 Playwright 复用 profile。',
+    domainLabel: '要读的域名',
 
     // llm
     llmTitle: 'LLM 分析',
@@ -255,6 +265,17 @@ export const STRINGS = {
     profileHint: 'Leave empty for a clean temp profile (no login). The dir is locked while that browser is running.',
     headless: 'Headless',
     waitMs: 'Wait after render (ms)',
+    checkLogin: 'Check login',
+    checkingLogin: 'Checking…',
+    loginOk: 'Login cookies found',
+    loginNoSession: 'Cookies found but no SESSDATA (probably not signed in)',
+    loginNone: 'No login cookies found',
+    loginHint:
+      'This makes a **read-only copy** of the browser cookie store to pick up a login — the browser can stay open, ' +
+      'nothing is locked or modified, and cookie values never reach a log or a report. ' +
+      'If the browser uses App-Bound Encryption (the default in Chrome 127+), outside decryption is impossible and ' +
+      'you have to close the browser so Playwright can reuse the profile.',
+    domainLabel: 'Domains to read',
 
     llmTitle: 'LLM analysis',
     llmHint:

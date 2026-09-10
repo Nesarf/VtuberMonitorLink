@@ -184,14 +184,15 @@ export const BILIBILI_SOURCES = [
     name: { zh: 'B站完整动态（含配图，需登录）', en: 'bilibili full dynamics with pictures (login required)' },
     category: 'bili',
     fetch: 'bili-dynamic',
-    url: 'https://space.bilibili.com/672328094/dynamic',
-    uid: '672328094',
+    // 默认指向一个确实会发图的 UP，这样「含配图」开箱就能看到；uid 可在网页里改
+    url: 'https://space.bilibili.com/282994/dynamic',
+    uid: '282994',
     proxy: 'direct',
     login: 'required',
     defaultEnabled: false,
     note: {
-      zh: '用「设置 → 浏览器」里指定的已登录 profile 渲染动态页；未登录会弹滑块验证。uid 可在网页里改。',
-      en: 'Renders the dynamic page with the signed-in profile from Settings → Browser; without a login bilibili shows a captcha. The uid is editable in the UI.',
+      zh: '先用「设置 → 浏览器」里配的 profile 只读提取登录 cookie 调接口（浏览器开着也行）；拿不到再退回浏览器渲染。uid 可在网页里改。',
+      en: 'Reads login cookies read-only from the profile in Settings → Browser (works while that browser is open); falls back to browser rendering. The uid is editable in the UI.',
     },
   },
 ];

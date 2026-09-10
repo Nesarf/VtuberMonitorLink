@@ -129,11 +129,148 @@ export async function fetchFollowers(uid, ctx, bv) {
 }
 
 /**
- * 完整动态（含配图）—— 需要登录态。
- * 顺序：浏览器 profile 渲染 space.bilibili.com/<uid>/dynamic → 抓 DOM 卡片。
- * 未登录时页面会弹滑块验证，此时如实报错，让 UI 提示「此来源需要登录」。
+ * 拿一份可用的登录态。
+ * 顺序：来源自带 cookie → 从配置的浏览器 profile 只读提取 → 没有就算了。
+ * 提取是「复制 cookie 库再解密」的路子，所以**浏览器开着也没关系**。
+ */
+export async function resolveLogin(source, ctx) {
+  if (source.cookie) return { cookie: source.cookie, via: 'inline' };
+  const profileDir = source.profileDir || ctx.cfg?.browser?.profileDir;
+  if (!profileDir) return { cookie: null, via: 'none', reason: '未配置浏览器 profileDir' };
+  const { readBrowserCookies } = await import('../cookies.js');
+  const r = await readBrowserCookies(profileDir, ['bilibili.com']);
+  if (!r.ok) {
+    ctx.log?.info(`bilibili 登录态不可用 / no login: ${r.error}`);
+    return { cookie: null, via: 'none', reason: r.error };
+  }
+  const hasSession = (r.names ?? []).includes('SESSDATA');
+  ctx.log?.info(`bilibili 登录态已载入（${r.names.length} 个 cookie${hasSession ? '，含 SESSDATA' : '，无 SESSDATA'}）`);
+  return { cookie: r.cookieHeader, via: 'profile', hasSession, warning: r.warning, profile: r.profile };
+}
+
+/**
+ * 把 feed/space 的条目规范化（含配图、相对时间、视频标题）。
+ *
+ * 实测要点：
+ *   • 必须带 features=itemOpusStyle —— 否则新版图文动态的 major 是
+ *     MAJOR_TYPE_DRAW 且 items 为空、desc 为 null（正文全丢）。
+ *     带上之后变成 MAJOR_TYPE_OPUS，正文在 major.opus.summary.text，
+ *     而**配图数量与 URL 完全不变**（已对比验证）。
+ *   • major.type 才是判别字段（it.type 有时不可靠）。
+ *   • 转发动态（DYNAMIC_TYPE_FORWARD）正文在被转发的 orig 里，要一并取出来。
+ */
+function imagesOf(md) {
+  const major = md?.major ?? {};
+  return [
+    ...(major.draw?.items ?? []).map((d) => d?.src).filter(Boolean),
+    ...(major.opus?.pics ?? []).map((p) => p?.url).filter(Boolean),
+  ];
+}
+
+function textOf(md) {
+  if (!md) return '';
+  const major = md.major ?? {};
+  return String(md.desc?.text ?? major.opus?.summary?.text ?? major.draw?.title ?? '').trim();
+}
+
+function normalizeDynamic(items, uid) {
+  return items.map((it) => {
+    const md = it.modules?.module_dynamic ?? {};
+    const major = md.major ?? {};
+    const author = it.modules?.module_author ?? {};
+    const stat = it.modules?.module_stat ?? {};
+
+    const own = textOf(md);
+    const origMd = it.orig?.modules?.module_dynamic;
+    const origAuthor = it.orig?.modules?.module_author?.name ?? '';
+    const origText = textOf(origMd);
+    const text = [own, origText ? `//@${origAuthor}: ${origText}` : ''].filter(Boolean).join('\n').trim();
+
+    const images = [...new Set([...imagesOf(md), ...imagesOf(origMd)])].slice(0, 12);
+
+    const archive = major.archive ?? it.orig?.modules?.module_dynamic?.major?.archive;
+    const jump = archive?.jump_url
+      ? archive.jump_url.startsWith('//')
+        ? `https:${archive.jump_url}`
+        : archive.jump_url
+      : '';
+    const url = it.id_str ? `https://t.bilibili.com/${it.id_str}` : jump || `https://space.bilibili.com/${uid}/dynamic`;
+
+    return {
+      id: `bili-dyn-${it.id_str ?? Math.random().toString(36).slice(2)}`,
+      kind: 'bilibili-dynamic',
+      sourceUid: String(uid),
+      title: archive?.title ?? '',
+      text,
+      url,
+      time: author.pub_time ?? '',
+      images,
+      stats: { like: stat.like?.count ?? '', comment: stat.comment?.count ?? '', forward: stat.forward?.count ?? '' },
+      extra: {
+        type: it.type,
+        majorType: major.type,
+        author: author.name ?? '',
+        forwarded: !!it.orig,
+      },
+    };
+  });
+}
+
+/**
+ * 登录态下的完整动态：直接调 JSON 接口，拿到正文 + 配图 + 发布时间。
+ * 这是首选路径 —— 数据干净，而且**不需要关掉用户的浏览器**。
+ * 拿不到登录态时才退回浏览器渲染。
  */
 export async function fetchBilibiliDynamic(source, ctx) {
+  const uid = String(source.uid ?? '').trim();
+  if (!uid) throw new Error('bilibili 来源缺少 uid / missing uid');
+  const login = await resolveLogin(source, ctx);
+
+  if (login.cookie) {
+    const bv = await ensureBuvid(ctx);
+    const url = `${API}/x/polymer/web-dynamic/v1/feed/space?host_mid=${encodeURIComponent(uid)}&timezone_offset=-480&platform=web&features=itemOpusStyle`;
+    let j = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const r = await netFetch(
+        url,
+        {
+          headers: {
+            ...baseHeaders(uid),
+            cookie: cookieHeader(bv, login.cookie),
+          },
+          signal: AbortSignal.timeout(25000),
+        },
+        { cfg: ctx.cfg, subject: source }
+      );
+      j = await r.json().catch(() => null);
+      if (j?.code === 0) break;
+      if (attempt < 2) await new Promise((res) => setTimeout(res, 1500));
+    }
+    if (j?.code === 0) {
+      const items = normalizeDynamic(j.data?.items ?? [], uid);
+      ctx.log?.info(`bilibili 完整动态 ${uid}: ${items.length} 条（登录态接口）`);
+      return {
+        ok: true,
+        ext: 'json',
+        content: JSON.stringify({ kind: 'bilibili-dynamic', uid, via: 'cookie-api', items }, null, 1),
+        items,
+        note: login.warning,
+        followers: await fetchFollowers(uid, ctx, bv).catch(() => null),
+      };
+    }
+    ctx.log?.warn(`bilibili 登录态接口返回 code=${j?.code} ${j?.message ?? ''}，退回浏览器渲染`);
+    if (login.via === 'inline') {
+      throw new Error(`B 站接口拒绝 / code=${j?.code} ${j?.message ?? ''}（cookie 可能已失效）`);
+    }
+  } else {
+    ctx.log?.warn(`bilibili 无登录态（${login.reason ?? 'unknown'}），走浏览器渲染：${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : '未配置 profile 时多半会弹滑块验证'}`);
+  }
+
+  return fetchBilibiliDynamicRendered(source, ctx, login);
+}
+
+/** 兜底：用 Playwright 渲染动态页（需要目标浏览器处于关闭状态） */
+export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
   const uid = String(source.uid ?? '').trim();
   if (!uid) throw new Error('bilibili 来源缺少 uid / missing uid');
   const { chromium } = await import('playwright');
@@ -213,6 +350,16 @@ export async function fetchBilibiliDynamic(source, ctx) {
       items,
       followers: await fetchFollowers(uid, ctx).catch(() => null),
     };
+  } catch (err) {
+    // 复用 profile 要求该浏览器已关闭，把 Playwright 的原始报错翻译成人话
+    const m = String(err?.message ?? '');
+    if (/ProcessSingleton|is already (running|in use)|SingletonLock|profile.*lock/i.test(m)) {
+      throw new Error(
+        '该浏览器正在运行，profile 被锁定 / the browser is running and its profile is locked —— 要么关掉它，' +
+          '要么在「设置 → 浏览器」里把 profileDir 指向另一个已登录 B 站的浏览器（只读提取 cookie 不需要关浏览器）'
+      );
+    }
+    throw err;
   } finally {
     await Promise.race([
       (async () => {

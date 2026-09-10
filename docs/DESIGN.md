@@ -185,8 +185,34 @@ URL 型的关键词判定用的是「新增行 + 新内容前 1500 字」，只�
 
 ## 8. B 站动态
 
-见 README 的「B 站动态」一节：结论是**直连 + 免登录 opus 端点为主力，登录态下的
-完整动态与浏览器渲染为补充**。代码在 `server/src/fetchers/bilibili.js`。
+见 README 的「B 站动态」一节。代码在 `server/src/fetchers/bilibili.js`，三条路按优先级：
+
+1. **登录态 + JSON 接口**（首选）：从配置的 profile **只读提取** cookie（`cookies.js`），
+   调 `feed/space`。数据最干净 —— 正文、配图、发布时间、点赞数都有，而且**不需要关掉浏览器**。
+2. **浏览器渲染**：拿不到登录态时用 Playwright 渲染 `space.bilibili.com/<uid>/dynamic` 抓 DOM。
+   要求目标浏览器已关闭；被锁时会把 Playwright 的报错翻译成人话再抛出。
+3. **免登录 opus 接口**：`bili-opus` 来源专用，只有正文与点赞数，没有配图。
+
+`cookies.js` 的实测要点：
+
+- cookie 库在 `<userData>/<Profile>/Network/Cookies`（老版本可能少一层 `Network`）；
+- 密钥在 `<userData>/Local State` 的 `os_crypt.encrypted_key`：base64 → 去掉 5 字节
+  `DPAPI` 前缀 → DPAPI 解出 32 字节 AES 密钥；
+- 值前缀 `v10` = AES-256-GCM（nonce 12B / tag 16B）；**明文前 32 字节是 Chromium 130+
+  加的域名绑定哈希，必须剥掉**；
+- 前缀 `v20` 或 `Local State` 里存在 `app_bound_encrypted_key` = App-Bound Encryption
+  （Chrome 127+ 默认），外部解不了 —— 这时要明确报错，不能假装成功；
+- 复制时连 `-wal`/`-shm` 一起复制，否则 SQLite 视图可能不一致；
+- 全程**不改动原 profile**，所以浏览器开着也能跑。
+
+`feed/space` 的解析要点（都踩过）：
+
+- 必须带 `features=itemOpusStyle`。不带的话新版图文动态的 `major` 是 `MAJOR_TYPE_DRAW`
+  且 `items` 为空、`desc` 为 null（正文全丢）；带上之后变成 `MAJOR_TYPE_OPUS`，
+  正文在 `major.opus.summary.text`，而**配图的数量与 URL 完全不变**（已对比验证：
+  正文覆盖 3→11 / 0→7，配图 5 条 14 图两种模式一致）。
+- 判别字段是 `major.type`，不是 `it.type`。
+- 转发动态的正文在被转发的 `it.orig` 里，要拼成 `//@原作者: …`。
 
 ## 9. LLM 档位
 

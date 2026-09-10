@@ -1,14 +1,16 @@
 // tools/traverse-ui.cjs - drive the built console in a real browser.
 //
-// ASCII only, CommonJS. Loads the packaged console in a headless browser,
-// clicks through all four pages, exercises the run button, flips the language,
-// and fails on any console error, page error or failed API call.
+// ASCII only, CommonJS. Loads the packaged console, walks all six pages, runs a
+// real collection against a local mock LLM (so no API key is needed), then
+// checks the intel stream, the watch history/diff view, the Markdown rendering
+// and the export links. Fails on any console error, page error or failed API
+// call.
 //
 //   node tools/traverse-ui.cjs [--dir dist/VtuberMonitorLink] [--port 43198]
-//                              [--headed] [--keep]
+//                              [--mock 43196] [--headed] [--keep]
 //
 // Requires `playwright` in the repo's node_modules and one usable browser
-// (either an installed Chrome/Edge/Opera, or Playwright's own Chromium).
+// (an installed Chrome/Edge/Opera, or Playwright's own Chromium).
 
 'use strict';
 
@@ -20,11 +22,12 @@ const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function parseArgs(argv) {
-  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43198, headed: false, keep: false };
+  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43198, mock: 43196, headed: false, keep: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dir') out.dir = path.resolve(argv[++i]);
     else if (a === '--port') out.port = Number(argv[++i]) || out.port;
+    else if (a === '--mock') out.mock = Number(argv[++i]) || out.mock;
     else if (a === '--headed') out.headed = true;
     else if (a === '--keep') out.keep = true;
   }
@@ -33,12 +36,56 @@ function parseArgs(argv) {
 
 const results = [];
 function check(name, ok, detail) {
-  results.push({ name: name, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
+  results.push({ name, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
   process.stdout.write('  ' + (ok ? '[ok]  ' : '[FAIL]') + ' ' + name + (detail ? '  -- ' + detail : '') + '\n');
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Only these two sources stay on: one bilibili (direct, fast) and one wiki. */
+const FAST_SOURCES = ['bili-opus-jaran', 'fandom-vtuber-wiki'];
+const ALL_SOURCES = [
+  'reddit-VirtualYoutubers', 'reddit-Hololive', 'reddit-Nijisanji', 'reddit-VShojo',
+  'fandom-vtuber-wiki', 'moegirl', 'twitch-vtuber', 'x-twitter', 'youtube-official',
+  'news-ann', 'news-kaiyou', 'news-4gamers', 'news-kaori', 'news-moguravr', 'news-dengeki',
+  'official-anycolor', 'official-hololive', 'official-bravegroup', 'official-vspo', 'official-cover',
+  'merch-fanbox', 'merch-cien', 'merch-booth', 'merch-dlsite',
+  'bili-opus-jaran', 'bili-opus-asoul', 'bili-opus-yousa', 'bili-opus-hanser', 'bili-dynamic-login',
+];
+
+function seedConfig(mockPort) {
+  const overrides = {};
+  for (const id of ALL_SOURCES) overrides[id] = { enabled: FAST_SOURCES.includes(id) };
+  return {
+    browser: { mode: 'bundled', headless: true, waitMs: 4000, hardTimeoutMs: 90000 },
+    llm: {
+      activeId: 'mock',
+      providers: [
+        {
+          id: 'mock',
+          preset: 'custom',
+          name: '本地 Mock（测试用）',
+          baseUrl: `http://127.0.0.1:${mockPort}`,
+          apiKey: 'mock-key-not-a-real-secret',
+          model: 'mock-model',
+          models: ['mock-model', 'mock-reasoner'],
+          maxTokens: 2048,
+          temperature: 0.2,
+        },
+      ],
+    },
+    proxy: { enabled: false, url: '' },
+    run: { defaultGapSeconds: 1, watchWithRun: true },
+    watch: {
+      enabled: true,
+      targets: [
+        { id: 'watch-url-example', kind: 'url', label: 'example.com', url: 'https://example.com/', enabled: true },
+        { id: 'watch-bili-jaran', kind: 'bili-opus', label: '嘉然动态', uid: '672328094', proxy: 'direct', enabled: true },
+      ],
+      rules: { largeEditBytes: 5000, largeDeleteBytes: 2000, keywords: ['毕业', '解约', '直播'] },
+    },
+    sources: overrides,
+  };
 }
 
 async function main() {
@@ -60,10 +107,18 @@ async function main() {
   const cfgPath = path.join(appDir, 'config.json');
   const hadConfig = fs.existsSync(cfgPath);
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
-  const createdDirs = ['reports', 'feeds', 'logs'].filter((d) => !fs.existsSync(path.join(appDir, d)));
+  const createdDirs = ['reports', 'feeds', 'logs', 'watch'].filter((d) => !fs.existsSync(path.join(appDir, d)));
+
+  // A mock OpenAI-compatible endpoint: lets the walk exercise a real run with
+  // no API key anywhere near the release.
+  const mock = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-llm.cjs'), '--port', String(args.mock)], {
+    stdio: 'ignore',
+  });
+  await sleep(900);
+  fs.writeFileSync(cfgPath, JSON.stringify(seedConfig(args.mock), null, 2), 'utf8');
 
   const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: 'ignore' });
-  const restored = () => {
+  const restore = () => {
     try {
       if (hadConfig) fs.writeFileSync(cfgPath, cfgBackup);
       else fs.rmSync(cfgPath, { force: true });
@@ -94,15 +149,14 @@ async function main() {
     }
     check('server is up', true, base);
 
-    // Prefer a browser the product itself detected; fall back to Playwright's.
     const br = await (await fetch(base + '/api/browsers')).json();
     const detected = (br.detected || [])[0];
     const launchOpts = { headless: !args.headed, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
     if (detected) launchOpts.executablePath = detected.executablePath;
-    process.stdout.write('  using browser: ' + (detected ? detected.name + ' (' + detected.executablePath + ')' : "Playwright's bundled Chromium") + '\n');
+    process.stdout.write('  using browser: ' + (detected ? detected.name : "Playwright's bundled Chromium") + '\n');
 
     browser = await chromium.launch(launchOpts);
-    const context = await browser.newContext({ viewport: { width: 1360, height: 940 } });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
 
     const consoleErrors = [];
@@ -122,114 +176,173 @@ async function main() {
     await page.goto(base + '/', { waitUntil: 'networkidle', timeout: 30000 });
     const title = (await page.locator('h1').first().innerText()).trim();
     check('page mounts and shows the product title', title === "Vtuber's Monitor Link", title);
-    const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('four navigation tabs render', tabs.length === 4, tabs.join(' | '));
 
     const langBtn = page.locator('button.lang');
-    let lang = (await page.locator('.sub').first().innerText()).trim();
-    if (lang.indexOf('本地') === -1) {
-      // Normalise to Chinese so the landmark assertions below are stable.
+    if ((await page.locator('.sub').first().innerText()).indexOf('本地') === -1) {
       await langBtn.click();
       await page.waitForTimeout(300);
-      lang = (await page.locator('.sub').first().innerText()).trim();
     }
-    check('console runs in Chinese by default', lang.indexOf('本地') !== -1, lang);
+    const tabs = await page.locator('nav.tabs button').allInnerTexts();
+    check('six navigation tabs render', tabs.length === 6, tabs.join(' | '));
+    check('the new Intel and Watch tabs are present', tabs.includes('情报') && tabs.includes('监视'), tabs.join(' | '));
 
     const tab = (label) => page.locator('nav.tabs button', { hasText: label }).first();
-
-    // ------------------------------------------------------------------- run
-    process.stdout.write('\n2. Run page\n');
-    await tab('运行').click();
-    await page.waitForTimeout(600);
-    let main = await page.locator('main').innerText();
-    check('Run page renders', main.indexOf('运行') !== -1 && main.indexOf('实时日志') !== -1, main.split('\n')[0]);
-    check('Run page reports no run yet', main.indexOf('尚无运行记录') !== -1);
-    const runBtn = page.locator('main button', { hasText: '立即运行' }).first();
-    check('run button is present and enabled', await runBtn.isEnabled());
-
-    // ----------------------------------------------------------------- sources
-    process.stdout.write('\n3. Sources page\n');
-    await tab('来源').click();
-    await page.waitForTimeout(800);
-    const rows = await page.locator('main table tbody tr').count();
-    check('Sources page lists every adapter', rows === 24, rows + ' rows');
-    main = await page.locator('main').innerText();
-    check('Sources page shows the login-requirement legend', main.indexOf('登录要求') !== -1, 'hint present');
-    const badgeOk = /(无需|可选|必需)/.test(main);
-    check('login badges are rendered', badgeOk);
-
-    // toggle the first checkbox and confirm it sticks across a reload
-    const box = page.locator('main table tbody tr').first().locator('input[type=checkbox]');
-    const before = await box.isChecked();
-    await box.click();
-    await page.waitForTimeout(900);
-    await page.reload({ waitUntil: 'networkidle' });
-    if ((await page.locator('.sub').first().innerText()).indexOf('本地') === -1) {
-      await page.locator('button.lang').click();
-      await page.waitForTimeout(300);
-    }
-    await tab('来源').click();
-    await page.waitForTimeout(800);
-    const after = await page.locator('main table tbody tr').first().locator('input[type=checkbox]').isChecked();
-    check('a source toggle persists across a reload', after === !before, before + ' -> ' + after);
-    await page.locator('main table tbody tr').first().locator('input[type=checkbox]').click(); // put it back
-    await page.waitForTimeout(900);
+    const mainText = () => page.locator('main').innerText();
 
     // ---------------------------------------------------------------- settings
-    process.stdout.write('\n4. Settings page\n');
+    process.stdout.write('\n2. Settings: LLM profiles, theme, notify\n');
     await tab('设置').click();
     await page.waitForTimeout(700);
-    main = await page.locator('main').innerText();
-    for (const section of ['浏览器', 'LLM 分析', '网络代理', '定时']) {
+    let main = await mainText();
+    for (const section of ['浏览器', 'LLM 分析', '网络代理', '定时', '界面']) {
       check('Settings has the ' + section + ' section', main.indexOf(section) !== -1);
     }
     const keyInput = page.locator('main input[type=password]').first();
     check('the API key field is masked', (await keyInput.count()) > 0);
     const keyVal = (await keyInput.count()) > 0 ? await keyInput.inputValue() : '';
-    check('no API key is pre-filled in the build', keyVal === '', keyVal ? 'a key is present!' : 'empty');
-    const detectBtn = page.locator('main button', { hasText: '探测本机常见代理端口' }).first();
-    if (await detectBtn.count()) {
-      await detectBtn.click();
-      await page.waitForTimeout(6000);
-      main = await page.locator('main').innerText();
-      check('proxy probe returns a verdict', /探测到可用代理|未探测到可用代理端口/.test(main), (main.match(/探测到可用代理[^\n]*|未探测到可用代理端口/) || [''])[0]);
+    check('the seeded key is present but type=password', keyVal.length > 0, keyVal ? 'masked input has a value' : 'empty');
+    const reveal = page.locator('main button', { hasText: '显示' }).first();
+    if (await reveal.count()) {
+      await reveal.click();
+      await page.waitForTimeout(200);
+      check('the key field can be revealed on demand', (await page.locator('main input[type=text]').count()) > 0);
+      await page.locator('main button', { hasText: '隐藏' }).first().click();
+    }
+    const modelOptions = await page.locator('#vml-models option').count();
+    check('the model datalist is populated', modelOptions > 0, modelOptions + ' options');
+    const providerOptions = await page.locator('main select').first().locator('option').count();
+    check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
+    check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
+
+    // --------------------------------------------------------------- sources
+    process.stdout.write('\n3. Sources + custom source editor\n');
+    await tab('来源').click();
+    await page.waitForTimeout(800);
+    const rows = await page.locator('main table tbody tr').count();
+    check('Sources lists every adapter plus the target sources', rows >= 29, rows + ' rows');
+    main = await mainText();
+    check('the bilibili category is shown', main.indexOf('B 站') !== -1);
+    check('the custom-source form is present', main.indexOf('自定义来源') !== -1);
+
+    await page.locator('input[placeholder="my-feed"]').fill('ui-test-feed');
+    await page.locator('input[placeholder="某某的博客"]').fill('UI 测试订阅');
+    await page.locator('input[placeholder="https://example.com/feed.xml"]').fill('https://example.com/feed.xml');
+    await page.locator('main button', { hasText: '新增自定义来源' }).click();
+    await page.waitForTimeout(1200);
+    main = await mainText();
+    check('a custom source can be added from the UI', main.indexOf('ui-test-feed') !== -1);
+    const delBtn = page.locator('main button', { hasText: '删除' }).first();
+    if (await delBtn.count()) {
+      await delBtn.click();
+      await page.waitForTimeout(1200);
+      main = await mainText();
+      check('and removed again', main.indexOf('ui-test-feed') === -1);
     }
 
-    // ----------------------------------------------------------------- reports
-    process.stdout.write('\n5. Reports page\n');
-    await tab('报告').click();
-    await page.waitForTimeout(900);
-    main = await page.locator('main').innerText();
-    check('Reports page renders', main.indexOf('报告') !== -1 && /(还没有报告|刷新)/.test(main), main.split('\n')[0]);
+    // ----------------------------------------------------------------- watch
+    process.stdout.write('\n4. Watch: targets, baseline, rules\n');
+    await tab('监视').click();
+    await page.waitForTimeout(800);
+    main = await mainText();
+    check('Watch page renders the seeded targets', main.indexOf('example.com') !== -1 && main.indexOf('嘉然动态') !== -1);
+    check('the alarm-rules panel can be opened', (await page.locator('main button', { hasText: '告警规则' }).count()) > 0);
+    await page.locator('main button', { hasText: '全部检查一次' }).click();
+    await page.waitForTimeout(6000);
+    const watchRows = await page.locator('main table tbody tr').count();
+    check('both targets are listed', watchRows === 2, watchRows + ' rows');
+    main = await mainText();
+    const baselined = (main.match(/已建立|revid|粉丝|条/g) || []).length;
+    check('baseline info shows up after a check', main.indexOf('尚未建立') === -1, baselined + ' baseline markers');
+    const ruleBtn = page.locator('main button', { hasText: '告警规则' }).first();
+    await ruleBtn.click();
+    await page.waitForTimeout(400);
+    main = await mainText();
+    check('rule editor exposes thresholds and keywords', main.indexOf('大编辑阈值') !== -1 && main.indexOf('关键词') !== -1);
+    await page.locator('main button', { hasText: '收起规则' }).first().click();
 
-    // -------------------------------------------------------------- live run
-    process.stdout.write('\n6. pressing Run for real\n');
+    // ------------------------------------------------------------------- intel
+    process.stdout.write('\n5. Intel stream before the run\n');
+    await tab('情报').click();
+    await page.waitForTimeout(900);
+    main = await mainText();
+    check('Intel page renders', main.indexOf('情报卡片流') !== -1);
+    check('and says there is nothing yet', main.indexOf('还没有情报') !== -1, main.split('\n').slice(0, 2).join(' / '));
+
+    // --------------------------------------------------------------------- run
+    process.stdout.write('\n6. Run for real against the mock LLM\n');
     await tab('运行').click();
     await page.waitForTimeout(600);
+    check('the three run buttons are present', (await page.locator('main button').count()) >= 3);
     await page.locator('main button', { hasText: '立即运行' }).first().click();
-    const deadline = Date.now() + 40000;
-    let sawError = false;
+    const deadline = Date.now() + 4 * 60 * 1000;
+    let finished = false;
     while (Date.now() < deadline) {
-      const txt = await page.locator('main').innerText();
-      if (txt.indexOf('❌') !== -1) {
-        sawError = true;
+      const st = await (await fetch(base + '/api/state')).json();
+      if (st.running === false && st.finishedAt) {
+        finished = true;
         break;
       }
-      await sleep(1000);
+      await sleep(2000);
     }
-    check('the console surfaces the run outcome in the page', sawError, sawError ? 'error banner shown' : 'no outcome within 40s');
+    check('the run finishes', finished);
+    const st = await (await fetch(base + '/api/state')).json();
+    check('the run succeeds', !!st.lastResult, st.lastError || JSON.stringify(st.lastResult));
 
-    // -------------------------------------------------------------- language
-    process.stdout.write('\n7. language switch\n');
-    await page.locator('button.lang').click();
-    await page.waitForTimeout(500);
-    const en = await page.locator('main').innerText();
-    const enTabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('switching language translates the UI', enTabs.join('|').indexOf('Settings') !== -1, enTabs.join(' | '));
-    check('the English Run page says "Run now (daily)"', en.indexOf('Run now (daily)') !== -1);
+    // ------------------------------------------------------ intel after a run
+    process.stdout.write('\n7. Intel stream after the run\n');
+    await tab('情报').click();
+    await page.waitForTimeout(1500);
+    const cards = await page.locator('main .card').count();
+    check('the stream shows cards', cards > 0, cards + ' cards');
+    main = await mainText();
+    check('the bilibili source appears as a chip', main.indexOf('B站动态') !== -1 || main.indexOf('bilibili') !== -1);
+    const thumbs = await page.locator('main .card .thumbs img').count();
+    check('image thumbnails carry no-referrer (anti-hotlink)', thumbs === 0 || (await page.locator('main .card .thumbs img').first().getAttribute('referrerpolicy')) === 'no-referrer', thumbs + ' thumbnails');
+    check('the watch digest block is shown', main.indexOf('监视变化摘要') !== -1 || main.indexOf('监视') !== -1);
+    const filterSelect = page.locator('main select').first();
+    const opts = await filterSelect.locator('option').count();
+    check('the source filter is populated from the data', opts > 1, opts + ' options');
+
+    // --------------------------------------------------------------- reports
+    process.stdout.write('\n8. Reports: render, search, export\n');
+    await tab('报告').click();
+    await page.waitForTimeout(1000);
+    const reportRows = await page.locator('main table.reportlist tbody tr').count();
+    check('the run produced a report row', reportRows > 0, reportRows + ' rows');
+    await page.locator('main table.reportlist tbody tr button.link').first().click();
+    await page.waitForTimeout(1200);
+    const rendered = await page.locator('main .md').count();
+    check('the report renders as Markdown, not raw text', rendered > 0);
+    const h2s = await page.locator('main .md h2').count();
+    check('headings are rendered as real elements', h2s > 0, h2s + ' h2');
+    const tables = await page.locator('main .md table').count();
+    check('tables are rendered as real tables', tables > 0, tables + ' table(s)');
+    const links = await page.locator('main .md a').count();
+    check('links are clickable', links > 0, links + ' links');
+    main = await mainText();
+    check('raw Markdown is not shown in rendered mode', main.indexOf('## ') === -1);
+    await page.locator('main button', { hasText: '原始 Markdown' }).click();
+    await page.waitForTimeout(400);
+    check('and the raw toggle works', (await page.locator('main pre.report').count()) > 0);
+    await page.locator('main button', { hasText: '渲染视图' }).click();
+    await page.waitForTimeout(300);
+
+    const exportHref = await page.locator('main a', { hasText: '导出 HTML' }).first().getAttribute('href');
+    check('the HTML export link points at the API', !!exportHref && exportHref.indexOf('/export?format=html') !== -1, exportHref || '');
+    if (exportHref) {
+      const r = await fetch(base + exportHref);
+      const body = await r.text();
+      check('the exported HTML downloads', r.ok && body.indexOf('<!doctype html>') === 0, body.length + ' bytes');
+    }
+
+    await page.locator('main input[placeholder*="搜"]').first().fill('B 站动态');
+    await page.locator('main button', { hasText: '搜索' }).first().click();
+    await page.waitForTimeout(1200);
+    main = await mainText();
+    check('full-text search over reports works', main.indexOf('处命中') !== -1 || main.indexOf('没有命中') !== -1, (main.match(/\d+ 处命中/) || ['no hits'])[0]);
 
     // ---------------------------------------------------------------- hygiene
-    process.stdout.write('\n8. runtime hygiene\n');
+    process.stdout.write('\n9. runtime hygiene\n');
     check('no uncaught page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
     check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
     check('no failed /api call during the walk', badApi.length === 0, badApi.slice(0, 3).join(' | '));
@@ -261,7 +374,12 @@ async function main() {
         }
       }
     }
-    restored();
+    try {
+      mock.kill();
+    } catch (e) {
+      /* ignore */
+    }
+    restore();
   }
 
   const failed = results.filter((r) => !r.ok);

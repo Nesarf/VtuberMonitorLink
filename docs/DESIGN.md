@@ -127,10 +127,83 @@ dist/VtuberMonitorLink/
 ```bash
 npm run verify        # 校对：必需文件 / ASCII / UTF-8 / 隐私与密钥残留 / 运行数据
 npm run traverse      # 遍历：全部 HTTP 端点、SPA 兜底、错误路径
-npm run traverse:ui   # 遍历：真实浏览器里点完四个页面 + 跑一次运行
+npm run traverse:ui   # 遍历：真实浏览器里点完六个页面 + 用 mock LLM 真跑一次
 npm run release       # 上述全套
 ```
 
 `npm run sanitize-check` 另有一条：扫描仓库源码里的硬编码路径与隐私残留。
 私人名字清单**不写死在代码里**（否则检查脚本自己就成了泄漏源），改为读
 `$SANITIZE_NAMES` 或仓库根目录下已被 gitignore 的 `.sanitize-names`。
+
+## 6. 网络出口：为什么代理不能是全局开关
+
+实测两个方向都会翻车：
+
+- **不过代理**：本机直连被阻断的站点（Reddit、Fandom…）全部 ECONNRESET / 超时；
+- **过代理**：B 站反而稳定 412 / -352 风控。
+
+所以 `net.js` 提供三档出口，来源与监视对象都能单独覆盖：
+
+| 取值 | 行为 |
+| --- | --- |
+| （省略） | 跟随全局 `proxy.enabled` |
+| `'proxy'` | 强制走代理 |
+| `'direct'` | 强制直连 |
+
+外加一条硬规则：**回环地址永远直连**。本地 Ollama（`127.0.0.1:11434`）与遍历用的
+mock LLM 都在本机，丢给代理只会失败。
+
+## 7. 监视系统 / watch
+
+数据模型：
+
+```
+config.watch = { enabled, targets: [...], rules: {...} }
+<app>/watch/history/<id>.baseline.json   每个对象一份基线
+<app>/watch/history/<id>.jsonl           每次有变更就追加一行历史
+```
+
+基线是「上次看到的样子」，不是「上次抓到的时间」—— 首次检查只建立基线并明确
+标注 `first: true`，绝不计为变更，避免第一次跑就刷一屏假告警。
+
+`diff.js` 是自写的行级 LCS diff，先做公共前后缀裁剪把 DP 规模压下去，超限就退化成
+整块替换；`diffHunks()` 只留有变化的片段并带上下文行，供网页直接渲染。
+
+告警判定集中在 `applyRules()`：
+
+| 规则 | 触发条件 |
+| --- | --- |
+| 大编辑 / 大删除 | 字节增减超过阈值 |
+| 新建页面 | MediaWiki `new` 标记 |
+| 匿名编辑 | `anon` 标记 |
+| 未巡查编辑 | `unpatrolled` 标记 |
+| 日志类型 | 命中配置的 logtype 列表 |
+| 可疑关键词 | 标题/摘要/正文命中词表 |
+
+URL 型的关键词判定用的是「新增行 + 新内容前 1500 字」，只看新增行会漏掉
+「改词不增行」的情况。
+
+## 8. B 站动态
+
+见 README 的「B 站动态」一节：结论是**直连 + 免登录 opus 端点为主力，登录态下的
+完整动态与浏览器渲染为补充**。代码在 `server/src/fetchers/bilibili.js`。
+
+## 9. LLM 档位
+
+`llm.js` 只依赖 OpenAI 兼容的 `/chat/completions` 与 `/models`：
+
+- `PRESETS` 是预设目录；`newProvider()` 由预设派生一个档位；
+- `activeProvider(cfg)` 取当前档位，**并把 v1.0.0 的扁平写法（`llm.apiKey` 等）
+  即时降级成单档位**，老配置不用手改；
+- `chatRequest()` 统一拼请求体，`analyze.js` / `preflight()` 都走它。
+
+## 10. 情报条目
+
+`items.js` 把各来源的抓取结果统一成一种结构：
+
+```
+{ id, kind, sourceId, sourceName, title, text, url, time, images[], stats{}, keywords[] }
+```
+
+网页卡片流、报告来源清单、关键词高亮、关注量增长全都吃这一份，落盘在
+`<app>/feeds/<date>/_items.json`。这样「呈现层」不必再理解每种抓取方式的差异。

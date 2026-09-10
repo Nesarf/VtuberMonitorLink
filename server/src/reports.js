@@ -2,12 +2,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
+import { diffLines, diffStats, diffHunks } from './diff.js';
 
 const DATE = () => new Date().toISOString().slice(0, 10);
 const STAMP = () => new Date().toISOString().replace(/[:.]/g, '-');
 
 export function ensureDirs(cfg) {
-  for (const key of ['reportsDir', 'feedsDir', 'logsDir']) {
+  for (const key of ['reportsDir', 'feedsDir', 'logsDir', 'watchDir']) {
     fs.mkdirSync(resolveDir(cfg, key), { recursive: true });
   }
 }
@@ -66,3 +67,185 @@ export function runLogPath(cfg, label = 'run') {
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${label}-${STAMP()}.log`);
 }
+
+// ───────────────────────────────────────── 情报条目 / intel items
+
+/** 落盘本次运行的结构化情报条目（网页卡片流吃这份） */
+export function saveItems(cfg, date, items, meta = {}) {
+  const dir = path.join(resolveDir(cfg, 'feedsDir'), date);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, '_items.json');
+  const payload = { generatedAt: new Date().toISOString(), date, count: items.length, ...meta, items };
+  fs.writeFileSync(file, JSON.stringify(payload, null, 1), 'utf8');
+  return file;
+}
+
+/** 读最近一次运行的情报条目 / read the newest intel snapshot */
+export function latestIntel(cfg, limit = 400) {
+  const root = resolveDir(cfg, 'feedsDir');
+  if (!fs.existsSync(root)) return { generatedAt: null, items: [], runs: [] };
+  const days = fs
+    .readdirSync(root)
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()
+    .reverse();
+  const runs = [];
+  for (const d of days.slice(0, 30)) {
+    const f = path.join(root, d, '_items.json');
+    if (fs.existsSync(f)) {
+      const st = fs.statSync(f);
+      runs.push({ date: d, mtime: st.mtime.toISOString() });
+    }
+  }
+  for (const d of days) {
+    const f = path.join(root, d, '_items.json');
+    if (!fs.existsSync(f)) continue;
+    try {
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return { ...j, items: (j.items ?? []).slice(0, limit), runs };
+    } catch {
+      /* 损坏就继续往前找 */
+    }
+  }
+  return { generatedAt: null, items: [], runs };
+}
+
+// ───────────────────────────────────────── 导出与检索 / export & search
+
+/** 极简 Markdown → HTML（导出用；先转义再替换，不做任何危险注入） */
+export function markdownToHtml(md) {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s) =>
+    s
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  const lines = esc(md).split(/\r?\n/);
+  const out = [];
+  let inList = false;
+  let inTable = false;
+  const closeList = () => {
+    if (inList) {
+      out.push('</ul>');
+      inList = false;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^\|/.test(line) && /\|$/.test(line)) {
+      const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      if (!inTable) {
+        closeList();
+        out.push('<table>');
+        inTable = true;
+        out.push(`<tr>${cells.map((c) => `<th>${inline(c)}</th>`).join('')}</tr>`);
+        continue;
+      }
+      out.push(`<tr>${cells.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`);
+      continue;
+    }
+    if (inTable) {
+      out.push('</table>');
+      inTable = false;
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      closeList();
+      out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      if (!inList) {
+        out.push('<ul>');
+        inList = true;
+      }
+      out.push(`<li>${inline(line.replace(/^\s*[-*]\s+/, ''))}</li>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      closeList();
+      out.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`);
+      continue;
+    }
+    if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
+      closeList();
+      out.push('<hr/>');
+      continue;
+    }
+    if (!line.trim()) {
+      closeList();
+      out.push('');
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  if (inTable) out.push('</table>');
+  return out.join('\n');
+}
+
+export function exportReport(cfg, name, format = 'html') {
+  const md = readReport(cfg, name);
+  if (md === null) return null;
+  const base = path.basename(name, '.md');
+  if (format === 'json') {
+    return {
+      file: `${base}.json`,
+      mime: 'application/json; charset=utf-8',
+      body: JSON.stringify({ name: path.basename(name), exportedAt: new Date().toISOString(), markdown: md }, null, 2),
+    };
+  }
+  const body = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${base}</title>
+<style>
+:root { color-scheme: light dark; }
+body { max-width: 900px; margin: 40px auto; padding: 0 20px; font: 15px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+h1,h2,h3 { line-height: 1.3; border-bottom: 1px solid #8883; padding-bottom: .2em; }
+code { background: #8881; padding: .1em .35em; border-radius: 4px; }
+pre { background: #8881; padding: 12px; border-radius: 8px; overflow: auto; }
+table { border-collapse: collapse; width: 100%; }
+th,td { border: 1px solid #8884; padding: 6px 10px; text-align: left; }
+blockquote { border-left: 3px solid #8886; margin: 0; padding-left: 12px; color: #8888; }
+a { color: #3b82f6; }
+footer { margin-top: 48px; font-size: 12px; color: #8888; }
+</style>
+</head>
+<body>
+${markdownToHtml(md)}
+<footer>由 Vtuber's Monitor Link 导出 · ${new Date().toISOString()}</footer>
+</body>
+</html>`;
+  return { file: `${base}.html`, mime: 'text/html; charset=utf-8', body };
+}
+
+/** 报告全文检索 / full-text search across reports */
+export function searchReports(cfg, query, limit = 50) {
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  const dir = resolveDir(cfg, 'reportsDir');
+  if (!fs.existsSync(dir)) return [];
+  const needle = q.toLowerCase();
+  const hits = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.md'))) {
+    const text = fs.readFileSync(path.join(dir, f), 'utf8');
+    const lines = text.split(/\r?\n/);
+    const matches = [];
+    lines.forEach((line, i) => {
+      if (line.toLowerCase().includes(needle)) {
+        matches.push({ line: i + 1, text: line.trim().slice(0, 240) });
+      }
+    });
+    if (matches.length) hits.push({ name: f, count: matches.length, matches: matches.slice(0, 20) });
+    if (hits.length >= limit) break;
+  }
+  return hits.sort((a, b) => b.count - a.count);
+}
+
+export { diffLines, diffStats, diffHunks };

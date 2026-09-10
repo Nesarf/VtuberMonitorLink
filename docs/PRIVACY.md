@@ -43,12 +43,33 @@ npm run sanitize-check
 - **便携包**：`VtuberMonitorLink.exe`（单文件启动器）+ `app/`，解压即用；
   包内**不含**任何用户数据、账号、cookie 或 Key。
 - 首次运行时生成 `app/config.json`，由用户自己填写 LLM Key、浏览器路径与代理。
-- 打包脚本会拒绝把 `config.json`、`reports/`、`feeds/`、`logs/` 复制进产物；
+- 打包脚本会拒绝把 `config.json`、`reports/`、`feeds/`、`logs/`、`watch/` 复制进产物；
   发布前再用 `npm run verify` 独立复核一遍（含「Key 是否被填过」这一项）。
+
+## 本机凭据都放在哪
+
+这个工具会用到两类凭据，**都只写进本机 `app/config.json`**：
+
+| 凭据 | 用途 | 说明 |
+| --- | --- | --- |
+| LLM API Key | 调用你自己的模型接口 | 接口只以掩码 `***` 回传；需要编辑时网页里可以点「显示」 |
+| 萌百 BotPassword | 读你自己的监视列表 | 可选功能。**不要用主密码**，建议开一个只读权限的 BotPassword |
+
+两者都不会进版本库（`config.json` 在 `.gitignore` 里），也不会进发行包。
+`.sanitize-names` 里的私人名字清单同理。
 
 ## 上线前请确认
 
 `npm run verify` 与 `npm run traverse*` 全绿只代表**程序本身**没问题，不代表
-已经用真实 Key 跑通过。产品第一次完整运行（抓取 → LLM 分析 → 出报告）需要
+已经用真实 Key 跑通过。产品第一次完整运行（抓取 → 监视 → LLM 分析 → 出报告）需要
 使用者自己在网页「设置」里填入 LLM API Key，该步骤有意不放进自动化流程：
 Key 只应存在于使用者本机的 `app/config.json`，绝不进仓库、不进发行包。
+
+想在没有任何 Key 的情况下把链路跑通，用仓库自带的本地 mock LLM：
+
+```bash
+npm run mock-llm      # 127.0.0.1:43197，OpenAI 兼容，零依赖
+```
+
+`npm run traverse:ui` 就是这么做的 —— 它临时写入一份指向 mock 的配置，
+跑完再把 `app/` 恢复成干净状态。

@@ -62,7 +62,7 @@ async function main() {
     snapshot[rel] = fs.existsSync(p) ? fs.readFileSync(p) : null;
   }
   const createdDirs = [];
-  for (const d of ['reports', 'feeds', 'logs']) {
+  for (const d of ['reports', 'feeds', 'logs', 'watch']) {
     if (!fs.existsSync(path.join(appDir, d))) createdDirs.push(d);
   }
 
@@ -202,20 +202,100 @@ async function main() {
     const px = await api('GET', '/api/proxy/detect');
     check('GET /api/proxy/detect responds', px.status === 200 && Array.isArray(px.json.found) && typeof px.json.probed === 'number', 'probed ' + (px.json && px.json.probed) + ', found ' + JSON.stringify((px.json && px.json.found) || []));
 
-    // ----------------------------------------------------------- 5. reports
-    process.stdout.write('\n5. reports\n');
+    // ---------------------------------------------------------- 5. llm + intel
+    process.stdout.write('\n5. LLM profiles & intel\n');
+    const llm = await api('GET', '/api/llm/presets');
+    check('GET /api/llm/presets returns the provider catalog', llm.status === 200 && (llm.json.presets ?? []).length >= 8, (llm.json.presets ?? []).length + ' presets');
+    check('presets cover local and overseas providers', (llm.json.presets ?? []).some((p) => p.id === 'ollama') && (llm.json.presets ?? []).some((p) => p.id === 'openai'));
+    check('the active profile never leaks its key', llm.json.active?.apiKey !== undefined && (llm.json.active.apiKey === '' || llm.json.active.apiKey === '***'), JSON.stringify(llm.json.active?.apiKey));
+    const newProf = await api('POST', '/api/llm/new', { preset: 'ollama' });
+    check('POST /api/llm/new adds a profile', newProf.status === 200 && !!newProf.json.provider?.id, newProf.json.provider?.name + ' / ' + newProf.json.provider?.baseUrl);
+    check('the new profile gets the preset defaults', newProf.json.provider?.baseUrl === 'http://127.0.0.1:11434/v1', newProf.json.provider?.baseUrl ?? '');
+    const modelList = await api('POST', '/api/llm/models', { provider: { baseUrl: 'http://127.0.0.1:1', apiKey: 'x' } });
+    check('POST /api/llm/models fails gracefully on a dead endpoint', modelList.status === 200 && modelList.json.ok === false && !!modelList.json.error, String(modelList.json.error).slice(0, 60));
+    const llmTest = await api('POST', '/api/llm/test', { provider: { baseUrl: 'http://127.0.0.1:1', apiKey: 'x' } });
+    check('POST /api/llm/test fails gracefully too', llmTest.status === 200 && llmTest.json.ok === false, String(llmTest.json.error).slice(0, 60));
+
+    const intel = await api('GET', '/api/intel');
+    check('GET /api/intel answers with a well-formed payload', intel.status === 200 && Array.isArray(intel.json.items) && Array.isArray(intel.json.watch), intel.json.count + '/' + intel.json.total + ' items');
+    check('intel payload carries the run list', Array.isArray(intel.json.runs));
+    const intelFiltered = await api('GET', '/api/intel?source=nope&alerts=1&q=zzz');
+    check('intel filters combine without error', intelFiltered.status === 200 && intelFiltered.json.count === 0);
+
+    // ----------------------------------------------------------- 6. watch
+    process.stdout.write('\n6. watch targets\n');
+    const w = await api('GET', '/api/watch');
+    check('GET /api/watch returns kinds and rules', w.status === 200 && (w.json.kinds ?? []).length >= 5 && !!w.json.rules, (w.json.kinds ?? []).length + ' kinds');
+    check('the moegirl-style alarm rules are exposed', typeof w.json.rules.largeEditBytes === 'number' && Array.isArray(w.json.rules.keywords), JSON.stringify({ edit: w.json.rules.largeEditBytes, kw: (w.json.rules.keywords ?? []).length }));
+    check('the watchlist kind is marked login-required', (w.json.kinds ?? []).find((k) => k.id === 'mediawiki-watchlist')?.login === 'required');
+
+    const putW = await api('PUT', '/api/watch', {
+      targets: [
+        {
+          id: 'traverse-url',
+          kind: 'url',
+          label: 'traverse probe',
+          url: 'https://example.com/',
+          enabled: true,
+        },
+      ],
+      rules: { keywords: ['毕业', '解约'] },
+    });
+    check('PUT /api/watch stores a target', putW.status === 200 && (putW.json.watch.targets ?? []).length === 1, JSON.stringify(putW.json.watch.targets?.[0]?.id));
+    const w2 = await api('GET', '/api/watch');
+    check('the target round-trips', (w2.json.targets ?? []).length === 1 && w2.json.targets[0].label === 'traverse probe');
+    check('only whitelisted fields survive', w2.json.targets[0].fetch === undefined && w2.json.targets[0].cadence === undefined, JSON.stringify(Object.keys(w2.json.targets[0])));
+
+    const wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
+    check('POST /api/watch/check builds a baseline on the first pass', wc.status === 200 && wc.json.results?.[0]?.ok === true && wc.json.results[0].first === true, wc.json.results?.[0]?.summary ?? wc.json.results?.[0]?.error);
+    const wc2 = await api('POST', '/api/watch/check', { id: 'traverse-url' });
+    check('the second pass reports no change', wc2.json.results?.[0]?.changed === false, wc2.json.results?.[0]?.summary);
+    const hist = await api('GET', '/api/watch/traverse-url/history');
+    check('GET watch history answers', hist.status === 200 && Array.isArray(hist.json.history), hist.json.history.length + ' entries');
+    const cleared = await api('DELETE', '/api/watch/traverse-url/baseline');
+    check('DELETE baseline works', cleared.status === 200 && cleared.json.ok === true);
+    const wc3 = await api('POST', '/api/watch/check', { id: 'traverse-url' });
+    check('after clearing, the next check rebuilds the baseline instead of alerting', wc3.json.results?.[0]?.first === true && wc3.json.results[0].changed === false);
+
+    // ----------------------------------------------------------- 7. reports
+    process.stdout.write('\n7. reports\n');
     const rep = await api('GET', '/api/reports');
     check('GET /api/reports returns a list', rep.status === 200 && Array.isArray(rep.json), rep.status === 200 ? rep.json.length + ' report(s)' : 'status ' + rep.status);
     const miss = await api('GET', '/api/reports/no-such-report.md');
     check('missing report -> 404', miss.status === 404, 'status ' + miss.status);
     const traversal = await api('GET', '/api/reports/..%2f..%2fpackage.json');
     check('path traversal in report name is refused', traversal.status === 404 || traversal.status === 400, 'status ' + traversal.status);
+    const search = await api('GET', '/api/reports/search?q=' + encodeURIComponent('zzz-no-such-word'));
+    check('GET /api/reports/search answers', search.status === 200 && Array.isArray(search.json.hits), (search.json.hits ?? []).length + ' files');
+    const badExport = await api('GET', '/api/reports/no-such-report.md/export?format=html');
+    check('exporting a missing report -> 404', badExport.status === 404, 'status ' + badExport.status);
 
-    // ---------------------------------------------------------- 6. preflight
-    process.stdout.write('\n6. preflight & run\n');
+    // ---------------------------------------------------- 8. custom sources
+    process.stdout.write('\n8. custom sources\n');
+    const addSrc = await api('POST', '/api/sources/custom', {
+      id: 'traverse-feed',
+      name: 'traverse feed',
+      fetch: 'rss',
+      url: 'https://example.com/feed.xml',
+      category: 'community',
+    });
+    check('POST /api/sources/custom adds one', addSrc.status === 200 && addSrc.json.source?.custom === true, JSON.stringify(addSrc.json.source?.id));
+    const dupSrc = await api('POST', '/api/sources/custom', { id: 'traverse-feed', name: 'dup', fetch: 'rss', url: 'https://example.com/2.xml' });
+    check('a duplicate id is refused', dupSrc.status === 409, 'status ' + dupSrc.status);
+    const badSrc = await api('POST', '/api/sources/custom', { id: 'x' });
+    check('a source without url/uid is refused', badSrc.status === 400, 'status ' + badSrc.status);
+    const srcs = await api('GET', '/api/sources');
+    check('the custom source joins the catalog', (srcs.json.sources ?? []).some((s) => s.id === 'traverse-feed'), (srcs.json.sources ?? []).length + ' sources total');
+    check('GET /api/sources exposes the fetch kinds for the editor', (srcs.json.fetchKinds ?? []).length >= 6, (srcs.json.fetchKinds ?? []).length + ' kinds');
+    const delSrc = await api('DELETE', '/api/sources/custom/traverse-feed');
+    check('DELETE removes it again', delSrc.status === 200 && delSrc.json.removed === 1);
+
+    // ---------------------------------------------------------- 9. preflight
+    process.stdout.write('\n9. preflight & run\n');
     const pre = await api('POST', '/api/preflight');
     check('POST /api/preflight answers', pre.status === 200 && pre.json && typeof pre.json.ok === 'boolean', 'ok=' + (pre.json && pre.json.ok) + (pre.json && pre.json.error ? ' (' + String(pre.json.error).slice(0, 60) + ')' : ''));
-    const hasKey = !!(cfg.json && cfg.json.llm && cfg.json.llm.apiKey);
+    const configured = await api('GET', '/api/config');
+    const hasKey = !!(configured.json?.llm?.providers ?? []).some((p) => p.apiKey) || !!configured.json?.llm?.apiKey;
     if (!hasKey) {
       check('without an API key preflight reports a clear reason', pre.json.ok === false && !!pre.json.error, String(pre.json.error || '').slice(0, 80));
     } else {
@@ -249,6 +329,8 @@ async function main() {
       check('nothing half-written: no report claimed', !(settled && settled.lastResult), JSON.stringify(settled && settled.lastResult));
     }
     check('run tail is exposed for the console', !!(settled && Array.isArray(settled.tail)), (settled && settled.tail ? settled.tail.length : 0) + ' line(s)');
+    check('watch progress counters exist', typeof settled.watchTotal === 'number' && typeof settled.watchDone === 'number', settled.watchDone + '/' + settled.watchTotal);
+    check('intel counter exists', typeof settled.itemCount === 'number', String(settled.itemCount));
     const sched = settled && settled.schedule;
     check('schedule block is reported', !!(sched && 'enabled' in sched), JSON.stringify(sched));
     check('nextFire is reported', 'nextFire' in (settled || {}), String(settled && settled.nextFire));

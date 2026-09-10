@@ -1,6 +1,6 @@
 {
   "name": "vtuber-monitor-link",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Vtuber's Monitor Link — a local-web VTuber intelligence monitor with user-configurable browser, sources, and LLM.",
   "license": "MIT",
@@ -17,6 +17,7 @@
     "start": "node server/src/index.js",
     "smoke": "node server/scripts/smoke.mjs",
     "sanitize-check": "node server/scripts/sanitize-check.mjs",
+    "mock-llm": "node tools/mock-llm.cjs",
     "doctor": "node launcher/launch.cjs --doctor",
     "paths": "node launcher/launch.cjs --paths",
     "build:exe": "node tools/build-portable.cjs",

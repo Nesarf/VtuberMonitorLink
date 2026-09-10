@@ -3,12 +3,15 @@
 本机目前**没有** gh CLI、没有配置 git 凭据、也没有全局 git 身份，所以推送这一步
 需要你自己执行。下面是可直接照抄的顺序。
 
+> 下文用 `<repo>` 表示你克隆/解压出来的项目目录，请自行替换；
+> 文档里不写任何机器专属的绝对路径。
+
 ## 0. 先把提交身份改成你自己的
 
 仓库里那一个提交的作者目前是中性的临时身份。改成本人（只影响本仓库）：
 
 ```powershell
-cd E:\VtuberMonitorLink
+cd <repo>
 git config user.name  "你的 GitHub 用户名"
 git config user.email "你的 GitHub 邮箱"
 git commit --amend --reset-author --no-edit
@@ -27,7 +30,7 @@ git commit --amend --reset-author --no-edit
 ## 2. 关联远程并推送
 
 ```powershell
-cd E:\VtuberMonitorLink
+cd <repo>
 git remote add origin https://github.com/<你的用户名>/vtuber-monitor-link.git
 git branch -M main
 git push -u origin main

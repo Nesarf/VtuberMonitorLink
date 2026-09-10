@@ -1,9 +1,12 @@
 // runner.js — 一次完整运行的编排 / orchestrates one full run
-// 流程：前置检查 → 抓取选中来源 → 落 feeds → LLM 分析 → 落报告
+// 流程：前置检查 → 抓取选中来源 → 检查监视对象 → 落 feeds/情报条目
+//      → LLM 分析（带上监视告警）→ 落报告
 import { effectiveSources } from './sources.js';
 import { fetchAll } from './fetchers/index.js';
 import { analyze, preflight } from './analyze.js';
-import { ensureDirs, runLogPath, saveFeedFiles, saveReport } from './reports.js';
+import { collectItems, matchedKeywords } from './items.js';
+import { checkAll } from './watch.js';
+import { ensureDirs, runLogPath, saveFeedFiles, saveItems, saveReport } from './reports.js';
 import { createLogger } from './logger.js';
 import { applyProxy } from './net.js';
 
@@ -16,6 +19,10 @@ export const runState = {
   step: 'idle',
   sourcesTotal: 0,
   sourcesDone: 0,
+  watchTotal: 0,
+  watchDone: 0,
+  itemCount: 0,
+  alerts: 0,
   lastResult: null,
   lastError: null,
   tail: [],
@@ -35,7 +42,7 @@ export function selectSources(cfg, mode) {
 }
 
 /**
- * @param {{cfg:object, mode?:'daily'|'merch'}} args
+ * @param {{cfg:object, mode?:'daily'|'merch'|'watch'}} args
  */
 export async function runOnce({ cfg, mode = 'daily' }) {
   if (runState.running) return { ok: false, error: '已有一个运行在进行中 / a run is already in progress' };
@@ -57,6 +64,10 @@ export async function runOnce({ cfg, mode = 'daily' }) {
     step: 'starting',
     sourcesTotal: 0,
     sourcesDone: 0,
+    watchTotal: 0,
+    watchDone: 0,
+    itemCount: 0,
+    alerts: 0,
     lastError: null,
     tail: [],
   });
@@ -76,31 +87,71 @@ export async function runOnce({ cfg, mode = 'daily' }) {
       runState.lastError = `LLM 前置检查失败：${pre.error}`;
       return { ok: false, error: runState.lastError };
     }
+    log.info(`LLM 就绪 / ready: ${pre.provider?.name ?? '?'} · ${pre.provider?.model ?? '?'}`);
 
     // 2) 抓取
     runState.step = 'fetching';
-    const sources = selectSources(cfg, mode);
+    const sources = mode === 'watch' ? [] : selectSources(cfg, mode);
     runState.sourcesTotal = sources.length;
     log.info(`抓取 ${sources.length} 条来源 / fetching ${sources.length} sources`);
     const results = await fetchAll(sources, { cfg, log });
     runState.sourcesDone = results.length;
 
-    // 3) 落 feeds
+    // 3) 监视对象
+    let watchResults = [];
+    if (cfg?.watch?.enabled !== false && (cfg?.run?.watchWithRun !== false || mode === 'watch')) {
+      const targets = (cfg.watch?.targets ?? []).filter((t) => t.enabled !== false);
+      runState.watchTotal = targets.length;
+      runState.step = 'watching';
+      if (targets.length) log.info(`检查 ${targets.length} 个监视对象 / checking ${targets.length} watch targets`);
+      watchResults = await checkAll(cfg, log);
+      runState.watchDone = watchResults.length;
+    }
+
+    // 4) 情报条目（网页卡片流与报告都用它）
     runState.step = 'saving-feeds';
     const date = new Date().toISOString().slice(0, 10);
-    const saved = saveFeedFiles(cfg, date, results);
-    log.info(`feeds 已落盘 / feeds saved: ${saved.index.filter((i) => i.ok).length}/${saved.index.length}`);
+    const items = collectItems(results, cfg?.ui?.intelPerSource ?? 24);
+    const keywords = cfg?.watch?.rules?.keywords ?? [];
+    for (const it of items) {
+      const hit = matchedKeywords(it, keywords);
+      if (hit.length) it.keywords = hit;
+      if (it.extra?.user && keywords.length) {
+        const h2 = matchedKeywords({ text: it.text }, keywords);
+        if (h2.length) it.keywords = [...new Set([...(it.keywords ?? []), ...h2])];
+      }
+    }
+    const alerts = watchResults.reduce((n, r) => n + (r.events ?? []).filter((e) => e.reasons?.length).length, 0);
+    runState.itemCount = items.length;
+    runState.alerts = alerts;
 
-    // 4) 分析
+    const saved = saveFeedFiles(cfg, date, results);
+    saveItems(cfg, date, items, {
+      mode,
+      sources: results.map((r) => ({ id: r.source?.id, ok: !!r.ok, bytes: r.content?.length ?? 0 })),
+      watch: watchResults.map((r) => ({
+        id: r.target?.id,
+        label: r.target?.label ?? r.target?.id,
+        kind: r.target?.kind,
+        ok: !!r.ok,
+        changed: !!r.changed,
+        summary: r.summary ?? r.error ?? '',
+        growth: r.growth ?? null,
+        events: (r.events ?? []).slice(0, 100),
+      })),
+    });
+    log.info(`feeds 已落盘 / feeds saved: ${saved.index.filter((i) => i.ok).length}/${saved.index.length}；情报条目 ${items.length} 条`);
+
+    // 5) 分析
     runState.step = 'analyzing';
     log.info('LLM 分析中 / analyzing…');
-    const a = await analyze({ cfg, results, mode, log });
+    const a = await analyze({ cfg, results, watchResults, mode, log });
     if (!a.ok) {
       runState.lastError = a.error;
       return { ok: false, error: a.error, results };
     }
 
-    // 5) 落报告
+    // 6) 落报告
     runState.step = 'saving-report';
     const file = saveReport(cfg, { markdown: a.markdown, mode, date });
     log.info(`报告已保存 / report saved: ${file}`);
@@ -113,10 +164,14 @@ export async function runOnce({ cfg, mode = 'daily' }) {
       date,
       sourcesOk: okCount,
       sourcesTotal: results.length,
-      charsetCount: a.markdown.length,
+      watchTotal: watchResults.length,
+      alerts,
+      items: items.length,
+      provider: a.provider ?? null,
+      chars: a.markdown.length,
     };
     runState.step = 'done';
-    return { ok: true, file, results, summary: runState.lastResult };
+    return { ok: true, file, results, watchResults, items, summary: runState.lastResult };
   } catch (err) {
     runState.lastError = err.message;
     log.error(`运行异常 / run crashed — ${err.message}`);

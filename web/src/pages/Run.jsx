@@ -42,9 +42,30 @@ export default function Run() {
           <button className="ghost" disabled={state.running} onClick={() => start('merch')}>
             {t('runMerch')}
           </button>
+          <button className="ghost" disabled={state.running} onClick={() => start('watch')}>
+            {t('runWatchOnly')}
+          </button>
         </div>
         <p className="muted" style={{ marginTop: 12 }}>
           {t('step')}: <b>{state.step}</b> · {t('sources')}: {state.sourcesDone}/{state.sourcesTotal}
+          {(state.watchTotal ?? 0) > 0 && (
+            <>
+              {' '}
+              · {t('watchTargets')}: {state.watchDone}/{state.watchTotal}
+            </>
+          )}
+          {(state.itemCount ?? 0) > 0 && (
+            <>
+              {' '}
+              · {t('items')}: {state.itemCount}
+            </>
+          )}
+          {(state.alerts ?? 0) > 0 && (
+            <>
+              {' '}
+              · <span className="chip alert">⚠ {t('alerts')}: {state.alerts}</span>
+            </>
+          )}
           {state.nextFire && (
             <>
               {' '}
@@ -65,6 +86,13 @@ export default function Run() {
             <li>
               sources: {state.lastResult.sourcesOk}/{state.lastResult.sourcesTotal}
             </li>
+            <li>watch: {state.lastResult.watchTotal ?? 0} · alerts: {state.lastResult.alerts ?? 0}</li>
+            <li>intel items: {state.lastResult.items ?? 0}</li>
+            {state.lastResult.provider && (
+              <li>
+                llm: {state.lastResult.provider.name} · {state.lastResult.provider.model}
+              </li>
+            )}
             <li>report: {state.lastResult.file}</li>
           </ul>
         ) : (

@@ -259,7 +259,7 @@ function main() {
   } else {
     process.stdout.write('   [ok]   no app/config.json (created on first save)\n');
   }
-  for (const d of ['reports', 'feeds', 'logs']) {
+  for (const d of ['reports', 'feeds', 'logs', 'watch']) {
     const dir = path.join(args.dir, 'app', d);
     const count = fs.existsSync(dir) ? walk(dir, []).length : 0;
     if (count) problems.push('app/' + d + '/ ships ' + count + ' file(s) of run data');

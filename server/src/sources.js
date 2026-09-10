@@ -1,12 +1,15 @@
 // sources.js — 内置来源适配器目录 / built-in source adapters.
 // 每条来源都是声明式的：抓取方式、登录要求、限流参数都在这里定义，
-// UI 只负责展示与勾选。用户也可以在 config.json 的 sources 里覆盖 enabled/login。
+// UI 只负责展示与勾选。用户也可以在 config.json 的 sources 里覆盖 enabled/login，
+// 或直接在网页「来源」页里新增自定义来源（存进 config.customSources）。
 //
-// fetch 取值：rss | mediawiki-api | browser | search-only
+// fetch 取值：rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
 // login 取值：none | optional | required
 //   none     —— 公开数据
 //   optional —— 登录更全（如 Twitch 的关注列表）
-//   required —— 不登录拿不到（如 X 推文正文），UI 需标红并在跑前检查
+//   required —— 不登录拿不到（如 X 推文正文 / B 站带图动态），UI 需标红并在跑前检查
+// proxy 取值：direct | proxy | 省略（跟随全局）
+//   B 站是必须写 direct 的典型：实测经代理会稳定 412 / -352 风控
 
 export const CATEGORIES = {
   community: { zh: '社区', en: 'Community' },
@@ -17,6 +20,7 @@ export const CATEGORIES = {
   news: { zh: '新闻', en: 'News' },
   official: { zh: '官方', en: 'Official' },
   resource: { zh: '资源/通贩', en: 'Resource' },
+  bili: { zh: 'B 站', en: 'bilibili' },
 };
 
 const R = (names) => names; // 仅作可读性标注
@@ -146,10 +150,60 @@ export const BUILTIN_SOURCES = [
   })),
 ];
 
+// ── B 站 / bilibili
+// 实测要点：
+//   • api.bilibili.com 直连可用，走代理反而稳定 412 / -352，所以 proxy 一律 'direct'
+//   • opus/feed/space 这个端点无需登录、无需 wbi 签名，稳定返回图文动态（正文+点赞数）
+//   • feed/space（带配图的完整动态）风控极严，只有复用登录态才拿得到 → login: 'required'
+const BILI_OPUS = [
+  ['jaran', '嘉然今天吃什么（A-SOUL）', '672328094'],
+  ['asoul', 'A-SOUL 官方', '703007996'],
+  ['yousa', '泠鸢yousa', '282994'],
+  ['hanser', 'hanser', '11073'],
+];
+
+export const BILIBILI_SOURCES = [
+  ...BILI_OPUS.map(([id, label, uid]) => ({
+    id: `bili-opus-${id}`,
+    name: { zh: `B站动态 · ${label}`, en: `bilibili · ${label}` },
+    category: 'bili',
+    fetch: 'bili-opus',
+    url: `https://space.bilibili.com/${uid}/dynamic`,
+    uid,
+    proxy: 'direct',
+    login: 'none',
+    rateLimit: { gapSeconds: 3, retries: 2 },
+    defaultEnabled: true,
+    note: {
+      zh: '图文动态，含正文与点赞数；无需登录。想要带配图的完整动态请改用 bili-dynamic 并配置登录。',
+      en: 'Text/image dynamics with text and likes; no login needed. For full dynamics with pictures use bili-dynamic with a login.',
+    },
+  })),
+  {
+    id: 'bili-dynamic-login',
+    name: { zh: 'B站完整动态（含配图，需登录）', en: 'bilibili full dynamics with pictures (login required)' },
+    category: 'bili',
+    fetch: 'bili-dynamic',
+    url: 'https://space.bilibili.com/672328094/dynamic',
+    uid: '672328094',
+    proxy: 'direct',
+    login: 'required',
+    defaultEnabled: false,
+    note: {
+      zh: '用「设置 → 浏览器」里指定的已登录 profile 渲染动态页；未登录会弹滑块验证。uid 可在网页里改。',
+      en: 'Renders the dynamic page with the signed-in profile from Settings → Browser; without a login bilibili shows a captcha. The uid is editable in the UI.',
+    },
+  },
+];
+
+BUILTIN_SOURCES.push(...BILIBILI_SOURCES);
+
 /** 与用户配置合并，得到「生效来源」 / merge catalog with user config */
 export function effectiveSources(config) {
   const overrides = config?.sources ?? {};
-  return BUILTIN_SOURCES.map((s) => {
+  const custom = Array.isArray(config?.customSources) ? config.customSources : [];
+  const list = [...BUILTIN_SOURCES, ...custom];
+  return list.map((s) => {
     const o = overrides[s.id] ?? {};
     const merged = {
       ...s,
@@ -160,10 +214,26 @@ export function effectiveSources(config) {
       login: o.login ?? s.login ?? 'none',
     };
     if (o.custom !== undefined) merged.custom = o.custom;
+    else if (s.custom !== undefined) merged.custom = s.custom;
     return merged;
   });
 }
 
 export function findSource(id) {
   return BUILTIN_SOURCES.find((s) => s.id === id) ?? null;
+}
+
+/** 自定义来源的字段白名单（新增/编辑时清洗，避免往配置里塞任意东西） */
+export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'uid', 'proxy', 'enabled'];
+
+export function sanitizeCustomSource(input) {
+  const out = {};
+  for (const k of CUSTOM_SOURCE_FIELDS) if (input?.[k] !== undefined) out[k] = input[k];
+  if (out.id) out.id = String(out.id).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 60);
+  if (out.name && typeof out.name === 'string') out.name = { zh: out.name, en: out.name };
+  if (!out.category) out.category = 'community';
+  if (!out.fetch) out.fetch = 'rss';
+  if (!out.login) out.login = 'none';
+  out.custom = true;
+  return out;
 }

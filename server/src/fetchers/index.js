@@ -3,6 +3,7 @@ import { fetchRss } from './rss.js';
 import { fetchMediaWiki } from './mediawiki.js';
 import { fetchBrowser } from './browser.js';
 import { fetchSearchOnly } from './search.js';
+import { fetchBilibiliOpus, fetchBilibiliDynamic } from './bilibili.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const TABLE = {
@@ -10,7 +11,19 @@ const TABLE = {
   'mediawiki-api': fetchMediaWiki,
   browser: fetchBrowser,
   'search-only': fetchSearchOnly,
+  'bili-opus': fetchBilibiliOpus,
+  'bili-dynamic': fetchBilibiliDynamic,
 };
+
+/** 网页里可选的抓取方式（自定义来源编辑器用） */
+export const FETCH_KINDS = [
+  { id: 'rss', zh: 'RSS / Atom 订阅', en: 'RSS / Atom feed' },
+  { id: 'mediawiki-api', zh: 'MediaWiki API（最近更改）', en: 'MediaWiki API (recent changes)' },
+  { id: 'browser', zh: '浏览器渲染（可复用登录）', en: 'Browser render (can reuse a login)' },
+  { id: 'bili-opus', zh: 'B 站图文动态（免登录）', en: 'bilibili image/text dynamics (no login)' },
+  { id: 'bili-dynamic', zh: 'B 站完整动态（需登录，含配图）', en: 'bilibili full dynamics (login, with pictures)' },
+  { id: 'search-only', zh: '仅交给检索阶段', en: 'Search stage only' },
+];
 
 /**
  * 依次抓取选中的来源（顺序执行，便于按 rateLimit 主动间隔）

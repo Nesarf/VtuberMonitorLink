@@ -1,0 +1,50 @@
+name: ci
+
+# Fast feedback on every push: does the frontend build, does the source stay
+# free of hard-coded machine paths and secrets, and does the launcher still
+# resolve a layout correctly.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the frontend
+        run: npm run build
+
+      - name: Check the sources for leaked paths and secrets
+        run: npm run sanitize-check
+
+      - name: Check syntax of the shipped scripts
+        run: |
+          node --check launcher/launch.cjs
+          node --check tools/build-portable.cjs
+          node --check tools/verify-release.cjs
+          node --check tools/traverse-release.cjs
+          node --check tools/traverse-ui.cjs
+
+      - name: The launcher resolves a source checkout
+        run: node launcher/launch.cjs --doctor
+
+      - name: The launcher prints its layout
+        run: node launcher/launch.cjs --paths
+
+      - name: Verify the ASCII-only requirement for the quickstart
+        run: |
+          node -e "const s=require('fs').readFileSync('launcher/launch.cjs','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.cjs is not ASCII');process.exit(1)}"
+          node -e "const s=require('fs').readFileSync('launcher/launch.cmd','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.cmd is not ASCII');process.exit(1)}"
+          node -e "const s=require('fs').readFileSync('launcher/launch.sh','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.sh is not ASCII');process.exit(1)}"

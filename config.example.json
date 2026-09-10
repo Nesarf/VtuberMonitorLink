@@ -1,0 +1,40 @@
+{
+  "browser": {
+    "mode": "system",
+    "executablePath": "",
+    "profileDir": "",
+    "headless": true,
+    "waitMs": 6000,
+    "hardTimeoutMs": 90000
+  },
+  "llm": {
+    "provider": "deepseek",
+    "baseUrl": "https://api.deepseek.com",
+    "apiKey": "",
+    "model": "deepseek-chat",
+    "reasoningEffort": "high",
+    "maxTokens": 8192,
+    "temperature": 0.3
+  },
+  "schedule": {
+    "enabled": false,
+    "mode": "weekly",
+    "dayOfWeek": 2,
+    "time": "23:30",
+    "merchEveryDays": 14
+  },
+  "run": {
+    "defaultGapSeconds": 2,
+    "maxParallel": 3
+  },
+  "proxy": {
+    "enabled": false,
+    "url": ""
+  },
+  "paths": {
+    "reportsDir": "reports",
+    "feedsDir": "feeds",
+    "logsDir": "logs"
+  },
+  "sources": {}
+}

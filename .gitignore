@@ -1,0 +1,35 @@
+# deps & build
+node_modules/
+dist/
+.vite/
+
+# runtime data (never commit)
+config.json
+reports/
+feeds/
+logs/
+*.log
+
+# secrets
+.env
+.env.*
+!/.env.example
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# playwright browser cache (if downloaded locally)
+.pw-browsers/
+
+# local private-name list for sanitize-check (never commit)
+.sanitize-names
+
+
+# build intermediates (SEA blob, staged exe)
+build/
+

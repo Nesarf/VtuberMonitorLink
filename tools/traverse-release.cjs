@@ -1,0 +1,318 @@
+// tools/traverse-release.cjs - walk the whole surface of a built release.
+//
+// ASCII only, CommonJS. Starts the packaged exe, exercises every HTTP route the
+// console exposes, checks the static/SPA layer, and verifies the error paths.
+//
+//   node tools/traverse-release.cjs [--dir dist/VtuberMonitorLink] [--port 43199]
+//                                   [--keep]      leave the instance running
+//                                   [--with-run]  also wait for the full run to settle
+//
+// Exit code 0 = every check passed.
+
+'use strict';
+
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.resolve(__dirname, '..');
+const EXE = process.platform === 'win32' ? '.exe' : '';
+
+function parseArgs(argv) {
+  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43199, keep: false, withRun: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--dir') out.dir = path.resolve(argv[++i]);
+    else if (a === '--port') out.port = Number(argv[++i]) || out.port;
+    else if (a === '--keep') out.keep = true;
+    else if (a === '--with-run') out.withRun = true;
+  }
+  return out;
+}
+
+const results = [];
+function check(name, ok, detail) {
+  results.push({ name: name, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
+  process.stdout.write('  ' + (ok ? '[ok]  ' : '[FAIL]') + ' ' + name + (detail ? '  -- ' + detail : '') + '\n');
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const base = 'http://127.0.0.1:' + args.port;
+  const exeName = path.basename(args.dir) + EXE;
+  const exe = path.join(args.dir, exeName);
+
+  if (!fs.existsSync(exe)) {
+    process.stderr.write('exe not found: ' + exe + '\n');
+    process.exit(1);
+  }
+
+  process.stdout.write('\ntraversing: ' + args.dir + '\n');
+  process.stdout.write('            ' + exe + '  on port ' + args.port + '\n\n');
+
+  // Snapshot anything the run will touch, so the folder can be restored clean.
+  const appDir = path.join(args.dir, 'app');
+  const snapshot = {};
+  for (const rel of ['config.json']) {
+    const p = path.join(appDir, rel);
+    snapshot[rel] = fs.existsSync(p) ? fs.readFileSync(p) : null;
+  }
+  const createdDirs = [];
+  for (const d of ['reports', 'feeds', 'logs']) {
+    if (!fs.existsSync(path.join(appDir, d))) createdDirs.push(d);
+  }
+
+  const logFile = path.join(appDir, 'logs', 'traverse-stdout.txt');
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  const out = fs.createWriteStream(logFile, { flags: 'w' });
+
+  const child = spawn(exe, ['--no-open', '--port', String(args.port)], {
+    cwd: args.dir,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.pipe(out);
+  child.stderr.pipe(out);
+
+  const api = async (method, route, body) => {
+    const res = await fetch(base + route, {
+      method: method,
+      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      /* not json */
+    }
+    return { status: res.status, text: text, json: json, type: res.headers.get('content-type') || '' };
+  };
+
+  let exitCode = 0;
+  try {
+    // ---------------------------------------------------------- 0. wait ready
+    process.stdout.write('0. startup\n');
+    let ready = false;
+    for (let i = 0; i < 60; i++) {
+      try {
+        const r = await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) });
+        if (r.ok) {
+          ready = true;
+          break;
+        }
+      } catch (e) {
+        /* not up yet */
+      }
+      await sleep(500);
+    }
+    check('server comes up on the requested port', ready, ready ? base : 'timed out after 30s');
+    if (!ready) throw new Error('server never became ready');
+    check('process still alive after startup', child.exitCode === null);
+
+    // ------------------------------------------------------- 1. static / SPA
+    process.stdout.write('\n1. static console / SPA\n');
+    const index = await api('GET', '/');
+    check('GET / returns the console', index.status === 200 && /id="root"/.test(index.text), 'status ' + index.status + ', ' + index.text.length + ' bytes');
+    const asset = (index.text.match(/src="([^"]*\/assets\/[^"]+\.js)"/) || [])[1];
+    check('index.html references a built bundle', !!asset, asset || 'no /assets/*.js found');
+    if (asset) {
+      const js = await api('GET', asset);
+      check('bundle is served', js.status === 200 && /javascript/.test(js.type), 'status ' + js.status + ', ' + js.type);
+    }
+    const css = (index.text.match(/href="([^"]*\/assets\/[^"]+\.css)"/) || [])[1];
+    if (css) {
+      const c = await api('GET', css);
+      check('stylesheet is served', c.status === 200 && /css/.test(c.type), 'status ' + c.status);
+    }
+    const spa = await api('GET', '/reports/some/deep/route');
+    check('deep link falls back to the SPA', spa.status === 200 && /id="root"/.test(spa.text), 'status ' + spa.status);
+
+    // ------------------------------------------------------------ 2. config
+    process.stdout.write('\n2. config\n');
+    const cfg = await api('GET', '/api/config');
+    const need = ['browser', 'llm', 'schedule', 'proxy', 'paths', 'run', 'sources'];
+    const missing = need.filter((k) => !(cfg.json && k in cfg.json));
+    check('GET /api/config returns every section', cfg.status === 200 && missing.length === 0, missing.length ? 'missing ' + missing.join(',') : 'ok');
+    const before = cfg.json && cfg.json.run && cfg.json.run.defaultGapSeconds;
+    const put = await api('PUT', '/api/config', { run: { defaultGapSeconds: 7 } });
+    const after = await api('GET', '/api/config');
+    check(
+      'PUT /api/config persists a change',
+      put.status === 200 && after.json.run.defaultGapSeconds === 7,
+      'defaultGapSeconds ' + before + ' -> ' + after.json.run.defaultGapSeconds
+    );
+    check('config file was written to app/', fs.existsSync(path.join(appDir, 'config.json')));
+    await api('PUT', '/api/config', { run: { defaultGapSeconds: before } });
+
+    // ------------------------------------------------------------ 3. sources
+    process.stdout.write('\n3. sources\n');
+    const src = await api('GET', '/api/sources');
+    const s = src.json || {};
+    // categories is a map of id -> { zh, en }, not an array.
+    const cats = s.categories && typeof s.categories === 'object' ? Object.keys(s.categories) : [];
+    check('GET /api/sources returns categories', cats.length > 0, cats.length + ' categories: ' + cats.join(','));
+    const catLabelsOk = cats.every((k) => s.categories[k] && s.categories[k].zh && s.categories[k].en);
+    check('every category is bilingual', catLabelsOk);
+    check('GET /api/sources returns adapters', Array.isArray(s.sources) && s.sources.length >= 20, (s.sources || []).length + ' adapters');
+    const badShape = (s.sources || []).filter(
+      (x) => !x.id || !x.name || typeof x.enabled !== 'boolean' || !x.login || !x.cadence || !x.category
+    );
+    check(
+      'every adapter has id/name/enabled/login/cadence/category',
+      badShape.length === 0,
+      badShape.length ? badShape.map((b) => b.id || '?').join(',') : 'all ' + (s.sources || []).length + ' ok'
+    );
+    const badge = (s.sources || []).filter((x) => x.cadence === 'merch').length;
+    const cadenceOk = (s.sources || []).every((x) => x.cadence === 'daily' || x.cadence === 'merch');
+    check('cadence is stated explicitly on every adapter', cadenceOk, badge + ' merch / ' + ((s.sources || []).length - badge) + ' daily');
+    const nameOk = (s.sources || []).every((x) => x.name && typeof x.name === 'object' && x.name.zh && x.name.en);
+    check('every adapter name is bilingual', nameOk);
+    const catIds = new Set(cats);
+    const orphan = (s.sources || []).filter((x) => !catIds.has(x.category));
+    check('every adapter maps to a declared category', orphan.length === 0, orphan.map((o) => o.id + ':' + o.category).join(','));
+    const logins = new Set((s.sources || []).map((x) => x.login));
+    check('login requirement is one of none/optional/required', [...logins].every((v) => ['none', 'optional', 'required'].includes(v)), [...logins].join('/'));
+    check('selection counters are present', !!(s.selected && typeof s.selected.daily === 'number' && typeof s.selected.merch === 'number'), JSON.stringify(s.selected));
+    const target = (s.sources || [])[0];
+    if (target) {
+      const off = await api('PATCH', '/api/sources/' + target.id, { enabled: false });
+      const listAfter = await api('GET', '/api/sources');
+      const nowOff = (listAfter.json.sources.find((x) => x.id === target.id) || {}).enabled === false;
+      check('PATCH disables a source', off.status === 200 && nowOff, target.id);
+      await api('PATCH', '/api/sources/' + target.id, { enabled: true, login: target.login });
+      const back = await api('GET', '/api/sources');
+      check('PATCH re-enables it', (back.json.sources.find((x) => x.id === target.id) || {}).enabled === true, target.id);
+    }
+    const bad = await api('PATCH', '/api/sources/definitely-not-a-source', { enabled: true });
+    check('PATCH on an unknown source is rejected', bad.status === 404, 'status ' + bad.status);
+
+    // ----------------------------------------------------- 4. env detection
+    process.stdout.write('\n4. browser & proxy detection\n');
+    const br = await api('GET', '/api/browsers');
+    const detected = (br.json && br.json.detected) || [];
+    check('GET /api/browsers responds', br.status === 200 && Array.isArray(detected), detected.length + ' browser(s) detected');
+    const brShape = detected.every((b) => b.name && b.executablePath);
+    check('detected browsers carry name + path', brShape);
+    for (const b of detected) process.stdout.write('       - ' + b.name + '  ' + b.executablePath + '\n');
+    const px = await api('GET', '/api/proxy/detect');
+    check('GET /api/proxy/detect responds', px.status === 200 && Array.isArray(px.json.found) && typeof px.json.probed === 'number', 'probed ' + (px.json && px.json.probed) + ', found ' + JSON.stringify((px.json && px.json.found) || []));
+
+    // ----------------------------------------------------------- 5. reports
+    process.stdout.write('\n5. reports\n');
+    const rep = await api('GET', '/api/reports');
+    check('GET /api/reports returns a list', rep.status === 200 && Array.isArray(rep.json), rep.status === 200 ? rep.json.length + ' report(s)' : 'status ' + rep.status);
+    const miss = await api('GET', '/api/reports/no-such-report.md');
+    check('missing report -> 404', miss.status === 404, 'status ' + miss.status);
+    const traversal = await api('GET', '/api/reports/..%2f..%2fpackage.json');
+    check('path traversal in report name is refused', traversal.status === 404 || traversal.status === 400, 'status ' + traversal.status);
+
+    // ---------------------------------------------------------- 6. preflight
+    process.stdout.write('\n6. preflight & run\n');
+    const pre = await api('POST', '/api/preflight');
+    check('POST /api/preflight answers', pre.status === 200 && pre.json && typeof pre.json.ok === 'boolean', 'ok=' + (pre.json && pre.json.ok) + (pre.json && pre.json.error ? ' (' + String(pre.json.error).slice(0, 60) + ')' : ''));
+    const hasKey = !!(cfg.json && cfg.json.llm && cfg.json.llm.apiKey);
+    if (!hasKey) {
+      check('without an API key preflight reports a clear reason', pre.json.ok === false && !!pre.json.error, String(pre.json.error || '').slice(0, 80));
+    } else {
+      check('with an API key preflight succeeds', pre.json.ok === true, 'ok');
+    }
+
+    const run = await api('POST', '/api/run', { mode: 'daily' });
+    check('POST /api/run accepts a daily run', run.status === 200 && run.json && run.json.ok === true, 'status ' + run.status + ' ' + JSON.stringify(run.json));
+    const second = await api('POST', '/api/run', { mode: 'daily' });
+    check(
+      'a second concurrent run is refused or queued',
+      second.status === 200 || second.status === 409,
+      'status ' + second.status + ' ' + JSON.stringify(second.json)
+    );
+
+    let settled = null;
+    const deadline = Date.now() + (args.withRun ? 15 * 60 * 1000 : 90000);
+    while (Date.now() < deadline) {
+      const st = await api('GET', '/api/state');
+      settled = st.json;
+      if (settled && settled.running === false && settled.finishedAt) break;
+      await sleep(1000);
+    }
+    check('run settles and the state reports it', !!(settled && settled.running === false && settled.finishedAt), 'step=' + (settled && settled.step) + ', lastError=' + (settled && settled.lastError));
+    if (!hasKey) {
+      check(
+        'without an API key the run fails fast with an explanation',
+        !!(settled && settled.lastError),
+        String((settled && settled.lastError) || '').slice(0, 100)
+      );
+      check('nothing half-written: no report claimed', !(settled && settled.lastResult), JSON.stringify(settled && settled.lastResult));
+    }
+    check('run tail is exposed for the console', !!(settled && Array.isArray(settled.tail)), (settled && settled.tail ? settled.tail.length : 0) + ' line(s)');
+    const sched = settled && settled.schedule;
+    check('schedule block is reported', !!(sched && 'enabled' in sched), JSON.stringify(sched));
+    check('nextFire is reported', 'nextFire' in (settled || {}), String(settled && settled.nextFire));
+
+    // ------------------------------------------------------- 7. error paths
+    process.stdout.write('\n7. error paths\n');
+    const unknownApi = await api('GET', '/api/definitely-not-a-route');
+    check(
+      'unknown /api route answers with JSON, not the HTML shell',
+      unknownApi.status === 404 && !!unknownApi.json,
+      'status ' + unknownApi.status + ', type ' + unknownApi.type
+    );
+  } catch (err) {
+    process.stdout.write('\n  [FAIL] traversal aborted: ' + (err && err.message) + '\n');
+    exitCode = 1;
+  } finally {
+    if (!args.keep) {
+      try {
+        child.kill();
+      } catch (e) {
+        /* ignore */
+      }
+      await sleep(1200);
+      if (child.exitCode === null) {
+        try {
+          process.kill(child.pid, 'SIGKILL');
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    }
+
+    // Restore the release folder so it stays shippable.
+    try {
+      out.end();
+      for (const [rel, buf] of Object.entries(snapshot)) {
+        const p = path.join(appDir, rel);
+        if (buf === null) fs.rmSync(p, { force: true });
+        else fs.writeFileSync(p, buf);
+      }
+      for (const d of createdDirs) fs.rmSync(path.join(appDir, d), { recursive: true, force: true });
+      fs.rmSync(logFile, { force: true });
+      const logDir = path.join(appDir, 'logs');
+      if (fs.existsSync(logDir) && fs.readdirSync(logDir).length === 0 && createdDirs.indexOf('logs') !== -1) {
+        fs.rmSync(logDir, { recursive: true, force: true });
+      }
+    } catch (e) {
+      process.stdout.write('  (could not fully restore the folder: ' + e.message + ')\n');
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  process.stdout.write('\n' + (results.length - failed.length) + '/' + results.length + ' checks passed\n');
+  if (failed.length) {
+    for (const f of failed) process.stdout.write('  FAILED: ' + f.name + (f.detail ? '  -- ' + f.detail : '') + '\n');
+    process.stdout.write('\n');
+    process.exit(1);
+  }
+  if (exitCode !== 0) process.exit(exitCode);
+  process.stdout.write('  all good\n\n');
+  process.exit(0);
+}
+
+main().catch((err) => {
+  process.stderr.write('traversal crashed: ' + (err && err.stack ? err.stack : err) + '\n');
+  process.exit(1);
+});

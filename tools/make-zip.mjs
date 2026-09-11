@@ -60,6 +60,26 @@ if (leaky.length) {
 
 const buf = makeZip(files);
 fs.writeFileSync(out, buf);
+
+// 清单：verify-release 直接读它，不用解压就能断言「包里没有运行期数据」。
+// （纯 Node 没有 zip 读取器，清单比让校验脚本去解析 zip 可靠得多。）
+fs.writeFileSync(
+  out + '.manifest.json',
+  JSON.stringify(
+    {
+      generatedAt: new Date().toISOString(),
+      from: dir,
+      zip: path.basename(out),
+      bytes: buf.length,
+      files: files.map((f) => f.name).sort(),
+      excluded: [...new Set(excluded)].sort(),
+    },
+    null,
+    2,
+  ) + '\n',
+  'utf8',
+);
+
 const mb = (buf.length / 1024 / 1024).toFixed(1);
 process.stdout.write(`zip: ${out} (${files.length} files, ${mb} MB)\n`);
 if (excluded.length) {

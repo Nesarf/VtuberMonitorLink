@@ -55,6 +55,45 @@ const PERSONAL_PATTERNS = [
   [/[A-Z]:\\(?!(Windows|Program Files|ProgramData|Users|temp|Temp|System32)\b)[^\\"'\s]{3,}/i, 'hard-coded absolute drive path'],
 ];
 
+/**
+ * 运行期状态（**不随发布包出去**，由 make-zip.mjs 排除）。
+ * 构建会刻意保留它们；secret 扫描与「已发布数据」检查都要按这个名单区分。
+ */
+const RUNTIME_STATE_RELS = ['config.json', 'reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
+
+/**
+ * 找到 make-zip.mjs 生成的发布包清单（zip 同级或上级目录）。
+ * 为什么要清单：纯 Node 没有 zip 读取器，而「包里到底有没有运行期数据」
+ * 必须能断言 —— 让打包脚本自己写下文件列表，校验脚本读 JSON 即可。
+ */
+function findZipManifest(dir) {
+  const dirs = [dir, path.dirname(dir)];
+  for (const d of dirs) {
+    if (!fs.existsSync(d)) continue;
+    const hit = fs
+      .readdirSync(d)
+      .filter((f) => f.endsWith('.zip.manifest.json'))
+      .map((f) => path.join(d, f));
+    if (hit.length) {
+      hit.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      return hit[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * 命中密钥时把密钥本身替换掉，只留下「哪里、多长」。
+ * 自检的第一职责是不泄漏 —— 把 API Key 原文写进 stdout/日志等于自己制造事故。
+ */
+function redact(line, re) {
+  const flags = re.flags.includes('g') ? re.flags : re.flags + 'g';
+  return line
+    .replace(new RegExp(re.source, flags), (m) => m.slice(0, 3) + '\u2026<' + m.length + ' chars redacted>')
+    .trim()
+    .slice(0, 120);
+}
+
 // Private names must not be hard-coded here either: this file ships with the
 // release. They come from $SANITIZE_NAMES or the gitignored .sanitize-names.
 function escapeRe(s) {
@@ -192,6 +231,10 @@ function main() {
     // Third-party code is neither ours to police nor worth the noise.
     if (rel.indexOf('node_modules/') !== -1) return true;
     if (rel.startsWith('pw-browsers/')) return true;
+    // 本机的运行期状态（config.json / 历史 / 日志）不在发布zip里 —— make-zip 保证
+    // 了这件事，清单检查（第 5 节）会盯着它。所以这里跳过，否则每次自检都会
+    // 把「你自己的 Key 在你自己的 dist 里」当成发布事故（假警报会让人忽略真警报）。
+    if (RUNTIME_STATE_RELS.some((r) => rel === 'app/' + r || rel.startsWith('app/' + r + '/'))) return true;
     return false;
   });
 
@@ -232,12 +275,16 @@ function main() {
 
     // Secrets / personal data, ignoring documentation examples.
     const lines = text.split(/\r?\n/);
+    const secretPatterns = SECRET_PATTERNS.map(([re, why]) => [re, why, true]);
+    const personalPatterns = PERSONAL_PATTERNS.map(([re, why]) => [re, why, false]);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      for (const [re, why] of SECRET_PATTERNS.concat(PERSONAL_PATTERNS)) {
+      for (const [re, why, isSecret] of secretPatterns.concat(personalPatterns)) {
         if (!re.test(line)) continue;
         if (EXAMPLE_HINT.test(line) && !/sk-[A-Za-z0-9]{16,}/.test(line)) continue;
-        problems.push(rel + ':' + (i + 1) + '  ' + why + ' -> ' + line.trim().slice(0, 120));
+        // 命中密钥时只报「哪个文件、哪一行、多长」，**绝不回显密钥本身**：
+        // 自检把 API Key 原样打进控制台/日志，本身就是一次泄漏（真的发生过）。
+        problems.push(rel + ':' + (i + 1) + '  ' + why + ' -> ' + (isSecret ? redact(line, re) : line.trim().slice(0, 120)));
       }
     }
   }
@@ -268,14 +315,50 @@ function main() {
   process.stdout.write('   checked ' + scripts.length + ' scripts, ' + syntaxBad + ' with errors\n');
 
   // ------------------------------------------------------------- 5. run data
+  //
+  // 注意这里的分工：`dist/<name>/app/` 是**开发者本机自己的运行期数据**
+  // （API Key、历史报告）。构建现在会刻意保留它（不然每次重新打包就把 Key 清空，
+  // 那是真的踩过）。真正决定「发布出去的是什么」的是 zip，由 make-zip.mjs 的
+  // 清单（.manifest.json）来断言 —— 所以这里的 dist/app 只提示，不再当问题。
   process.stdout.write('\n5. shipped run data\n');
+  const RUNTIME_RELS = RUNTIME_STATE_RELS;
+
+  const manifestPath = findZipManifest(args.dir);
+  if (manifestPath) {
+    const rel = path.relative(args.dir, manifestPath).replace(/\\/g, '/');
+    try {
+      const man = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const bad = (man.files ?? []).filter((f) => RUNTIME_RELS.some((r) => f === 'app/' + r || f.startsWith('app/' + r + '/')));
+      if (bad.length) {
+        problems.push('release zip includes runtime state: ' + bad.slice(0, 5).join(', ') + (bad.length > 5 ? ` (+${bad.length - 5})` : ''));
+      } else {
+        process.stdout.write(
+          '   [ok]   release zip is clean (' + (man.files ?? []).length + ' files, ' + (man.excluded ?? []).length + ' runtime paths excluded)  -- ' + rel + '\n',
+        );
+      }
+    } catch (e) {
+      problems.push('zip manifest is not valid JSON: ' + rel);
+    }
+  } else {
+    notes.push('no zip manifest found next to the build; build with npm run build:portable to get one');
+  }
+
   const cfgPath = path.join(args.dir, 'app', 'config.json');
   if (fs.existsSync(cfgPath)) {
     try {
       const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      const key = cfg && cfg.llm && cfg.llm.apiKey;
-      if (key) problems.push('app/config.json contains an LLM API key - do not ship it');
-      else notes.push('app/config.json is shipped but has an empty apiKey (harmless; delete it to be safe)');
+      // 递归找 apiKey：它以前是 llm.apiKey，现在是 llm.providers[].apiKey ——
+      // 只看旧路径会给出「没有 Key」的假阴性（踩过）。
+      const hasKey = (function find(v) {
+        if (!v || typeof v !== 'object') return false;
+        for (const [k, val] of Object.entries(v)) {
+          if (/^api_?key$/i.test(k) && typeof val === 'string' && val.trim()) return true;
+          if (find(val)) return true;
+        }
+        return false;
+      })(cfg);
+      // 只说「有没有」，永远不打印 Key 本身
+      notes.push('app/config.json = your local settings (' + (hasKey ? 'an API key is stored here' : 'no API key stored') + '); make-zip keeps it out of the release zip');
     } catch (e) {
       problems.push('app/config.json is not valid JSON');
     }
@@ -285,7 +368,7 @@ function main() {
   for (const d of ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice']) {
     const dir = path.join(args.dir, 'app', d);
     const count = fs.existsSync(dir) ? walk(dir, []).length : 0;
-    if (count) problems.push('app/' + d + '/ ships ' + count + ' file(s) of run data');
+    if (count) notes.push('app/' + d + '/ holds ' + count + ' file(s) of local run data (kept out of the release zip)');
     else process.stdout.write('   [ok]   app/' + d + '/ is empty or absent\n');
   }
 

@@ -45,6 +45,22 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   const app = express();
   app.use(express.json({ limit: '8mb' }));
 
+  // ── 请求日志 / request log ───────────────────────────────────────
+  // 排查「UI 到底触发了什么」时，没有这个只能靠猜。/api/state 是 3 秒一次的轮询，
+  // 记下来会把日志淹掉，所以单独排除；写操作额外标出来，方便一眼看到。
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/api/') || req.path === '/api/state') return next();
+    const t0 = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - t0;
+      const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+      const line = (write ? '写入 ' : '') + req.method + ' ' + req.originalUrl + ' -> ' + res.statusCode + ' (' + ms + 'ms)';
+      if (res.statusCode >= 400) log?.warn('请求 / request: ' + line);
+      else log?.info('请求 / request: ' + line);
+    });
+    next();
+  });
+
   // ── 配置 / config ────────────────────────────────────────────────
   app.get('/api/config', (_req, res) => res.json(getConfig()));
   app.put('/api/config', (req, res) => {

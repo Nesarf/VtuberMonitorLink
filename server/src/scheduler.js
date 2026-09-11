@@ -124,6 +124,22 @@ function lastFireOf(cfg, taskId) {
   return h ? new Date(h.at) : null;
 }
 
+/**
+ * 已经为「哪个任务、哪个时间点」补跑过。
+ *
+ * 为什么必须有这个：scheduler.start() 会在**每次保存配置**时被调用（onConfigChanged 里），
+ * 而补跑判断原本只看「上次执行时间 < 上一个应触发时间」，于是：
+ *   • 每保存一次就重排一次补跑 —— 实测在任务名输入框里敲 10 个字符就排了 10 次补跑；
+ *   • 新建的任务没有任何历史，也会立刻被判为「错过」而马上跑一次。
+ * 这里用「任务 + 时间点」去重，并且要求任务确实跑过至少一次。
+ */
+const catchUpDone = new Set();
+
+/** 仅供测试：重置去重状态 */
+export function resetCatchUpState() {
+  catchUpDone.clear();
+}
+
 // ───────────────────────────────────────── 生命周期 / lifecycle
 
 export function stop() {
@@ -168,13 +184,21 @@ export function start(cfg, onFire, log) {
     timer.unref?.();
     timers.set(task.id, timer);
 
-    // 补跑：程序没开的时候错过了，启动后补一次
+    // 补跑：程序没开的时候错过了，启动后补一次。
+    // 三道闸门（缺一条就会变成「一存配置就乱跑」）：
+    //   1. 必须**确实跑过至少一次** —— 新建的任务没有历史，谈不上「错过」；
+    //   2. 同一个「任务 + 时间点」只补一次 —— 否则每次保存配置都会重排；
+    //   3. 只补最近 7 天内的，再久就不追了。
     if (task.catchUp) {
       const last = lastFireOf(cfg, task.id);
-      const dueBefore = computeTaskNextFire({ ...task, enabled: true }, new Date(now.getTime() - 60_000));
-      // dueBefore 是「上一分钟之前应该跑的时间点」，这里取比它更早的一次
       const prevDue = previousFire(task, now);
-      if (prevDue && (!last || last < prevDue) && now - prevDue < 7 * 24 * 3600 * 1000) {
+      const key = `${task.id}|${prevDue ? prevDue.toISOString() : ''}`;
+      if (!last) {
+        log?.info(`任务「${task.name}」还没有执行记录，不做补跑（只排下一次）/ no history, no catch-up`);
+      } else if (catchUpDone.has(key)) {
+        /* 这个时间点已经补过了，保存配置不该再补一次 */
+      } else if (prevDue && last < prevDue && now - prevDue < 7 * 24 * 3600 * 1000) {
+        catchUpDone.add(key);
         log?.info(`任务「${task.name}」错过 ${prevDue.toLocaleString()}，启动后补跑一次 / catching up`);
         setTimeout(async () => {
           try {
@@ -184,7 +208,6 @@ export function start(cfg, onFire, log) {
           }
         }, 5000 + Math.random() * 2000).unref?.();
       }
-      void dueBefore;
     }
   }
   return nextFire();

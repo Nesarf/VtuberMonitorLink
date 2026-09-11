@@ -1,5 +1,5 @@
 // Settings.jsx — 设置页：浏览器 / LLM 多档位 / 代理 / 定时 / 界面
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 
@@ -24,6 +24,8 @@ export default function Settings({ onLayout }) {
   const [nodeTestUrl, setNodeTestUrl] = useState('https://www.bilibili.com/');
   const [nodeDelays, setNodeDelays] = useState(null);
   const [newNotifyKind, setNewNotifyKind] = useState('bark');
+  // 任务名防抖定时器：**必须在早退之前**，否则首帧/后续帧 hook 数不一致 -> React #310
+  const scheduleSaveTimer = useRef(null);
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
@@ -177,6 +179,20 @@ export default function Settings({ onLayout }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * 任务名是文本框：不能每敲一个字就 PUT 一次配置 —— 那既是请求风暴，也会把配置
+   * 反复写盘（实测敲 10 个字发了 10 次 PUT）。本地先改，停止输入 800ms 后再存。
+   */
+  const onTaskNameChange = (id, name) => {
+    const tasks = (cfg.schedule?.tasks ?? []).map((x) => (x.id === id ? { ...x, name } : x));
+    setCfg((c) => ({ ...c, schedule: { ...c.schedule, tasks } }));
+    if (scheduleSaveTimer.current) clearTimeout(scheduleSaveTimer.current);
+    scheduleSaveTimer.current = setTimeout(() => {
+      scheduleSaveTimer.current = null;
+      saveSchedule(tasks);
+    }, 800);
   };
 
   const addTask = async () => {
@@ -764,7 +780,7 @@ export default function Settings({ onLayout }) {
                     <input type="checkbox" checked={task.enabled !== false} onChange={(e) => patchTask(task.id, { enabled: e.target.checked })} />
                   </td>
                   <td>
-                    <input value={task.name} onChange={(e) => patchTask(task.id, { name: e.target.value })} />
+                    <input value={task.name} onChange={(e) => onTaskNameChange(task.id, e.target.value)} onBlur={() => saveSchedule(cfg.schedule.tasks ?? [])} />
                     {live?.nextFire && (
                       <div className="muted small">
                         {t('nextFireAt')}: {new Date(live.nextFire).toLocaleString()}

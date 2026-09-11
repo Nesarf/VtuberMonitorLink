@@ -187,11 +187,27 @@ async function main() {
     const title = (await page.locator('h1').first().innerText()).trim();
     check('page mounts and shows the product title', title === "Vtuber's Monitor Link", title);
 
-    const langBtn = page.locator('button.lang');
-    if ((await page.locator('.sub').first().innerText()).indexOf('本地') === -1) {
-      await langBtn.click();
-      await page.waitForTimeout(300);
-    }
+    // 语言改成下拉了（26 个地区没法用两态按钮切）；钉到简体中文，后面的断言都按中文写的
+    const langSel = page.locator('select.lang').first();
+    check('the language picker lists the locales', (await langSel.locator('option').count()) >= 20, (await langSel.locator('option').count()) + ' locales');
+    await langSel.selectOption('zh-Hans');
+    await page.waitForTimeout(400);
+    const langIsHant = page.locator('html');
+    check('html lang is set', (await langIsHant.getAttribute('lang')) === 'zh-Hans');
+    check('html dir is ltr for chinese', (await langIsHant.getAttribute('dir')) === 'ltr');
+    // 切到阿拉伯语：RTL 与另一套文案都要真的生效
+    await langSel.selectOption('ar-SA');
+    await page.waitForTimeout(400);
+    check('阿拉伯语把整页方向切成 rtl', (await langIsHant.getAttribute('dir')) === 'rtl');
+    const arTabs = await page.locator('nav.tabs button').allInnerTexts();
+    check('阿拉伯语标签页用阿语渲染', arTabs.join('|').indexOf('المعلومات') !== -1, arTabs.join(' | '));
+    await langSel.selectOption('zh-TW');
+    await page.waitForTimeout(400);
+    const twTabs = await page.locator('nav.tabs button').allInnerTexts();
+    // 繁体变体暂时回落简体：简→繁对照表补全之前，宁可字形一致也不要混排（见 i18n.jsx 注释）
+    check('台湾正体在繁体表补全前保持一致字形', twTabs.join('|').indexOf('设置') !== -1, twTabs.join(' | '));
+    await langSel.selectOption('zh-Hans');
+    await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
     check('nine navigation tabs render', tabs.length === 9, tabs.join(' | '));
     check(

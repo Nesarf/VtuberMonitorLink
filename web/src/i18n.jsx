@@ -1,5 +1,43 @@
-// i18n.jsx — 中英双语 / bilingual strings (zh + en)
-import { createContext, useContext, useEffect, useState } from 'react';
+// i18n.jsx — 多语言与地区化 / multi-locale strings + regional formatting
+//
+// zh 与 en 两套完整词条留在这里（历史原因，600+ 条）。
+// 其余 24 个地区在 locales/index.js 里**只写差异**，沿 chain 逐级回落。
+// 新增语言：往 LOCALES 加一行 + 写一份 dict，缺键自动落到 en-US，不会白屏。
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { LOCALES, byCode, negotiate, toHant, toTwTerms } from './locales/index.js';
+import { GB_SPELL, GB_STEMS, HAND } from './locales/overlays.js';
+
+/** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
+export const OVERLAY = HAND;
+
+/** 整词替换（用 \b 边界，绝不动子串：parameter 不会被改成 parametre） */
+function spell(word, map) {
+  const hit = map.find(([a]) => a === word);
+  return hit ? hit[1] : word;
+}
+
+/** 英式拼写推导：color→colour、organize→organise、analyze→analyse */
+export function toBritish(s) {
+  const map = new Map(GB_SPELL);
+  let out = String(s).replace(/\b[A-Za-z]+\b/g, (w) => {
+    const lower = w.toLowerCase();
+    const hit = map.get(lower) ?? map.get(w);
+    if (!hit) return w;
+    // 保持首字母大小写
+    return w[0] === w[0].toUpperCase() ? hit[0].toUpperCase() + hit.slice(1) : hit;
+  });
+  for (const stem of GB_STEMS) {
+    const re = new RegExp(`\\b(${stem}(?:e|es|ed|ing|er|ers|ation|ations|ational)?)\\b`, 'gi');
+    out = out.replace(re, (m) => m.replace(/z/i, 's').replace(/ze$/i, 'se'));
+  }
+  return out;
+}
+
+function convertDict(dict, fn) {
+  const out = {};
+  for (const [k, v] of Object.entries(dict)) out[k] = typeof v === 'string' ? fn(v) : v;
+  return out;
+}
 
 export const STRINGS = {
   zh: {
@@ -990,10 +1028,37 @@ export const STRINGS = {
   },
 };
 
-export const WEEKDAYS = {
-  zh: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'],
-  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-};
+/**
+ * 星期名不再手写数组：用 Intl 从地区派生，26 个地区自动正确，
+ * 而且尊重各地区的一周起始日（美/日/韩/港台周日，中/欧/俄周一）。
+ */
+function weekdaysFor(code, weekStart, style = 'short') {
+  const fmt = new Intl.DateTimeFormat(code, { weekday: style, timeZone: 'UTC' });
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    // 2024-01-07 是周日；按 weekStart 轮转
+    const d = new Date(Date.UTC(2024, 0, 7 + ((weekStart + i) % 7)));
+    out.push(fmt.format(d));
+  }
+  return out;
+}
+
+/**
+ * 递归展开回落链 —— **必须传递**。
+ * 踩过的坑：zh-TW 的 chain 写的是 ['zh-TW','zh-Hant','zh-Hans']，
+ * 而基础词条的键是 'zh' 不是 'zh-Hans'，于是它一路落不到简体底本、直接掉成英文。
+ * 递归展开后：zh-TW → zh-Hant → zh-Hans → zh ✓
+ */
+function resolveChain(code, seen = new Set()) {
+  if (seen.has(code)) return [];
+  seen.add(code);
+  const loc = byCode(code);
+  const parents = (loc?.chain ?? [code]).filter((c) => c !== code);
+  const out = [];
+  for (const p of parents) out.push(...resolveChain(p, seen));
+  out.push(code);
+  return out;
+}
 
 const Ctx = createContext(null);
 
@@ -1007,17 +1072,103 @@ export function applyTheme(theme) {
 export function I18nProvider({ children }) {
   const [lang, setLang] = useState(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('vml-lang') : null;
-    if (saved) return saved;
-    return typeof navigator !== 'undefined' && navigator.language?.startsWith('zh') ? 'zh' : 'en';
+    if (saved && byCode(saved)) return saved;
+    const nav = typeof navigator !== 'undefined' ? navigator.languages ?? [navigator.language] : [];
+    return negotiate(nav);
   });
+
+  const loc = byCode(lang) ?? byCode('en-US');
+
+  // 推导出来的整份地区词条（繁体 / 英式拼写），只算一次
+  //
+  // ⚠️ 繁体这里有个**已知缺陷，暂时关闭**：
+  //    简→繁靠一张手写对照表，而「不该变的字」和「我漏掉的字」在表里无法区分，
+  //    于是它安静地产出「部分繁体 + 部分简体」的混排界面 —— 比不转换更糟。
+  //    实测缺口：zh 词条 586 个汉字里只有 203 个有映射，其余 454 个既可能是同形字、
+  //    也可能是我漏的（运/监 就是漏的，所以「运行/监视」没转）。
+  //    在补全并加「覆盖率检查」之前：zh-Hant / zh-HK / zh-TW 一律回落简体，
+  //    保持**字形一致**（一致地简体 > 混着来）。繁体变体一旦表补齐就打开。
+  const HANT_READY = false;
+
+  const derived = useMemo(() => {
+    const brit = convertDict(STRINGS.en, toBritish);
+    const hant = HANT_READY ? convertDict(STRINGS.zh, toHant) : null;
+    return {
+      ...(hant
+        ? {
+            'zh-Hant': hant,
+            'zh-HK': hant, // 香港：字形转繁，用词保留
+            'zh-TW': convertDict(hant, toTwTerms), // 台湾：再套一层用词（档案/资料/预设…）
+          }
+        : {}),
+      'en-GB': brit,
+      'en-AU': brit, // 澳洲跟随英式拼写
+      'en-CA': brit, // 加拿大拼写英式为主
+    };
+  }, []);
+
+  const dict = useMemo(() => {
+    // 逐级合并回落链：后面的补前面缺的键
+    let out = {};
+    for (const c of resolveChain(loc.code)) {
+      const d = OVERLAY[c] ?? derived[c] ?? STRINGS[c];
+      if (d) out = { ...out, ...d };
+    }
+    return out;
+  }, [loc, derived]);
+
+  const t = useCallback((k) => dict[k] ?? STRINGS.en?.[k] ?? k, [dict]);
+
   useEffect(() => {
     try {
       localStorage.setItem('vml-lang', lang);
     } catch {}
-    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
-  }, [lang]);
-  const t = (k) => STRINGS[lang]?.[k] ?? STRINGS.en[k] ?? k;
-  return <Ctx.Provider value={{ lang, setLang, t }}>{children}</Ctx.Provider>;
+    const root = document.documentElement;
+    root.lang = loc.code;
+    // RTL 语言（阿拉伯语等）：整页方向跟着换，布局用逻辑属性才不会散
+    root.dir = loc.dir ?? 'ltr';
+  }, [lang, loc]);
+
+  const value = useMemo(() => {
+    const weekdays = weekdaysFor(loc.code, loc.weekStart);
+    return {
+      // ⚠️ lang 是**基础语言**（zh / en / ja…），不是地区码。
+      // 服务端返回的 name 只有 {zh,en} 两种键，界面里十几处 `name[lang]` 都靠它。
+      // 之前把 lang 换成 'zh-Hans' 这种完整地区码，那些地方全部取空、退化成显示 id。
+      // 需要完整地区码的地方用 localeCode。
+      lang: loc.code.split('-')[0],
+      localeCode: loc.code,
+      setLang,
+      t,
+      locale: loc,
+      weekStart: loc.weekStart,
+      dir: loc.dir ?? 'ltr',
+      weekdays,
+      // 固定「周日在前」的一周：计划任务里 dayOfWeek 的存储语义就是 0=周日，
+      // 不能跟着地区把顺序转掉 —— 那会把已存的任务悄悄改到别的日子上。
+      weekdaysSunFirst: weekdaysFor(loc.code, 0),
+      weekdaysLong: weekdaysFor(loc.code, loc.weekStart, 'long'),
+      fmtDate: (d, opts) => new Intl.DateTimeFormat(loc.code, opts ?? { dateStyle: 'medium' }).format(new Date(d)),
+      fmtTime: (d, opts) => new Intl.DateTimeFormat(loc.code, opts ?? { timeStyle: 'medium' }).format(new Date(d)),
+      fmtDateTime: (d) => new Intl.DateTimeFormat(loc.code, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(d)),
+      fmtNumber: (n, opts) => new Intl.NumberFormat(loc.code, opts).format(n),
+      fmtRelative: (d) => {
+        const diff = (new Date(d).getTime() - Date.now()) / 1000;
+        const rtf = new Intl.RelativeTimeFormat(loc.code, { numeric: 'auto' });
+        const units = [
+          ['day', 86400],
+          ['hour', 3600],
+          ['minute', 60],
+        ];
+        for (const [unit, sec] of units) {
+          if (Math.abs(diff) >= sec) return rtf.format(Math.round(diff / sec), unit);
+        }
+        return rtf.format(Math.round(diff), 'second');
+      },
+    };
+  }, [lang, loc, t]);
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useI18n() {

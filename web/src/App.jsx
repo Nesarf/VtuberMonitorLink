@@ -1,6 +1,7 @@
 // App.jsx — 六页壳 + 主题 + 排版变量 + 运行结束通知
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from './i18n.jsx';
+import { LOCALES } from './locales/index.js';
 import { applyLayout } from './layout.js';
 import { api } from './api.js';
 import Intel from './pages/Intel.jsx';
@@ -16,7 +17,7 @@ import Reports from './pages/Reports.jsx';
 const TABS = ['intel', 'search', 'live', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
 export default function App() {
-  const { t, lang, setLang } = useI18n();
+  const { t, localeCode, setLang } = useI18n();
   const [tab, setTab] = useState('run');
   const [alerts, setAlerts] = useState(0);
   const [layout, setLayout] = useState(null);
@@ -104,9 +105,20 @@ export default function App() {
             ⚠ {alerts} {t('alerts')}
           </span>
         )}
-        <button className="ghost lang" onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}>
-          {lang === 'zh' ? 'English' : '中文'}
-        </button>
+        {/* 26 个地区没法用「中/英」两态按钮切换了：改成下拉，语言名用它自己的文字写 */}
+        <select
+          className="ghost lang"
+          aria-label="language"
+          value={localeCode}
+          onChange={(e) => setLang(e.target.value)}
+          title={t('language')}
+        >
+          {LOCALES.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.name}
+            </option>
+          ))}
+        </select>
       </header>
       <nav className="tabs">
         {TABS.map((id) => (

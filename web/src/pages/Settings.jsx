@@ -2,13 +2,13 @@
 // 注意：LLM 与 API Key 已单独拉出成独立页面（pages/Llm.jsx）—— 它埋在设置里时
 // 使用者根本找不到，档位为空更是连输入框都不渲染。
 import { useEffect, useRef, useState } from 'react';
-import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
+import { useI18n, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 import { SaveBar, useSaveState } from '../savebar.jsx';
 import Collapsible from '../Collapsible.jsx';
 
 export default function Settings({ onLayout }) {
-  const { t, lang } = useI18n();
+  const { t, lang, weekdaysSunFirst: WEEKDAYS } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [browsers, setBrowsers] = useState([]);
   const [presets, setPresets] = useState([]);
@@ -577,7 +577,7 @@ export default function Settings({ onLayout }) {
                 value={cfg.schedule.dayOfWeek}
                 onChange={(e) => patch('schedule.dayOfWeek', Number(e.target.value))}
               >
-                {WEEKDAYS[lang].map((d, i) => (
+                {WEEKDAYS.map((d, i) => (
                   <option key={i} value={i}>{d}</option>
                 ))}
               </select>
@@ -723,12 +723,12 @@ export default function Settings({ onLayout }) {
                     </select>
                     {task.freq === 'weekly' && (
                       <select
-                        aria-label={`${task.name || t('taskName')} · ${t('freq')} · ${WEEKDAYS[lang][task.dayOfWeek] ?? ''}`}
+                        aria-label={`${task.name || t('taskName')} · ${t('freq')} · ${WEEKDAYS[task.dayOfWeek] ?? ''}`}
                         style={{ marginTop: 4 }}
                         value={task.dayOfWeek}
                         onChange={(e) => patchTask(task.id, { dayOfWeek: Number(e.target.value) })}
                       >
-                        {WEEKDAYS[lang].map((d, i) => (
+                        {WEEKDAYS.map((d, i) => (
                           <option key={i} value={i}>{d}</option>
                         ))}
                       </select>

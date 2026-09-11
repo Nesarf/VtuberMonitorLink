@@ -813,7 +813,99 @@ export default function Settings({ onLayout }) {
               <option value="false">off</option>
             </select>
           </div>
+          <div className="field" style={{ flex: '0 0 170px' }}>
+            <label>{t('notifyDedupe')}</label>
+            <input
+              type="number"
+              min="0"
+              max="1440"
+              value={cfg.notify?.dedupeMinutes ?? 0}
+              onChange={(e) => patch('notify.dedupeMinutes', Number(e.target.value))}
+            />
+          </div>
         </div>
+
+        {/* ── 静默时段：入队补发，不是丢弃 ── */}
+        <Collapsible
+          id="notify-quiet"
+          title={t('quietTitle')}
+          count={notifyInfo?.queue?.length || null}
+          summary={
+            notifyInfo?.quiet?.quiet
+              ? `🔕 ${t('quietNow')}${notifyInfo.quiet.reason ? ` · ${notifyInfo.quiet.reason}` : ''}`
+              : notifyInfo?.quiet?.error
+                ? `⚠ ${notifyInfo.quiet.error}`
+                : t('quietSummary')
+          }
+          right={
+            notifyInfo?.queue?.length ? (
+              <button
+                className="ghost tiny"
+                onClick={() => api.flushNotify().then(loadNotify).catch(() => {})}
+              >
+                {t('quietFlush')}
+              </button>
+            ) : null
+          }
+        >
+          <div className="row">
+            <div className="field" style={{ flex: '0 0 120px' }}>
+              <label>{t('quietEnabled')}</label>
+              <select
+                value={String(cfg.notify?.quietHours?.enabled === true)}
+                onChange={(e) => patch('notify.quietHours.enabled', e.target.value === 'true')}
+              >
+                <option value="false">off</option>
+                <option value="true">on</option>
+              </select>
+            </div>
+            <div className="field" style={{ flex: '0 0 110px' }}>
+              <label>{t('quietStart')}</label>
+              <input
+                type="time"
+                value={cfg.notify?.quietHours?.start ?? '23:00'}
+                onChange={(e) => patch('notify.quietHours.start', e.target.value)}
+              />
+            </div>
+            <div className="field" style={{ flex: '0 0 110px' }}>
+              <label>{t('quietEnd')}</label>
+              <input
+                type="time"
+                value={cfg.notify?.quietHours?.end ?? '08:00'}
+                onChange={(e) => patch('notify.quietHours.end', e.target.value)}
+              />
+            </div>
+            <div className="field" style={{ flex: '0 0 130px' }}>
+              <label>{t('quietDays')}</label>
+              <select
+                value={cfg.notify?.quietHours?.days ?? 'all'}
+                onChange={(e) => patch('notify.quietHours.days', e.target.value)}
+              >
+                <option value="all">{t('daysAll')}</option>
+                <option value="weekdays">{t('daysWeekdays')}</option>
+                <option value="weekend">{t('daysWeekend')}</option>
+              </select>
+            </div>
+            <div className="field" style={{ flex: '1 1 180px' }}>
+              <label>{t('quietTz')}</label>
+              <input
+                value={cfg.notify?.quietHours?.timeZone ?? ''}
+                onChange={(e) => patch('notify.quietHours.timeZone', e.target.value)}
+                placeholder={t('quietTzPh')}
+              />
+            </div>
+          </div>
+          <div className="hint" style={{ marginBottom: 0 }}>{t('quietHint')}</div>
+          {notifyInfo?.queue?.length ? (
+            <ul className="muted small" style={{ paddingLeft: 18 }}>
+              {notifyInfo.queue.slice(-5).map((q) => (
+                <li key={q.id}>
+                  {q.queuedAt.slice(11, 19)} · {q.title} <span className="muted">({q.reason})</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Collapsible>
 
         {(cfg.notify?.targets ?? []).length === 0 ? (
           <p className="muted small">—</p>
@@ -850,6 +942,18 @@ export default function Settings({ onLayout }) {
                     <input value={ntf.chatId ?? ''} onChange={(e) => patchNotify(ntf.id, { chatId: e.target.value })} />
                   </div>
                 )}
+                {kind?.fields?.includes('topic') && (
+                  <div className="field" style={{ flex: '0 0 140px' }}>
+                    <label>topic</label>
+                    <input value={ntf.topic ?? ''} onChange={(e) => patchNotify(ntf.id, { topic: e.target.value })} placeholder="vml" />
+                  </div>
+                )}
+                {kind?.fields?.includes('secret') && (
+                  <div className="field" style={{ flex: '0 0 160px' }}>
+                    <label>{t('notifySecret')}</label>
+                    <input value={ntf.secret ?? ''} onChange={(e) => patchNotify(ntf.id, { secret: e.target.value })} placeholder={t('notifySecretPh')} />
+                  </div>
+                )}
                 {kind?.fields?.includes('webhookUrl') && (
                   <div className="field">
                     <label>Webhook URL</label>
@@ -862,6 +966,13 @@ export default function Settings({ onLayout }) {
                     <option value="alerts">{t('on_alerts')}</option>
                     <option value="always">{t('on_always')}</option>
                     <option value="failures">{t('on_failures')}</option>
+                  </select>
+                </div>
+                <div className="field" style={{ flex: '0 0 150px' }}>
+                  <label>{t('notifyQuiet')}</label>
+                  <select value={ntf.quiet ?? 'inherit'} onChange={(e) => patchNotify(ntf.id, { quiet: e.target.value })}>
+                    <option value="inherit">{t('quietInherit')}</option>
+                    <option value="bypass">{t('quietBypass')}</option>
                   </select>
                 </div>
                 <div className="field" style={{ flex: '0 0 auto' }}>

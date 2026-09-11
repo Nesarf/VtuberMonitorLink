@@ -88,7 +88,24 @@ export const DEFAULT_CONFIG = {
   },
   notify: {
     desktop: true,
-    // [{ id, kind, name, enabled, on: always|alerts|failures, key, server, token, chatId, webhookUrl }]
+    // 同一条内容在 N 分钟内只推一次（0 = 不去重）。报告标题往往每次都一样，
+    // 不去重就是纯骚扰。
+    dedupeMinutes: 0,
+    // 静默时段：**不是丢弃，是入队补发**。
+    // 跨午夜（23:00→08:00）是最常见的形态，calendar.js / notify.js 里都按
+    // 「start > end 即跨午夜」处理。start === end 表示全天静默。
+    // bypassLevels 默认豁免 urgent（开播这类时间敏感的通知等不起）；
+    // 配置写坏时 fail-open（照常推送），因为「配错导致所有通知消失」严重得多。
+    quietHours: {
+      enabled: false,
+      start: '23:00',
+      end: '08:00',
+      days: 'all', // all | weekdays | weekend
+      timeZone: '', // 留空 = 跟随 calendar.timeZone / 系统时区
+      bypassLevels: ['urgent'],
+    },
+    // [{ id, kind, name, enabled, on: always|alerts|failures, quiet: inherit|bypass,
+    //    key, server, topic, token, secret, chatId, webhookUrl }]
     targets: [],
   },
   bilibili: {

@@ -318,6 +318,26 @@ async function main() {
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
 
+    // ── 推送渠道与静默时段 ──
+    const notifyInfo = await (await fetch(base + '/api/notify')).json();
+    const kindIds = (notifyInfo.kinds ?? []).map((k) => k.id);
+    for (const need of ['bark', 'serverchan', 'telegram', 'dingtalk', 'wecom', 'ntfy', 'gotify', 'pushplus', 'slack', 'discord', 'feishu', 'custom']) {
+      if (!kindIds.includes(need)) {
+        check('推送渠道里包含 ' + need, false, kindIds.join(','));
+      }
+    }
+    check('推送渠道齐全（钉钉/企业微信/ntfy/Gotify/PushPlus/Slack 都在）', kindIds.length >= 12, kindIds.length + ' kinds');
+    check('接口报告了静默状态与积压队列', !!notifyInfo.quiet && Array.isArray(notifyInfo.queue), JSON.stringify(notifyInfo.quiet).slice(0, 80));
+    const flushRes = await fetch(base + '/api/notify/flush', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    });
+    const flushJson = await flushRes.json();
+    check('可以手动补发积压通知', flushRes.ok && flushJson.ok === true, JSON.stringify(flushJson).slice(0, 80));
+    check('静默时段配置渲染在页面上', main.indexOf('静默时段') !== -1);
+    check('去重分钟数可配置', main.indexOf('去重') !== -1);
+
     // --------------------------------------------------------------- sources
     process.stdout.write('\n3. Sources + custom source editor\n');
     await tab('来源').click();

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createLogger } from './logger.js';
 import { applyProxy } from './net.js';
 import { notify } from './notify.js';
+import { flushQueue } from './notify.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
@@ -335,6 +336,13 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       .filter(Boolean)
       .join('\n');
     await pushNotify(headline, body, dueCal.length || alerts || kwHits.length ? 'alert' : 'info');
+    // 静默时段积压的通知：每次运行结束补发一次（明确的时间点，不在投递路径里做竞态）
+    try {
+      const flushed = await flushQueue(cfg, log);
+      if (flushed.flushed) log.info(`补发积压通知 / flushed ${flushed.flushed} queued notification(s)`);
+    } catch (e) {
+      log.warn(`补发队列失败 / flush failed: ${e.message}`);
+    }
 
     return { ok: true, file, results, watchResults, items, summary: runState.lastResult };
   } catch (err) {

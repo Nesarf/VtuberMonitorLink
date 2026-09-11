@@ -84,6 +84,7 @@ export const api = {
 
   // 报告
   getReports: () => j('/api/reports'),
+  flushNotify: () => post('/api/notify/flush', { force: true }),
   getReport: (name) => fetch(`/api/reports/${encodeURIComponent(name)}`).then((r) => r.text()),
   searchReports: (q) => j(`/api/reports/search?q=${encodeURIComponent(q)}`),
   diffReports: (from, to) => j(`/api/reports/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),

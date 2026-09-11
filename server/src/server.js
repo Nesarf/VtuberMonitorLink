@@ -40,7 +40,16 @@ import { checkLive, liveUids, searchRoster } from './live.js';
 import { listAccounts } from './accounts.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
 import { spawn } from 'node:child_process';
-import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
+import {
+  NOTIFY_KINDS,
+  flushQueue as flushNotifyQueue,
+  inQuietHours,
+  maskTarget,
+  newTarget,
+  notify,
+  readQueue,
+  sanitizeTarget as sanitizeNotifyTarget,
+} from './notify.js';
 import * as proxyctl from './proxyctl.js';
 import { getThumbnail, listThumbs, readThumb } from './thumbs.js';
 import * as scheduler from './scheduler.js';
@@ -567,7 +576,18 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       desktop: cfg.notify?.desktop !== false,
       targets: (cfg.notify?.targets ?? []).map(maskTarget),
       count: (cfg.notify?.targets ?? []).length,
+      // 静默状态与积压队列：界面要能一眼看到「现在是不是静默中、积了几条」
+      quiet: inQuietHours(cfg, { level: 'info' }),
+      queue: readQueue(cfg),
+      dedupeMinutes: cfg.notify?.dedupeMinutes ?? 0,
     });
+  });
+
+  // 手动补发积压的通知（force 会无视静默时段）
+  app.post('/api/notify/flush', async (req, res) => {
+    const cfg = getConfig();
+    const r = await flushNotifyQueue(cfg, log, { force: req.body?.force === true });
+    res.json({ ok: true, ...r, queue: readQueue(cfg) });
   });
 
   app.post('/api/notify/new', (req, res) => {

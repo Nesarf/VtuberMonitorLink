@@ -32,6 +32,7 @@ import { applyFeatures, extractFeatures, featureStats, loadFeatureCache } from '
 import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js';
 import { probeTor } from './socks.js';
 import { entityDetail, entityStats } from './entities.js';
+import { checkLive, liveUids, searchRoster } from './live.js';
 import { spawn } from 'node:child_process';
 import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
 import * as proxyctl from './proxyctl.js';
@@ -792,6 +793,24 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
+  });
+
+  // ── 开播监测 / live status ───────────────────────────────────────
+  // 功能来源：dd-center/bilibili-dd-monitor（MIT）。上游用的 vtbs.moe /v1/live 已 404，
+  // 这里改用实测可用的 B 站批量开播接口，并区分「直播中」与「轮播」。
+  app.get('/api/live', async (req, res) => {
+    const cfg = getConfig();
+    const sources = effectiveSources(cfg).filter((s) => s.enabled);
+    if (req.query.fresh === '1') {
+      return res.json(await checkLive(cfg, sources, log));
+    }
+    const wanted = liveUids(cfg, sources);
+    const r = await checkLive(cfg, sources, log);
+    res.json({ ...r, monitored: wanted.length, uids: wanted.map((w) => w.uid) });
+  });
+
+  app.get('/api/live/roster', async (req, res) => {
+    res.json(await searchRoster(getConfig(), req.query.q));
   });
 
   // ── 人物档案 / entities ──────────────────────────────────────────

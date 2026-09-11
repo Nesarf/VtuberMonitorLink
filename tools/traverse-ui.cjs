@@ -189,8 +189,12 @@ async function main() {
       await page.waitForTimeout(300);
     }
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('seven navigation tabs render', tabs.length === 7, tabs.join(' | '));
-    check('the new Intel and Watch tabs are present', tabs.includes('情报') && tabs.includes('监视'), tabs.join(' | '));
+    check('eight navigation tabs render', tabs.length === 8, tabs.join(' | '));
+    check(
+      'the Intel, Search, Live and Watch tabs are present',
+      ['情报', '检索', '直播', '监视'].every((x) => tabs.includes(x)),
+      tabs.join(' | ')
+    );
 
     const tab = (label) => page.locator('nav.tabs button', { hasText: label }).first();
     const mainText = () => page.locator('main').innerText();

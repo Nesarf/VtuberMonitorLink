@@ -298,3 +298,9 @@ pre.diff {
 .advice-list li { margin-bottom: 6px; }
 .nodes { max-height: 320px; overflow: auto; }
 .nodes tr.best td { background: var(--add-bg); }
+
+/* ── 多屏播放器 ── */
+.player { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.player-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--border); }
+.player iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }
+

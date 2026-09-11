@@ -248,6 +248,23 @@ async function main() {
     check('the run is recorded in the task history', !!entry, JSON.stringify(entry ?? sched2.json.history?.[0] ?? null));
     check('unknown task ids are refused', (await api('POST', '/api/schedule/run', { id: 'nope' })).status === 404);
 
+    // ─────────────────────────────────────────── 5.5 live status
+    console.log('\n5.5 Live status (bilibili batch API, direct)');
+    const live = await api('GET', '/api/live');
+    check('GET /api/live answers', live.status === 200 && typeof live.json?.ok === 'boolean', 'checked ' + (live.json?.checked ?? 0) + ' uid(s)');
+    check(
+      'it separates live from rerun',
+      Array.isArray(live.json?.live) && Array.isArray(live.json?.round),
+      'live ' + (live.json?.live?.length ?? 0) + ', rerun ' + (live.json?.round?.length ?? 0) + ', off ' + (live.json?.off?.length ?? 0)
+    );
+    if (live.json?.ok) {
+      const any = [...(live.json.live ?? []), ...(live.json.round ?? []), ...(live.json.off ?? [])].find((x) => x.roomId);
+      check('each entry carries a room id and an embed URL', !!any && /\/blanc\/\d+/.test(String(any.embed)), any ? any.embed : '');
+      check('rerun entries are not counted as live', (live.json.round ?? []).every((x) => x.status === 2) && (live.json.live ?? []).every((x) => x.status === 1), 'status codes are distinct');
+    }
+    const roster = await api('GET', '/api/live/roster?q=' + encodeURIComponent('泠鸢'));
+    check('the vtbs.moe roster can resolve a name to a uid', roster.status === 200 && (roster.json?.hits?.length ?? 0) > 0, JSON.stringify((roster.json?.hits ?? [])[0] ?? roster.json?.error ?? null));
+
     // ─────────────────────────────────────────── 6. LLM assistant
     console.log('\n6. Optional LLM assistant (mock returns JSON)');
     const assist = await api('POST', '/api/search/assist', { description: '红发，笑声很特别，玩马车很强' });

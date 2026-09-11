@@ -74,6 +74,18 @@ export const DEFAULT_CONFIG = {
     controlUrl: '',
     controlSecret: '',
   },
+  live: {
+    // 开播监测（功能来源见 docs/REVIEW-live.md；上游 dd-center/bilibili-dd-monitor 为 MIT）
+    enabled: true,
+    // 额外要监测的 uid；B 站动态来源与监视对象里的 uid 会自动并入
+    uids: [],
+    // 每次运行顺带查一次开播状态
+    checkWithRun: true,
+    // 有人从「未开播」变成「直播中」时推送（轮播不算，轮播会误报）
+    notifyOnLive: true,
+    // vtbs.moe 花名册缓存时长（小时）
+    cacheRosterHours: 24,
+  },
   notify: {
     desktop: true,
     // [{ id, kind, name, enabled, on: always|alerts|failures, key, server, token, chatId, webhookUrl }]

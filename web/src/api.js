@@ -127,6 +127,10 @@ export const api = {
   getFeatures: () => j('/api/features'),
   extractFeatures: () => post('/api/features/extract', {}),
 
+  // 开播监测（功能来源：dd-center/bilibili-dd-monitor，MIT）
+  getLive: (fresh) => j('/api/live' + (fresh ? '?fresh=1' : '')),
+  searchRoster: (q) => j('/api/live/roster?q=' + encodeURIComponent(q)),
+
   // 人物档案（由特征抽取聚合）
   getEntities: () => j('/api/entities'),
   getEntity: (name) => j('/api/entities/' + encodeURIComponent(name)),

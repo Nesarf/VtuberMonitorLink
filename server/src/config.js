@@ -135,6 +135,16 @@ export const DEFAULT_CONFIG = {
     // 抓取时是否发送 Referer / Origin 这类可能带上站点身份的请求头
     sendReferer: true,
   },
+  // 纪念日 / 生日 / 3D披露 / 周年 倒计时
+  calendar: {
+    // 留空 = 用系统时区。要盯日本箱就填 Asia/Tokyo，这样「今天」按对方的时间算。
+    timeZone: '',
+    // 默认提前几天提醒（条目自己还能覆盖）
+    remindDaysBefore: 3,
+    // 日报里列出未来多少天内的纪念日
+    reportDays: 30,
+    entries: [],
+  },
   paths: {
     reportsDir: 'reports',
     feedsDir: 'feeds',

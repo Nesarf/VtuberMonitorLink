@@ -222,7 +222,7 @@ async function main() {
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('nine navigation tabs render', tabs.length === 9, tabs.join(' | '));
+    check('ten navigation tabs render', tabs.length === 10, tabs.join(' | '));
     check(
       'the Intel, Search, Live and Watch tabs are present',
       ['情报', '检索', '直播', '监视', 'LLM'].every((x) => tabs.includes(x)),
@@ -566,6 +566,106 @@ async function main() {
 
     main = await mainText();
     check('the optional identify helper is clearly marked as needing an LLM', main.indexOf('需要 LLM') !== -1);
+
+    // ------------------------------------------------------------- calendar
+    process.stdout.write('\n9b. Calendar: countdown, grid, local lead detection\n');
+    await tab('日历').click();
+    await page.waitForTimeout(900);
+    main = await mainText();
+    check('日历页渲出了「今天」与时区', main.indexOf('今天') !== -1, main.slice(0, 60).replace(/\n/g, ' '));
+    const emptyState = main.indexOf('还没有纪念日') !== -1;
+    check('空状态有明确的下一步提示', emptyState);
+
+    // 通过接口放一条闰日生日：平年必须显式顺延，界面要标出来
+    const leapEntry = await page.evaluate(() =>
+      fetch('/api/calendar/entry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 'ui-leap', name: '闰日测试', kind: 'birthday', date: '02-29' }),
+      }).then((r) => r.json()),
+    );
+    check('可以新增纪念日', leapEntry.ok === true, JSON.stringify(leapEntry).slice(0, 80));
+    const cal = await (await fetch(base + '/api/calendar?days=400')).json();
+    const leapRow = (cal.all ?? []).find((x) => x.id === 'ui-leap');
+    check('闰日生日有下一次发生日', !!leapRow, leapRow ? leapRow.day : 'missing');
+    check(
+      '2/29 在平年会顺延到 3/1 并被标记（不是悄悄算错）',
+      leapRow ? leapRow.day.endsWith('-03-01') === leapRow.leapAdjusted : false,
+      leapRow ? `${leapRow.day} leapAdjusted=${leapRow.leapAdjusted}` : '',
+    );
+
+    // 时区：同一个瞬间，东京的「今天」可能已经是明天
+    const tzCmp = await page.evaluate(async () => {
+      const utc = await fetch('/api/calendar?days=400').then((r) => r.json());
+      return { today: utc.today, timeZone: utc.timeZone, days: utc.due.length };
+    });
+    check('接口报告了计算所用的日历日与时区', /^\d{4}-\d{2}-\d{2}$/.test(tzCmp.today) && !!tzCmp.timeZone, `${tzCmp.today} @ ${tzCmp.timeZone}`);
+
+    // 刷新后再断言：页面只在 mount / 换月时取数，重新点同一个标签不会重取
+    await page.reload({ waitUntil: 'networkidle' });
+    await tab('日历').click();
+    await page.waitForTimeout(900);
+    const reloaded = await mainText();
+    check('新增的纪念日出现在倒计时里', reloaded.indexOf('闰日测试') !== -1, reloaded.slice(0, 40).replace(/\n/g, ' '));
+    const cells = await page.locator('.cal-cell').count();
+    check('月历网格渲染出来了', cells >= 28 && cells % 7 === 0, cells + ' cells');
+    const dow = await page.locator('.cal-dow').allInnerTexts();
+    check('月历表头是 7 列', dow.length === 7, dow.join(' '));
+
+    // 线索抽取必须**本地**完成且不误报
+    const detect = await (await fetch(base + '/api/calendar/detect')).json();
+    check('线索扫描接口可用（本地正则，无需 LLM）', detect.ok === true, `scanned ${detect.scanned}`);
+
+    // 非法日期要被拒 —— 用 Node 侧发请求：从页面上发会让「无失败请求」断言误报
+    const badRes = await fetch(base + '/api/calendar/entry', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '坏日期', date: '13-45' }),
+    });
+    check('非法日期被拒绝（13-45 不是合法月日）', badRes.status === 400, 'status ' + badRes.status);
+
+    // 清理：不要让巡检留下数据
+    await fetch(base + '/api/calendar/entry/ui-leap', { method: 'DELETE' });
+
+    // 日报里必须真的出现倒计时区块 —— 写了但没验证过的集成最容易悄悄不工作。
+    // 日期要**动态**算：日报只列未来 30 天内的，写死一个日期换个日子跑就会假失败。
+    const calForReport = await (await fetch(base + '/api/calendar')).json();
+    const inFive = new Date(Date.parse(calForReport.today + 'T00:00:00Z') + 5 * 86400000)
+      .toISOString()
+      .slice(5, 10); // MM-DD
+    check('算得出一个落在日报窗口内的日期', /^\d{2}-\d{2}$/.test(inFive), `${calForReport.today} + 5d = ${inFive}`);
+    const repEntry = await fetch(base + '/api/calendar/entry', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'ui-report-cal', name: '日报倒计时测试', kind: 'debut', date: inFive }),
+    });
+    check('为日报验证准备好一条纪念日', repEntry.ok === true);
+    await fetch(base + '/api/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'daily' }),
+    });
+    const repDeadline = Date.now() + 4 * 60 * 1000;
+    let repDone = false;
+    while (Date.now() < repDeadline) {
+      const s = await (await fetch(base + '/api/state')).json();
+      if (s.running === false && s.lastResult) {
+        repDone = true;
+        break;
+      }
+      await sleep(2000);
+    }
+    check('第二次运行完成', repDone);
+    const reports = await (await fetch(base + '/api/reports')).json();
+    // 按修改时间取最新 —— 别按文件名排序：巡检自己写进去的 legacy-sample.md
+    // 在字典序上排在日期前面，会被误选（和之前 hasText 挑行的坑是同一类）
+    const newest = [...reports]
+      .filter((r) => !r.name.startsWith('legacy-'))
+      .sort((a, b) => String(b.mtime).localeCompare(String(a.mtime)))[0];
+    const body = newest ? await (await fetch(base + '/api/reports/' + encodeURIComponent(newest.name))).text() : '';
+    check('日报里带上了纪念日倒计时区块', body.indexOf('纪念日倒计时') !== -1, newest ? newest.name : 'no report');
+    check('日报里列出了那条纪念日', body.indexOf('日报倒计时测试') !== -1);
+    await fetch(base + '/api/calendar/entry/ui-report-cal', { method: 'DELETE' });
 
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');

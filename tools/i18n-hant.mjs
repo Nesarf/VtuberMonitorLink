@@ -51,6 +51,24 @@ function readZhDict() {
  */
 const REVIEWED_SAME_FORM = new Set('里');
 
+/**
+ * 短语级修正：OpenCC 的**词**级词典解决不了、但上下文明确的个别说法。
+ *
+ * 例：「天后」在繁体里是个真实存在的词（天后娘娘 / 妈祖），所以 OpenCC 不敢把
+ * 「3 天后」转成「3 天後」—— 它没错，是我的基准文案本身有歧义。
+ * 我们的用法永远是「N 天后」，所以这里明确改掉。
+ *
+ * 注意：这是**加**修正而不是掩盖漏字 —— 修正之后生成结果里不再有可疑字符，
+ * 单字复查依然会盯住任何新出现的字。
+ */
+const PHRASE_FIXES = [[/天后/g, '天後']];
+
+function applyPhraseFixes(s) {
+  let out = s;
+  for (const [re, to] of PHRASE_FIXES) out = out.replace(re, to);
+  return out;
+}
+
 /** 结构性检查：转换不该动到 ASCII、数字、占位符、标点 —— 动了就是转换器出问题 */
 const STRICT_STRUCTURAL = /[\x00-\x7F]/g;
 
@@ -72,7 +90,7 @@ function main() {
         out[k] = val;
         continue;
       }
-      const t = conv(val);
+      const t = applyPhraseFixes(conv(val));
       if (t !== val) changed++;
 
       // ① 结构不许被破坏：ASCII/数字/占位符必须原样保留

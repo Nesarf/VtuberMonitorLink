@@ -27,6 +27,7 @@ import { PRESETS, activeProvider, newProvider, listModels } from './llm.js';
 import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
+import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
 import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
 import { chatRequest } from './llm.js';
@@ -47,6 +48,23 @@ import * as scheduler from './scheduler.js';
 export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   const app = express();
   app.use(express.json({ limit: '8mb' }));
+
+  /**
+   * 局部更新配置并落盘。
+   *
+   * 这里踩了两次坑，值得写下来：
+   *  ① 最初我写的是 `saveConfig(...)` —— **这个函数根本不存在**；
+   *  ② 改成 `setConfig` 后仍然 `ReferenceError: setConfig is not defined`，
+   *     因为 getConfig/setConfig/onConfigChanged 是 **createApp 的参数**，
+   *     只有工厂内部的代码看得见，模块顶层的辅助函数看不见。
+   * `node --check` 对这两类都无感（语法没错），只有真的打到接口才会暴露 ——
+   * 所以巡检里必须有一条「新增纪念日」这种真正写配置的断言。
+   */
+  const patchConfig = (cfg, patch) => {
+    const next = setConfig({ ...cfg, ...patch });
+    onConfigChanged?.(next);
+    return next;
+  };
 
   // ── 请求日志 / request log ───────────────────────────────────────
   // 排查「UI 到底触发了什么」时，没有这个只能靠猜。/api/state 是 3 秒一次的轮询，
@@ -1029,6 +1047,91 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     egressClear(cfg);
     res.json({ ok: true });
+  });
+
+  // ── 纪念日 / 生日 / 3D披露 倒计时 ────────────────────────────────
+  // 时间算术（闰日顺延、时区、夏令时）全在 calendar.js 里，并有独立自检：
+  // tools/calendar-test.mjs（26 项，含 2/29 与跨时区跨日）。
+  app.get('/api/calendar', (req, res) => {
+    const cfg = getConfig();
+    const days = Math.max(1, Math.min(730, Number(req.query.days ?? cfg?.calendar?.reportDays ?? 60)));
+    const view = upcoming(cfg, { days });
+    const month = Number(req.query.month ?? 0);
+    const year = Number(req.query.year ?? 0);
+    const grid = month
+      ? monthGrid(year || Number(view.today.slice(0, 4)), month, Number(req.query.weekStart ?? 1), {
+          marks: marksFor(cfg, year || Number(view.today.slice(0, 4)), month),
+        })
+      : null;
+    res.json({ ...view, entries: cfg?.calendar?.entries ?? [], grid });
+  });
+
+  app.post('/api/calendar/entry', (req, res) => {
+    const cfg = getConfig();
+    const { entry, error } = sanitizeEntry(req.body ?? {});
+    if (error) return res.status(400).json({ error });
+    const list = [...(cfg.calendar?.entries ?? [])];
+    if (list.some((e) => e.id === entry.id)) return res.status(409).json({ error: `entry exists: ${entry.id}` });
+    list.push(entry);
+    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
+    res.json({ ok: true, entry, entries: list });
+  });
+
+  app.patch('/api/calendar/entry/:id', (req, res) => {
+    const cfg = getConfig();
+    const list = [...(cfg.calendar?.entries ?? [])];
+    const i = list.findIndex((e) => e.id === req.params.id);
+    if (i < 0) return res.status(404).json({ error: 'entry not found' });
+    const { entry, error } = sanitizeEntry({ ...list[i], ...req.body, id: list[i].id });
+    if (error) return res.status(400).json({ error });
+    list[i] = entry;
+    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
+    res.json({ ok: true, entry, entries: list });
+  });
+
+  app.delete('/api/calendar/entry/:id', (req, res) => {
+    const cfg = getConfig();
+    const list = (cfg.calendar?.entries ?? []).filter((e) => e.id !== req.params.id);
+    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
+    res.json({ ok: true, entries: list });
+  });
+
+  // 一次把多个线索加进去（界面里勾选后提交）
+  app.post('/api/calendar/import', (req, res) => {
+    const cfg = getConfig();
+    const incoming = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    const list = [...(cfg.calendar?.entries ?? [])];
+    const added = [];
+    const skipped = [];
+    for (const raw of incoming) {
+      const { entry, error } = sanitizeEntry(raw);
+      if (error) {
+        skipped.push({ input: raw, error });
+        continue;
+      }
+      // 同一天同一类型视为重复（线索常有多个来源指向同一件事）
+      if (list.some((e) => e.date === entry.date && e.kind === entry.kind && e.name === entry.name)) {
+        skipped.push({ input: raw, error: 'duplicate' });
+        continue;
+      }
+      list.push(entry);
+      added.push(entry);
+    }
+    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
+    res.json({ ok: true, added: added.length, skipped, entries: list });
+  });
+
+  // 从最近一次情报里找线索（**本地正则，不联网、不用 LLM**）
+  app.get('/api/calendar/detect', (req, res) => {
+    const cfg = getConfig();
+    const data = latestIntel(cfg, Number(req.query.limit ?? 300));
+    const found = detectFromItems(data.items ?? []);
+    const existing = new Set((cfg.calendar?.entries ?? []).map((e) => `${e.kind}|${e.date}`));
+    res.json({
+      ok: true,
+      scanned: (data.items ?? []).length,
+      suggestions: found.map((f) => ({ ...f, alreadyAdded: existing.has(`${f.kind}|${f.date}`) })),
+    });
   });
 
   // 探测成功后立刻重算判定，界面不用等下一次运行

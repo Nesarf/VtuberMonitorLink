@@ -13,6 +13,23 @@ import { applyProxy } from './net.js';
 import { notify } from './notify.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
+import { upcoming } from './calendar.js';
+
+/** 日报里的纪念日区块（没有就把整块省掉，不留空标题） */
+function calendarSection(cal) {
+  const rows = (cal.due ?? []).filter((r) => !r.past);
+  if (!rows.length) return '';
+  const when = (d) => (d === 0 ? '**今天**' : d === 1 ? '明天' : `${d} 天后`);
+  const kindIcon = { birthday: '🎂', debut: '🎉', '3d': '🧊', anniversary: '🎊', event: '📌', other: '·' };
+  const lines = rows.slice(0, 20).map((r) => {
+    const icon = kindIcon[r.kind] ?? '·';
+    const turns = r.turns ? `（第 ${r.turns} 年）` : '';
+    const leap = r.leapAdjusted ? ' ⚠ 闰日顺延到 3/1' : '';
+    const note = r.note ? ` — ${r.note}` : '';
+    return `- ${icon} ${when(r.days)}（${r.day}）**${r.name}**${turns}${leap}${note}`;
+  });
+  return `## ⏳ 纪念日倒计时（未来 ${cal.days} 天）\n\n${lines.join('\n')}\n\n> 按 ${cal.timeZone} 的「今天」（${cal.today}）计算。`;
+}
 
 /** 供 UI 轮询的实时状态 / in-memory state the UI can poll */
 export const runState = {
@@ -220,7 +237,21 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
 
     // 6) 落报告
     runState.step = 'saving-report';
-    const file = saveReport(cfg, { markdown: a.markdown, mode, date });
+    // 纪念日倒计时直接写进日报：这东西的价值就在于「你翻报告时正好看见」，
+    // 而不是要专门去点一个页面。放在报告最前面 —— 倒计时越近越该先看到。
+    let markdown = a.markdown;
+    let calendarBlock = '';
+    try {
+      const cal = upcoming(cfg, { days: Number(cfg?.calendar?.reportDays ?? 30) });
+      calendarBlock = calendarSection(cal);
+      if (calendarBlock) markdown = calendarBlock + '\n\n' + markdown;
+      if (cal.reminders.length) {
+        runState.calendarDue = cal.reminders;
+      }
+    } catch (e) {
+      log.warn(`纪念日计算失败（不影响报告）/ calendar failed: ${e.message}`);
+    }
+    const file = saveReport(cfg, { markdown, mode, date });
     log.info(`报告已保存 / report saved: ${file}`);
 
     const okCount = results.filter((r) => r.ok).length;
@@ -281,9 +312,21 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       }
     }
     const kwHits = items.filter((i) => i.keywords?.length);
-    const headline = alerts || kwHits.length ? `⚠ 命中 ${alerts + kwHits.length} 条告警` : '运行完成';
+    const dueCal = runState.calendarDue ?? [];
+    const headline =
+      dueCal.length && dueCal.some((c) => c.days <= 1)
+        ? `🎂 ${dueCal[0].days === 0 ? '今天' : dueCal[0].days === 1 ? '明天' : `${dueCal[0].days} 天后`}：${dueCal[0].name}`
+        : alerts || kwHits.length
+          ? `⚠ 命中 ${alerts + kwHits.length} 条告警`
+          : '运行完成';
     const body = [
       `来源 ${okCount}/${results.length}，情报 ${items.length} 条，监视 ${watchResults.length} 个`,
+      dueCal.length
+        ? `\n【纪念日提醒】\n${dueCal
+            .slice(0, 8)
+            .map((c) => `· ${c.days === 0 ? '今天' : c.days === 1 ? '明天' : `${c.days} 天后`} ${c.name}${c.turns ? `（第 ${c.turns} 年）` : ''}`)
+            .join('\n')}`
+        : '',
       alerts ? `\n【监视告警】\n${alertLines.slice(0, 8).join('\n')}` : '',
       kwHits.length ? `\n【关键词命中】\n${kwHits.slice(0, 8).map((i) => `· ${String(i.text || i.title).slice(0, 90)}`).join('\n')}` : '',
       adviceFiles.length ? `\n【诊断文件】\n${adviceFiles.map((a) => `· ${a.id}：${a.url}`).join('\n')}` : '',
@@ -291,7 +334,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     ]
       .filter(Boolean)
       .join('\n');
-    await pushNotify(headline, body, alerts || kwHits.length ? 'alert' : 'info');
+    await pushNotify(headline, body, dueCal.length || alerts || kwHits.length ? 'alert' : 'info');
 
     return { ok: true, file, results, watchResults, items, summary: runState.lastResult };
   } catch (err) {

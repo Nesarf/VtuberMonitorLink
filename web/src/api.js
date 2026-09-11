@@ -26,6 +26,20 @@ export const api = {
   decideEgress: (ids) => post('/api/egress/decide', { ids }),
   clearEgress: () => post('/api/egress/clear', {}),
 
+  // 纪念日 / 生日 / 3D披露 倒计时
+  getCalendar: ({ days, month, year, weekStart } = {}) =>
+    j(`/api/calendar?days=${days ?? 400}&month=${month ?? ''}&year=${year ?? ''}&weekStart=${weekStart ?? 1}`),
+  addCalendarEntry: (entry) => post('/api/calendar/entry', entry),
+  patchCalendarEntry: (id, patch) =>
+    j(`/api/calendar/entry/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  deleteCalendarEntry: (id) => j(`/api/calendar/entry/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  detectCalendar: (limit) => j(`/api/calendar/detect?limit=${limit ?? 300}`),
+  importCalendar: (entries) => post('/api/calendar/import', { entries }),
+
   // 来源
   getSources: () => j('/api/sources'),
   patchSource: (id, patch) =>

@@ -13,8 +13,9 @@ import Sources from './pages/Sources.jsx';
 import Watch from './pages/Watch.jsx';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
+import Calendar from './pages/Calendar.jsx';
 
-const TABS = ['intel', 'search', 'live', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'live', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
 export default function App() {
   const { t, localeCode, setLang } = useI18n();
@@ -75,10 +76,13 @@ export default function App() {
     }
   };
 
+  // 标签页的显示名。**加新标签必须同时改这里** —— 只往 TABS 里加 id 的话
+  // labels[id] 是 undefined，标签会渲染成空白（巡检按名字点标签时才发现）。
   const labels = {
     intel: t('tab_intel'),
     search: t('tab_search'),
     live: t('tab_live'),
+    calendar: t('tab_calendar'),
     llm: t('tab_llm'),
     run: t('tab_run'),
     sources: t('tab_sources'),
@@ -86,6 +90,8 @@ export default function App() {
     settings: t('tab_settings'),
     reports: t('tab_reports'),
   };
+  // 兜底：万一又漏了，至少显示 id 而不是空白
+  const labelOf = (id) => labels[id] || id;
 
   const applyLayoutNow = (next) => {
     setLayout(next);
@@ -123,7 +129,7 @@ export default function App() {
       <nav className="tabs">
         {TABS.map((id) => (
           <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
-            {labels[id]}
+            {labelOf(id)}
           </button>
         ))}
       </nav>
@@ -137,6 +143,7 @@ export default function App() {
         {tab === 'watch' && <Watch />}
         {tab === 'settings' && <Settings onLayout={applyLayoutNow} />}
         {tab === 'reports' && <Reports layout={layout} />}
+        {tab === 'calendar' && <Calendar />}
       </main>
     </>
   );

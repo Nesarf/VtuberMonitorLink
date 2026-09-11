@@ -31,6 +31,7 @@ import { netFetch } from './net.js';
 import { applyFeatures, extractFeatures, featureStats, loadFeatureCache } from './features.js';
 import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js';
 import { probeTor } from './socks.js';
+import { entityDetail, entityStats } from './entities.js';
 import { spawn } from 'node:child_process';
 import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
 import * as proxyctl from './proxyctl.js';
@@ -355,14 +356,23 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // 星标 / 已读
+  // 星标 / 已读 / 自定义标签
   app.patch('/api/intel/:id', (req, res) => {
     const cfg = getConfig();
-    const { starred, read, note } = req.body ?? {};
+    const { starred, read, note, tags } = req.body ?? {};
     const flag = setFlag(cfg, req.params.id, {
       ...(starred === undefined ? {} : { starred: !!starred }),
       ...(read === undefined ? {} : { read: !!read }),
       ...(note === undefined ? {} : { note: String(note).slice(0, 500) }),
+      // 自定义标签：检索会用它们（search.js 的 buildIndex 读 flags[id].tags）
+      ...(tags === undefined
+        ? {}
+        : {
+            tags: (Array.isArray(tags) ? tags : [])
+              .map((t) => String(t).trim().slice(0, 40))
+              .filter(Boolean)
+              .slice(0, 20),
+          }),
     });
     res.json({ ok: true, id: req.params.id, flag });
   });
@@ -614,12 +624,24 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const incoming = req.body?.config ?? req.body;
     if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'expected a config object' });
     const cur = getConfig();
-    // 空字符串不覆盖已有密钥：脱敏导出再导入时不该把 Key 抹掉
+
+    // 按 id 合并数组里的对象（providers / targets / customSources / tasks …）。
+    // 不能简单地「数组整体替换」—— 那样脱敏导出里的 apiKey:'' 会把本机已有的 Key 抹掉，
+    // 而这正是导入自己刚导出的配置时最常见的用法。
+    const mergeArray = (a, b) => {
+      const aList = Array.isArray(a) ? a : [];
+      const hasIds = b.every((x) => x && typeof x === 'object' && typeof x.id === 'string');
+      if (!hasIds || !aList.every((x) => x && typeof x === 'object')) return b;
+      const byId = new Map(aList.filter((x) => typeof x.id === 'string').map((x) => [x.id, x]));
+      return b.map((item) => (byId.has(item.id) ? merge(byId.get(item.id), item) : item));
+    };
+
     const merge = (a, b) => {
-      if (Array.isArray(b)) return b;
+      if (Array.isArray(b)) return mergeArray(a, b);
       if (b && typeof b === 'object') {
         const out = { ...(a ?? {}) };
         for (const [k, v] of Object.entries(b)) {
+          // 空字符串不覆盖已有的非空值：脱敏导出导入时不该抹掉密钥
           if (v === '' && typeof out[k] === 'string' && out[k]) continue;
           out[k] = merge(out[k], v);
         }
@@ -770,6 +792,39 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
+  });
+
+  // ── 人物档案 / entities ──────────────────────────────────────────
+  // 把特征抽取出来的人名聚合成对象：他/她出现过哪些条目、什么游戏、哪些事件。
+  app.get('/api/entities', (req, res) => {
+    const cfg = getConfig();
+    res.json(entityStats(cfg, loadFlags(cfg)));
+  });
+
+  app.get('/api/entities/:name', (req, res) => {
+    const cfg = getConfig();
+    const detail = entityDetail(cfg, req.params.name, { flags: loadFlags(cfg) });
+    if (!detail) return res.status(404).json({ error: `no entity named ${req.params.name}` });
+    res.json(detail);
+  });
+
+  // ── 来源批量开关 / bulk source toggles ───────────────────────────
+  // 30 条来源一个个点太累，而且很容易在测试里忘了关（这个功能就是被这个坑逼出来的）
+  app.post('/api/sources/bulk', (req, res) => {
+    const cfg = getConfig();
+    const { action, category, ids } = req.body ?? {};
+    const all = effectiveSources(cfg);
+    const picked = all.filter((s) => (ids?.length ? ids.includes(s.id) : category ? s.category === category : true));
+    if (!picked.length) return res.status(400).json({ error: 'no matching sources' });
+    cfg.sources = cfg.sources ?? {};
+    for (const s of picked) {
+      if (action === 'enable') cfg.sources[s.id] = { ...(cfg.sources[s.id] ?? {}), enabled: true };
+      else if (action === 'disable') cfg.sources[s.id] = { ...(cfg.sources[s.id] ?? {}), enabled: false };
+      else if (action === 'reset') delete cfg.sources[s.id];
+      else return res.status(400).json({ error: 'action must be enable | disable | reset' });
+    }
+    setConfig(cfg);
+    res.json({ ok: true, changed: picked.length, action, sources: effectiveSources(cfg) });
   });
 
   // ── 报告 / reports ───────────────────────────────────────────────

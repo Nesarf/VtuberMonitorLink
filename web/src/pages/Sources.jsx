@@ -83,6 +83,20 @@ export default function Sources() {
     }
   };
 
+  /** 批量开关：不带 ids 就是全量；带 ids 只动那几条 */
+  const bulk = async (action, ids) => {
+    setBusy('bulk');
+    try {
+      const r = await api.bulkSources({ action, ids });
+      flash(`${action}: ${r.changed} ${t('items')}`, 4000);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
   const probeOne = async (id) => {
     setBusy(`probe:${id}`);
     try {
@@ -246,6 +260,22 @@ export default function Sources() {
             <input type="checkbox" checked={customOnly} onChange={(e) => setCustomOnly(e.target.checked)} /> {t('onlyCustom')}
           </label>
         </p>
+        {/* 批量开关：30 条来源一个个点太累（这个需求是在遍历里被「忘了关掉默认全开」逼出来的） */}
+        <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+          <span className="muted small">{t('bulkToggle')}:</span>
+          <button className="ghost tiny" onClick={() => bulk('enable')} disabled={!!busy}>
+            {t('enableAll')}
+          </button>
+          <button className="ghost tiny" onClick={() => bulk('disable')} disabled={!!busy}>
+            {t('disableAll')}
+          </button>
+          <button className="ghost tiny" onClick={() => bulk('disable', ['merch-fanbox', 'merch-cien', 'merch-booth', 'merch-dlsite'])} disabled={!!busy}>
+            {t('onlyDaily')}
+          </button>
+          <button className="ghost tiny" onClick={() => bulk('reset')} disabled={!!busy}>
+            {t('resetDefaults')}
+          </button>
+        </div>
         {err && <p style={{ color: 'var(--err)' }}>❌ {err}</p>}
 
         {Object.entries(byCat).map(([cat, list]) => (

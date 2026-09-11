@@ -187,9 +187,12 @@ export function maskTarget(t) {
   for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
     if (!masked[k]) continue;
     if (k === 'webhookUrl') {
+      // 整条路径都要抹掉：Discord / 飞书的密钥就在路径里，短路径也不能漏
+      // （之前的规则只打码 ≥6 字符的末段，/hook 这种就直接漏出去了）
       try {
         const u = new URL(masked[k]);
-        masked[k] = `${u.origin}${u.pathname.replace(/\/[^/]{6,}$/, '/***')}`;
+        const path = u.pathname && u.pathname !== '/' ? '/***' : '/';
+        masked[k] = `${u.origin}${path}${u.search ? '?***' : ''}`;
       } catch {
         masked[k] = '***';
       }

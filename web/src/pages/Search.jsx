@@ -40,6 +40,7 @@ export default function Search({ layout }) {
   const [assistText, setAssistText] = useState('');
   const [assistOut, setAssistOut] = useState(null);
   const [assistBusy, setAssistBusy] = useState(false);
+  const [entities, setEntities] = useState(null);
 
   const run = async (override) => {
     setBusy(true);
@@ -67,6 +68,7 @@ export default function Search({ layout }) {
 
   useEffect(() => {
     api.searchTags().then(setCloud).catch(() => {});
+    api.getEntities().then(setEntities).catch(() => {});
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -251,6 +253,32 @@ export default function Search({ layout }) {
         </div>
         {err && <p style={{ color: 'var(--err)' }}>❌ {err}</p>}
       </section>
+
+      {/* 人物档案：由特征抽取聚合出来的对象，点一下就是一次检索 */}
+      {entities?.top?.length > 0 && (
+        <section className="panel">
+          <h2>
+            {t('entitiesTitle')}（{entities.total}）
+          </h2>
+          <div className="hint">{t('entitiesHint')}</div>
+          <div className="row" style={{ gap: 6 }}>
+            {entities.top.map((e) => (
+              <button
+                key={e.key}
+                className="chip"
+                title={[e.agencies?.map((a) => a.value).join('/'), e.games?.map((g) => g.value).join('/')].filter(Boolean).join(' · ')}
+                onClick={() => {
+                  setQ(e.name);
+                  run({ q: e.name });
+                }}
+              >
+                {e.name} <b>{e.count}</b>
+                {e.indie ? ' · 个人势' : ''}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 可选助手：需要 LLM，用得少 */}
       <section className="panel">

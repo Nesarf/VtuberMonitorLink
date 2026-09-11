@@ -127,6 +127,13 @@ export const api = {
   getFeatures: () => j('/api/features'),
   extractFeatures: () => post('/api/features/extract', {}),
 
+  // 人物档案（由特征抽取聚合）
+  getEntities: () => j('/api/entities'),
+  getEntity: (name) => j('/api/entities/' + encodeURIComponent(name)),
+
+  // 来源批量开关
+  bulkSources: (payload) => post('/api/sources/bulk', payload),
+
   // Tor 无痕出口
   probeTor: (socks) => post('/api/proxy/tor', { socks }),
   startTor: (exe) => post('/api/proxy/tor/start', { exe }),

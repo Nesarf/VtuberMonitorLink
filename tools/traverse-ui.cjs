@@ -107,7 +107,7 @@ async function main() {
   const cfgPath = path.join(appDir, 'config.json');
   const hadConfig = fs.existsSync(cfgPath);
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
-  const createdDirs = ['reports', 'feeds', 'logs', 'watch'].filter((d) => !fs.existsSync(path.join(appDir, d)));
+  const createdDirs = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'].filter((d) => !fs.existsSync(path.join(appDir, d)));
 
   // A mock OpenAI-compatible endpoint: lets the walk exercise a real run with
   // no API key anywhere near the release.

@@ -32,8 +32,32 @@ function readBody(req) {
   });
 }
 
+/** 如果这是「特征抽取」请求，按它要的条数回一个 JSON 数组 */
+function buildExtraction(userPrompt) {
+  const text = String(userPrompt ?? '');
+  const count = Number((/共\s*(\d+)\s*条/.exec(text) ?? [])[1] ?? 0);
+  const start = Number((/第\s*(\d+)\s*条/.exec(text) ?? [])[1] ?? 0);
+  if (!count) return null;
+  const out = [];
+  for (let n = 0; n < count; n++) {
+    out.push({
+      i: start + n,
+      names: ['Mock Chan'],
+      agency: 'Mock Agency',
+      indie: false,
+      games: ['Mario Kart'],
+      events: ['直播'],
+      tags: ['mock', '测试'],
+      lang: 'zh',
+    });
+  }
+  return JSON.stringify(out);
+}
+
 /** Build a report that proves what actually arrived in the prompt. */
 function buildReport(userPrompt) {
+  // 注意：**不能**在这里也去嗅探「共 N 条」—— 报告的 prompt 里同样有这句话，
+  // 那样会把报告本身换成 JSON 数组（这个坑踩过一次，报告页因此一个标题都没有）。
   const text = String(userPrompt ?? '');
   const sourceSections = (text.match(/^## /gm) || []).length;
   const watchLines = (text.match(/^- 【监视】/gm) || []).length;
@@ -103,10 +127,12 @@ const server = http.createServer(async (req, res) => {
       return send(400, { error: { message: 'bad json' } });
     }
     const user = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    const system = (body.messages ?? []).filter((m) => m.role === 'system').map((m) => m.content).join('\n');
     if (/^ping$/.test(String(user).trim()) || (body.max_tokens ?? 0) <= 4) {
       return send(200, { choices: [{ message: { role: 'assistant', content: 'pong' } }] });
     }
-    const content = buildReport(user);
+    // 特征抽取走 JSON 数组，其余走报告
+    const content = /结构化抽取器/.test(system) ? buildExtraction(user) : buildReport(user);
     return send(200, {
       id: 'mock-1',
       object: 'chat.completion',

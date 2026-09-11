@@ -54,6 +54,9 @@ export const DEFAULT_CONFIG = {
     autoFailover: true,
     // 运行**最后**对出异常的来源做自检并生成诊断文件（连通正常的不打扰）
     diagnoseFailed: true,
+    // 用 LLM 抽结构化特征（人名/所属/游戏/事件），让检索能按属性命中；有缓存、有上限
+    extractFeatures: true,
+    featureLimit: 40,
   },
   proxy: {
     // 重要：Node 的 fetch(undici) 默认**不读**系统代理；
@@ -61,6 +64,12 @@ export const DEFAULT_CONFIG = {
     // 例外：部分站点（如 B 站）走代理反而被风控，可按来源设 direct。
     enabled: false,
     url: '',
+    // 出口模式：http = 走下面的 HTTP 代理；tor = 走 Tor 的 SOCKS5（无痕化）
+    mode: 'http',
+    // Tor 的 SOCKS5 地址（Tor Browser 默认 9150，独立 tor 默认 9050）
+    torSocks: 'socks5://127.0.0.1:9150',
+    // 可选：一键启动 tor 用的可执行文件路径（留空则不提供该按钮）
+    torExe: '',
     // mihomo / Clash.Meta 的控制接口（用于列节点、切节点、测每个节点到某站的延迟）
     controlUrl: '',
     controlSecret: '',

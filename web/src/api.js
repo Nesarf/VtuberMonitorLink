@@ -119,4 +119,15 @@ export const api = {
   saveSearchTags: (tags) => put('/api/search/tags', { tags }),
   // 可选助手：只在「忘了名字」时用
   assist: (description) => post('/api/search/assist', { description }),
+
+  // 导出（Office 可读写）
+  intelExportUrl: (format, limit = 500) => `/api/intel/export?format=${format}&limit=${limit}`,
+
+  // 特征抽取（需要 LLM）
+  getFeatures: () => j('/api/features'),
+  extractFeatures: () => post('/api/features/extract', {}),
+
+  // Tor 无痕出口
+  probeTor: (socks) => post('/api/proxy/tor', { socks }),
+  startTor: (exe) => post('/api/proxy/tor/start', { exe }),
 };

@@ -117,7 +117,13 @@ async function main() {
   await sleep(900);
   fs.writeFileSync(cfgPath, JSON.stringify(seedConfig(args.mock), null, 2), 'utf8');
 
-  const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: 'ignore' });
+  // 把被测应用的输出收下来：出问题时能看到它的日志，而不是只看到一个断言不过
+  const appLog = path.join(appDir, 'logs', 'traverse-app.txt');
+  fs.mkdirSync(path.dirname(appLog), { recursive: true });
+  const appOut = fs.createWriteStream(appLog, { flags: 'w' });
+  const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.pipe(appOut);
+  child.stderr.pipe(appOut);
   const restore = () => {
     try {
       if (hadConfig) fs.writeFileSync(cfgPath, cfgBackup);
@@ -129,6 +135,9 @@ async function main() {
   };
 
   let browser = null;
+  const consoleErrors = [];
+  const pageErrors = [];
+  const badApi = [];
   try {
     let ready = false;
     for (let i = 0; i < 60; i++) {
@@ -159,9 +168,6 @@ async function main() {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
 
-    const consoleErrors = [];
-    const pageErrors = [];
-    const badApi = [];
     page.on('console', (m) => {
       if (m.type() === 'error') consoleErrors.push(m.text());
     });
@@ -416,8 +422,50 @@ async function main() {
     main = await mainText();
     check('the optional identify helper is clearly marked as needing an LLM', main.indexOf('需要 LLM') !== -1);
 
+    // ------------------------------------------- office export & features & tor
+    process.stdout.write('\n10. Office export, feature extraction, Tor\n');
+    const xlsx = await fetch(base + '/api/intel/export?format=xlsx');
+    const xlsxBuf = Buffer.from(await xlsx.arrayBuffer());
+    check('Excel export downloads', xlsx.ok && xlsxBuf.subarray(0, 2).toString('ascii') === 'PK', `${xlsxBuf.length} bytes, type ${xlsx.headers.get('content-type')}`);
+    const docx = await fetch(base + '/api/intel/export?format=docx');
+    const docxBuf = Buffer.from(await docx.arrayBuffer());
+    check('Word export downloads', docx.ok && docxBuf.subarray(0, 2).toString('ascii') === 'PK', `${docxBuf.length} bytes`);
+    const mdExp = await fetch(base + '/api/intel/export?format=md');
+    const mdText = await mdExp.text();
+    check('Markdown export downloads', mdExp.ok && mdText.length > 0, `${mdText.length} chars`);
+
+    const featBefore = await (await fetch(base + '/api/features')).json();
+    check('feature stats endpoint answers', typeof featBefore.extracted === 'number', `${featBefore.extracted} extracted`);
+    const featRun = await (await fetch(base + '/api/features/extract', { method: 'POST' })).json();
+    // 第二次调用应全部命中缓存（extracted=0/cached=N）—— 这正是想要的，别断言必须 >0
+    check(
+      'feature extraction answers and reuses its cache',
+      featRun.ok === true && featRun.extracted + featRun.cached > 0,
+      `extracted ${featRun.extracted}, cached ${featRun.cached}, err ${featRun.error ?? '-'}` 
+    );
+    check('extracted features become searchable tags', (featRun.stats?.names ?? []).some((n) => n.value === 'Mock Chan'), JSON.stringify((featRun.stats?.names ?? []).slice(0, 3)));
+
+    // Tor：本机不一定在跑，所以只验契约与「不可用时如实报错」
+    const tor = await (
+      await fetch(base + '/api/proxy/tor', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ socks: 'socks5://127.0.0.1:9150' }),
+      })
+    ).json();
+    check('POST /api/proxy/tor answers a contract', typeof tor.ok === 'boolean' && !!tor.socks, tor.ok ? `isTor=${tor.isTor} ip=${tor.ip}` : String(tor.error).slice(0, 60));
+    if (!tor.ok) check('Tor being down is reported clearly, not as a crash', /没在跑|不可用/.test(tor.error ?? ''), String(tor.error).slice(0, 70));
+    const torStart = await (
+      await fetch(base + '/api/proxy/tor/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ exe: '' }),
+      })
+    ).json();
+    check('starting Tor without a configured path is refused with guidance', !!torStart.error, String(torStart.error).slice(0, 60));
+
     // ---------------------------------------------------------------- hygiene
-    process.stdout.write('\n10. runtime hygiene\n');
+    process.stdout.write('\n11. runtime hygiene\n');
     check('no uncaught page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
     check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
     check('no failed /api call during the walk', badApi.length === 0, badApi.slice(0, 3).join(' | '));
@@ -426,6 +474,16 @@ async function main() {
   } catch (err) {
     check('UI traversal completed', false, err && err.message);
     process.stdout.write('\n  ' + (err && err.stack ? err.stack : err) + '\n');
+    // 失败时把页面侧的报错一并打出来，否则只能看到「某个断言没过」
+    if (pageErrors.length) process.stdout.write('\n  页面异常:\n' + pageErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    if (consoleErrors.length) process.stdout.write('\n  控制台错误:\n' + consoleErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    if (badApi.length) process.stdout.write('\n  失败请求:\n' + badApi.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    try {
+      appOut.end();
+      const tail = fs.readFileSync(appLog, 'utf8').trim().split(/\r?\n/).slice(-25);
+      process.stdout.write('\n  被测应用输出(末尾):\n' + tail.map((l) => '    ' + l).join('\n') + '\n');
+      process.stdout.write('\n  被测应用是否还在: ' + (child.exitCode === null ? '在' : '已退出 exit=' + child.exitCode) + '\n');
+    } catch {}
   } finally {
     if (browser) {
       try {

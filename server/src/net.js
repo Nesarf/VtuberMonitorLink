@@ -11,51 +11,74 @@
 //   - netFetch()        显式指定 direct / proxy 的抓取
 //   - playwrightProxy() 浏览器侧代理（支持按来源关闭）
 import { Agent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
+import { socksAgent, socksForPlaywright } from './socks.js';
 
 let appliedUrl = null;
+let appliedMode = null;
 let proxyAgent = null;
 const directAgent = new Agent();
 
-/** 当前生效的全局代理 URL（null = 直连）/ currently applied global proxy */
+/** 当前生效的全局出口描述（null = 直连）/ currently applied global egress */
 export function currentProxy() {
   return appliedUrl;
 }
 
+export function currentMode() {
+  return appliedMode;
+}
+
+/** 配置里 Tor 的 SOCKS 地址 / the Tor SOCKS endpoint from config */
+export function torSocksUrl(cfg) {
+  return String(cfg?.proxy?.torSocks ?? '').trim() || 'socks5://127.0.0.1:9150';
+}
+
+function httpProxyUrl(cfg) {
+  return cfg?.proxy?.enabled ? String(cfg.proxy.url ?? '').trim() : '';
+}
+
 /**
- * 按配置应用全局代理；重复调用同值则为空操作。
- * @returns {{applied: string|null, changed: boolean}}
+ * 按配置应用全局出口；重复调用同值则为空操作。
+ * @returns {{applied: string|null, mode:'direct'|'http'|'tor', changed: boolean}}
  */
 export async function applyProxy(cfg) {
-  const want = cfg?.proxy?.enabled ? String(cfg.proxy.url ?? '').trim() : '';
-  if (want === appliedUrl) return { applied: appliedUrl, changed: false };
+  const mode = cfg?.proxy?.mode === 'tor' ? 'tor' : cfg?.proxy?.enabled ? 'http' : 'direct';
+  const want = mode === 'http' ? httpProxyUrl(cfg) : mode === 'tor' ? torSocksUrl(cfg) : '';
+  if (want === appliedUrl && mode === appliedMode) {
+    return { applied: appliedUrl, mode, changed: false };
+  }
 
-  if (!want) {
-    setGlobalDispatcher(directAgent);
-    appliedUrl = null;
-  } else {
+  if (mode === 'tor') {
+    setGlobalDispatcher(socksAgent(want));
+  } else if (mode === 'http') {
     proxyAgent = new ProxyAgent(want);
     setGlobalDispatcher(proxyAgent);
-    appliedUrl = want;
+  } else {
+    setGlobalDispatcher(directAgent);
   }
-  return { applied: appliedUrl, changed: true };
+  appliedUrl = mode === 'direct' ? null : want;
+  appliedMode = mode;
+  return { applied: appliedUrl, mode, changed: true };
 }
 
 /** 给 Playwright 的 launch/newContext 用的代理选项 / proxy option for Playwright */
 export function playwrightProxy(cfg, mode) {
   if (mode === 'direct') return undefined;
-  const want = cfg?.proxy?.enabled ? String(cfg.proxy.url ?? '').trim() : '';
+  if (mode === 'tor' || (mode === undefined && cfg?.proxy?.mode === 'tor')) return socksForPlaywright(torSocksUrl(cfg));
+  const want = httpProxyUrl(cfg);
   return want ? { server: want } : undefined;
 }
 
 /**
  * 解析一个来源/监视目标实际该走哪条路。
- * source.proxy: 'direct' | 'proxy' | undefined(跟随全局)
- * @returns {'direct'|'proxy'}
+ * source.proxy: 'direct' | 'proxy' | 'tor' | undefined(跟随全局)
+ * @returns {'direct'|'proxy'|'tor'}
  */
 export function resolveProxyMode(cfg, subject) {
   const want = subject?.proxy;
   if (want === 'direct') return 'direct';
+  if (want === 'tor') return 'tor';
   if (want === 'proxy') return 'proxy';
+  if (cfg?.proxy?.mode === 'tor') return 'tor';
   return cfg?.proxy?.enabled ? 'proxy' : 'direct';
 }
 
@@ -69,30 +92,37 @@ function isLoopback(url) {
   }
 }
 
+/** 按出口模式取 dispatcher / dispatcher for an egress mode */
+export function dispatcherFor(cfg, mode) {
+  if (mode === 'tor') return socksAgent(torSocksUrl(cfg));
+  if (mode === 'proxy') {
+    const want = httpProxyUrl(cfg);
+    if (!want) throw new Error('该来源要求走代理，但代理未启用 / proxy required but not enabled');
+    if (!proxyAgent || appliedUrl !== want || appliedMode !== 'http') {
+      proxyAgent = new ProxyAgent(want);
+      appliedUrl = want;
+      appliedMode = 'http';
+    }
+    return proxyAgent;
+  }
+  return directAgent;
+}
+
 /**
  * 显式选择出口的 fetch。
  * @param {string} url
  * @param {object} opts  fetch 选项（dispatcher 会被覆盖）
- * @param {{cfg?:object, subject?:object, mode?:'direct'|'proxy'}} sel
+ * @param {{cfg?:object, subject?:object, mode?:'direct'|'proxy'|'tor'}} sel
  */
 export async function netFetch(url, opts = {}, sel = {}) {
   const mode = isLoopback(url) ? 'direct' : sel.mode ?? resolveProxyMode(sel.cfg, sel.subject);
-  let dispatcher;
-  if (mode === 'proxy') {
-    const want = sel.cfg?.proxy?.enabled ? String(sel.cfg.proxy.url ?? '').trim() : '';
-    if (!want) throw new Error('该来源要求走代理，但代理未启用 / proxy required but not enabled');
-    if (!proxyAgent || appliedUrl !== want) {
-      proxyAgent = new ProxyAgent(want);
-      appliedUrl = want;
-    }
-    dispatcher = proxyAgent;
-  } else {
-    dispatcher = directAgent;
-  }
-  return undiciFetch(url, { ...opts, dispatcher });
+  return undiciFetch(url, { ...opts, dispatcher: dispatcherFor(sel.cfg, mode) });
 }
 
 /** 供需要自建 Agent 的场景（例如逐端口探测）使用 */
 export function makeProxyAgent(url) {
   return new ProxyAgent(url);
 }
+
+export { directAgent };
+

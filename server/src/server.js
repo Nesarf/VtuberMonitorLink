@@ -28,6 +28,10 @@ import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
 import { chatRequest } from './llm.js';
 import { netFetch } from './net.js';
+import { applyFeatures, extractFeatures, featureStats, loadFeatureCache } from './features.js';
+import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js';
+import { probeTor } from './socks.js';
+import { spawn } from 'node:child_process';
 import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
 import * as proxyctl from './proxyctl.js';
 import { getThumbnail, listThumbs, readThumb } from './thumbs.js';
@@ -708,6 +712,66 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
+  // ── Office 导出 / Word & Excel ───────────────────────────────────
+  // 纯 Node 手写 OOXML，不依赖 Office / COM / Python —— 便携 exe 不能假设目标机装了什么。
+  app.get('/api/intel/export', (req, res) => {
+    const cfg = getConfig();
+    const format = ['xlsx', 'docx', 'md'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
+    const data = latestIntel(cfg, Number(req.query.limit ?? 500));
+    const items = applyFeatures(data.items ?? [], loadFeatureCache(cfg));
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (format === 'md') {
+      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.md"`);
+      return res.type('text/markdown; charset=utf-8').send(itemsToMarkdown(items, { title: '情报集' }));
+    }
+    if (format === 'docx') {
+      const buf = buildDocx({ title: `情报集 ${stamp}`, markdown: itemsToMarkdown(items, { title: `情报集 ${stamp}` }) });
+      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.docx"`);
+      return res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(buf);
+    }
+    const buf = buildXlsx([{ name: stamp, rows: itemsToSheet(items) }]);
+    res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.xlsx"`);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
+  });
+
+  // ── 特征抽取 / feature extraction (needs an LLM) ─────────────────
+  app.get('/api/features', (_req, res) => res.json(featureStats(getConfig())));
+
+  app.post('/api/features/extract', async (req, res) => {
+    const cfg = getConfig();
+    const items = applyFeatures(latestIntel(cfg, 400).items ?? [], loadFeatureCache(cfg));
+    const r = await extractFeatures(cfg, items, log);
+    res.json({
+      ok: !r.error,
+      error: r.error ?? null,
+      extracted: r.extracted,
+      cached: r.skipped,
+      stats: featureStats(cfg),
+    });
+  });
+
+  // ── Tor 无痕出口 / Tor egress ────────────────────────────────────
+  app.post('/api/proxy/tor', async (req, res) => {
+    const cfg = getConfig();
+    const socks = req.body?.socks ?? cfg.proxy?.torSocks;
+    res.json(await probeTor(cfg, socks));
+  });
+
+  // 若配置了 torExe，可以一键把它拉起来（不自带 tor，只是替你点一下）
+  app.post('/api/proxy/tor/start', (req, res) => {
+    const cfg = getConfig();
+    const exe = String(req.body?.exe ?? cfg.proxy?.torExe ?? '').trim();
+    if (!exe) return res.status(400).json({ error: '未配置 torExe，请填 Tor 的 tor.exe 路径（例如 Tor Browser 里的 Browser\\TorBrowser\\Tor\\tor.exe）' });
+    if (!fs.existsSync(exe)) return res.status(400).json({ error: `找不到文件：${exe}` });
+    try {
+      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+      res.json({ ok: true, started: exe, hint: 'Tor 启动需要时间（配了网桥会更久），稍后点「检测 Tor」确认' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   // ── 报告 / reports ───────────────────────────────────────────────
   app.get('/api/reports', (_req, res) => res.json(listReports(getConfig())));
 
@@ -717,11 +781,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   app.get('/api/reports/:name/export', (req, res) => {
-    const format = req.query.format === 'json' ? 'json' : 'html';
+    const format = ['json', 'docx'].includes(String(req.query.format)) ? String(req.query.format) : 'html';
     const out = exportReport(getConfig(), req.params.name, format);
     if (!out) return res.status(404).json({ error: 'not found' });
     res.setHeader('content-disposition', `attachment; filename="${out.file}"`);
-    res.type(out.mime).send(out.body);
+    // body 可能是字符串（html/json），也可能是 Buffer（docx）
+    res.type(out.mime).send(out.buffer ?? out.body);
   });
 
   // 两份报告的逐行对比

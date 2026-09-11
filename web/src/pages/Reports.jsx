@@ -148,6 +148,9 @@ export default function Reports() {
                     </a>{' '}
                     <a className="ghost tiny" href={api.exportUrl(r.name, 'json')}>
                       {t('exportJson')}
+                    </a>{' '}
+                    <a className="ghost tiny" href={api.exportUrl(r.name, 'docx')}>
+                      {t('exportDocxReport')}
                     </a>
                   </td>
                   <td style={{ width: 150 }}>

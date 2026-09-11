@@ -95,6 +95,19 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+// ── 兜底：别因为一处写错就整站死掉 ────────────────────────────────
+// 教训：Express 4 **不会**捕获 async 路由里的抛错，一次 ReferenceError
+// （features.js 里一个写错的变量名）就让整个进程退出，连带网页全白。
+// 这里把未捕获的异常/拒绝记成日志并继续运行 —— 对本地工具来说，
+// 「某个接口 500」远比「整个服务没了」可接受。
+process.on('unhandledRejection', (reason) => {
+  log.error(`未处理的 Promise 拒绝 / unhandledRejection — ${reason?.stack ?? reason}`);
+});
+process.on('uncaughtException', (err) => {
+  log.error(`未捕获异常 / uncaughtException — ${err?.stack ?? err}`);
+  if (/EADDRINUSE/.test(String(err?.code ?? ''))) process.exit(1);
+});
+
 // 首次运行提示 / first-run hint
 if (!fs.existsSync(path.join(APP_ROOT, 'config.json'))) {
   log.warn('未找到 config.json，已使用默认配置（请到网页里填写 LLM API Key）/ using defaults; set your LLM API key in the UI');

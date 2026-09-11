@@ -27,6 +27,7 @@ export const runState = {
   itemCount: 0,
   alerts: 0,
   advice: [],
+  features: null,
   lastResult: null,
   lastError: null,
   tail: [],
@@ -83,6 +84,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     watchDone: 0,
     itemCount: 0,
     alerts: 0,
+    features: null,
     lastError: null,
     tail: [],
   });
@@ -127,7 +129,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // 4) 情报条目（网页卡片流与报告都用它）
     runState.step = 'saving-feeds';
     const date = new Date().toISOString().slice(0, 10);
-    const items = collectItems(results, cfg?.ui?.intelPerSource ?? 24);
+    let items = collectItems(results, cfg?.ui?.intelPerSource ?? 24);
     const keywords = cfg?.watch?.rules?.keywords ?? [];
     for (const it of items) {
       const hit = matchedKeywords(it, keywords);
@@ -140,6 +142,23 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     const alerts = watchResults.reduce((n, r) => n + (r.events ?? []).filter((e) => e.reasons?.length).length, 0);
     runState.itemCount = items.length;
     runState.alerts = alerts;
+
+    // 4.5) 用 LLM 抽结构化特征 —— 让「只记得特征」也能检索到。
+    //      有缓存、有上限，失败不影响主流程。
+    let enriched = items;
+    if (cfg?.run?.extractFeatures !== false && items.length) {
+      runState.step = 'features';
+      try {
+        const { extractFeatures, applyFeatures } = await import('./features.js');
+        const r = await extractFeatures(cfg, items, log);
+        enriched = applyFeatures(items, r.cache);
+        runState.features = { extracted: r.extracted, cached: r.skipped, error: r.error ?? null };
+      } catch (err) {
+        log.warn(`特征抽取跳过 / features skipped — ${err.message}`);
+        runState.features = { extracted: 0, cached: 0, error: err.message };
+      }
+    }
+    items = enriched;
 
     const saved = saveFeedFiles(cfg, date, results);
     saveItems(cfg, date, items, {

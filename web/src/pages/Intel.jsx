@@ -196,6 +196,31 @@ export default function Intel({ layout }) {
             </button>{' '}
             <button className="ghost" onClick={toggleDiff}>
               {showDiff ? t('close') : t('compare')}
+            </button>{' '}
+            <a className="ghost" href={api.intelExportUrl('xlsx')}>
+              {t('exportXlsx')}
+            </a>{' '}
+            <a className="ghost" href={api.intelExportUrl('docx')}>
+              {t('exportDocx')}
+            </a>{' '}
+            <button
+              className="ghost"
+              title={t('featuresHint')}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await api.extractFeatures();
+                  setErr(r.ok ? '' : `特征抽取：${r.error}`);
+                  if (r.ok) await load();
+                } catch (e) {
+                  setErr(e.message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+            >
+              {t('extractFeatures')}
             </button>
           </div>
         </div>

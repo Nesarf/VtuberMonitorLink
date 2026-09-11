@@ -321,6 +321,34 @@ export default function Settings({ onLayout }) {
     }
   };
 
+  // Tor 无痕出口：检测端口 + 确认出口是不是 Tor；可选用配置好的 tor.exe 一键拉起
+  const checkTor = async () => {
+    setBusy(true);
+    flash(t('checkingLogin'), 0);
+    try {
+      const r = await api.probeTor(cfg.proxy?.torSocks);
+      if (!r.ok) flash(`❌ ${t('torFail')}: ${r.error}`, 0);
+      else if (r.isTor === true) flash(`✅ ${t('torOk')} · ${r.socks} · IP ${r.ip}`, 0);
+      else flash(`⚠️ ${t('torNotTor')} · ${r.socks}${r.ip ? ` · IP ${r.ip}` : ''}`, 0);
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startTor = async () => {
+    setBusy(true);
+    try {
+      const r = await api.startTor(cfg.proxy?.torExe);
+      flash(r.ok ? `✅ ${r.hint ?? 'started'}` : `❌ ${r.error}`, 0);
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const detectProxy = async () => {
     setBusy(true);
     flash(t('proxyDetecting'), 0);
@@ -544,11 +572,19 @@ export default function Settings({ onLayout }) {
         <h2>{t('proxyTitle')}</h2>
         <div className="hint">{t('proxyHint')}</div>
         <div className="row">
-          <div className="field" style={{ flex: '0 0 140px' }}>
+          <div className="field" style={{ flex: '0 0 160px' }}>
+            <label>{t('proxyModeTitle')}</label>
+            <select value={cfg.proxy?.mode === 'tor' ? 'tor' : 'http'} onChange={(e) => patch('proxy.mode', e.target.value)}>
+              <option value="http">{t('mode_http')}</option>
+              <option value="tor">{t('mode_tor')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 130px' }}>
             <label>{t('proxyEnabled')}</label>
             <select
               value={String(cfg.proxy?.enabled ?? false)}
               onChange={(e) => patch('proxy.enabled', e.target.value === 'true')}
+              disabled={cfg.proxy?.mode === 'tor'}
             >
               <option value="false">off</option>
               <option value="true">on</option>
@@ -560,14 +596,44 @@ export default function Settings({ onLayout }) {
               value={cfg.proxy?.url ?? ''}
               onChange={(e) => patch('proxy.url', e.target.value)}
               placeholder="http://127.0.0.1:7890"
+              disabled={cfg.proxy?.mode === 'tor'}
             />
           </div>
           <div className="field" style={{ flex: '0 0 auto' }}>
-            <button className="ghost" onClick={detectProxy} disabled={busy}>
+            <button className="ghost" onClick={detectProxy} disabled={busy || cfg.proxy?.mode === 'tor'}>
               {busy ? t('proxyDetecting') : t('proxyDetect')}
             </button>
           </div>
         </div>
+
+        {/* Tor 无痕出口 */}
+        <div className="row">
+          <div className="field">
+            <label>{t('torSocks')}</label>
+            <input
+              value={cfg.proxy?.torSocks ?? ''}
+              onChange={(e) => patch('proxy.torSocks', e.target.value)}
+              placeholder="socks5://127.0.0.1:9150"
+            />
+          </div>
+          <div className="field">
+            <label>{t('torExe')}</label>
+            <input
+              value={cfg.proxy?.torExe ?? ''}
+              onChange={(e) => patch('proxy.torExe', e.target.value)}
+              placeholder="...\\TorBrowser\\Tor\\tor.exe"
+            />
+          </div>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <button className="ghost" onClick={checkTor} disabled={busy}>
+              {t('torProbe')}
+            </button>{' '}
+            <button className="ghost" onClick={startTor} disabled={busy || !cfg.proxy?.torExe}>
+              {t('torStart')}
+            </button>
+          </div>
+        </div>
+        <div className="hint" style={{ margin: 0 }}>{t('torHint')}</div>
       </section>
 
       {/* ── 定时 / Schedule ── */}

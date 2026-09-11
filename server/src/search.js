@@ -122,6 +122,9 @@ export function autoTags(item) {
   if (item.sourceId) out.add(`来源:${item.sourceId}`);
   if (item.category) out.add(`分类:${item.category}`);
   for (const k of item.keywords ?? []) out.add(String(k));
+  // LLM 抽出来的特征也进标签，这样「只记得玩什么游戏」也能搜到
+  for (const k of item.feats ?? []) out.add(String(k));
+  for (const k of item.features?.names ?? []) out.add(String(k));
   const text = `${item.title ?? ''} ${item.text ?? ''}`;
   for (const m of text.matchAll(/[#＃]([^#＃\s]{1,20})[#＃]/g)) out.add(m[1]);
   for (const m of text.matchAll(/【([^】\s]{1,20})】/g)) out.add(m[1]);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 import { diffLines, diffStats, diffHunks } from './diff.js';
+import { buildDocx } from './office.js';
 
 const DATE = () => new Date().toISOString().slice(0, 10);
 const STAMP = () => new Date().toISOString().replace(/[:.]/g, '-');
@@ -275,6 +276,13 @@ export function exportReport(cfg, name, format = 'html') {
   const md = readReport(cfg, name);
   if (md === null) return null;
   const base = path.basename(name, '.md');
+  if (format === 'docx') {
+    return {
+      file: `${base}.docx`,
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: buildDocx({ title: base, markdown: md }),
+    };
+  }
   if (format === 'json') {
     return {
       file: `${base}.json`,

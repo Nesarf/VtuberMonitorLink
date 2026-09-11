@@ -1,6 +1,6 @@
 {
   "name": "vtuber-monitor-link",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Vtuber's Monitor Link — a local-web VTuber intelligence monitor with user-configurable browser, sources, and LLM.",
   "license": "MIT",

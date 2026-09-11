@@ -107,7 +107,11 @@ async function main() {
   const cfgPath = path.join(appDir, 'config.json');
   const hadConfig = fs.existsSync(cfgPath);
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
-  const createdDirs = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'].filter((d) => !fs.existsSync(path.join(appDir, d)));
+  // 运行数据一律先清空：不这样做的话，上一次巡检留下的报告/情报会让
+  // 「还没有情报」这类断言随机失败（真的踩到过），而且目录也就不可发布了。
+  const RUNDATA = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
+  for (const d of RUNDATA) fs.rmSync(path.join(appDir, d), { recursive: true, force: true });
+  const createdDirs = RUNDATA;
 
   // A mock OpenAI-compatible endpoint: lets the walk exercise a real run with
   // no API key anywhere near the release.

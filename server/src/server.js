@@ -33,6 +33,8 @@ import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js
 import { probeTor } from './socks.js';
 import { entityDetail, entityStats } from './entities.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
+import { listAccounts } from './accounts.js';
+import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
 import { spawn } from 'node:child_process';
 import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
 import * as proxyctl from './proxyctl.js';
@@ -812,6 +814,27 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.get('/api/live/roster', async (req, res) => {
     res.json(await searchRoster(getConfig(), req.query.q));
   });
+
+  // ── 登录账号与发弹幕 / accounts & danmaku ────────────────────────
+  // 账号发现只读；发送会用使用者本人身份公开发言，所以设计上层层设卡（见 danmaku.js）。
+  app.get('/api/accounts', async (_req, res) => {
+    const cfg = getConfig();
+    const r = await listAccounts(cfg);
+    res.json({
+      ...r,
+      // 再强调一次：这里只回传身份信息与能力，绝不回传任何 cookie 值
+      canSendAny: r.accounts.some((a) => a.canSend),
+      limits: { maxLen: MAX_LEN, minIntervalMs: MIN_INTERVAL_MS },
+    });
+  });
+
+  app.post('/api/danmaku', async (req, res) => {
+    const cfg = getConfig();
+    const r = await sendDanmaku(cfg, log, req.body ?? {});
+    res.status(r.ok ? 200 : 400).json(r);
+  });
+
+  app.get('/api/danmaku/audit', (_req, res) => res.json({ entries: readAudit(getConfig(), 50) }));
 
   // ── 人物档案 / entities ──────────────────────────────────────────
   // 把特征抽取出来的人名聚合成对象：他/她出现过哪些条目、什么游戏、哪些事件。

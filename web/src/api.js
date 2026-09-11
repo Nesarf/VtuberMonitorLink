@@ -131,6 +131,11 @@ export const api = {
   getLive: (fresh) => j('/api/live' + (fresh ? '?fresh=1' : '')),
   searchRoster: (q) => j('/api/live/roster?q=' + encodeURIComponent(q)),
 
+  // 登录账号与发弹幕（发送是写操作，必须显式确认）
+  getAccounts: () => j('/api/accounts'),
+  sendDanmaku: (payload) => post('/api/danmaku', payload),
+  getDanmakuAudit: () => j('/api/danmaku/audit'),
+
   // 人物档案（由特征抽取聚合）
   getEntities: () => j('/api/entities'),
   getEntity: (name) => j('/api/entities/' + encodeURIComponent(name)),

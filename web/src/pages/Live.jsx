@@ -74,6 +74,16 @@ export default function Live() {
   const [manualPlatform, setManualPlatform] = useState('twitch');
   const [manualId, setManualId] = useState('');
   const [manualLabel, setManualLabel] = useState('');
+  // 发弹幕（写操作）相关状态
+  const [accounts, setAccounts] = useState(null);
+  const [acctId, setAcctId] = useState('');
+  const [sendRoom, setSendRoom] = useState('');
+  const [sendRoomManual, setSendRoomManual] = useState('');
+  const [sendText, setSendText] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const [sent, setSent] = useState(null);
+  const [audit, setAudit] = useState([]);
+  const [maxLen, setMaxLen] = useState(20);
 
   useEffect(() => {
     localStorage.setItem(LS_KEY, JSON.stringify(grid));
@@ -142,6 +152,57 @@ export default function Live() {
       setErr(e.message);
     } finally {
       setProbing('');
+    }
+  };
+
+  const sendable = (accounts ?? []).filter((a) => a.canSend);
+  const room = (sendRoomManual || sendRoom || '').replace(/\D/g, '');
+
+  const loadAccounts = async () => {
+    setBusy('accounts');
+    try {
+      const r = await api.getAccounts();
+      setAccounts(r.accounts ?? []);
+      setMaxLen(r.limits?.maxLen ?? 20);
+      if (!acctId) {
+        const first = (r.accounts ?? []).find((a) => a.canSend);
+        if (first) setAcctId(first.id);
+      }
+      setAudit((await api.getDanmakuAudit()).entries ?? []);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  useEffect(() => {
+    loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 发送：把「确认」这件事传成参数，服务端也会再检查一次 */
+  const doSend = async () => {
+    if (!confirmed) return;
+    setBusy('danmaku');
+    setSent(null);
+    try {
+      const r = await api.sendDanmaku({ accountId: acctId, roomId: room, text: sendText, confirm: true });
+      setSent(r);
+      if (r.ok) {
+        setSendText('');
+        setConfirmed(false);
+        setAudit((await api.getDanmakuAudit()).entries ?? []);
+      }
+    } catch (e) {
+      // 后端拒绝时（400）也是正常的护栏行为，把 body 里的说明取出来
+      try {
+        setSent(JSON.parse(e.message));
+      } catch {
+        setSent({ ok: false, error: e.message });
+      }
+    } finally {
+      setBusy('');
     }
   };
 
@@ -339,6 +400,96 @@ export default function Live() {
           </div>
         </div>
         <div className="hint" style={{ margin: 0 }}>{t('liveProxyCaveat')}</div>
+      </section>
+
+      {/* 发评论 —— 用使用者本人身份公开发言，所以必须手动确认 */}
+      <section className="panel">
+        <h2>{t('danmakuTitle')}</h2>
+        <div className="problems" style={{ marginBottom: 10 }}>
+          {t('danmakuWarn')}
+        </div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 260px' }}>
+            <label>{t('danmakuAccount')}</label>
+            <select value={acctId} onChange={(e) => setAcctId(e.target.value)} disabled={!sendable.length}>
+              <option value="">—</option>
+              {sendable.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.uname ?? a.mid} （{a.browser}）
+                </option>
+              ))}
+            </select>
+            <div className="row" style={{ gap: 6, marginTop: 4 }}>
+              <button className="ghost tiny" onClick={loadAccounts} disabled={busy}>
+                {t('danmakuRefresh')}
+              </button>
+              {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}
+            </div>
+          </div>
+          <div className="field" style={{ flex: '0 0 140px' }}>
+            <label>{t('danmakuRoom')}</label>
+            <select value={sendRoom} onChange={(e) => setSendRoom(e.target.value)}>
+              <option value="">—</option>
+              {grid
+                .filter((x) => x.platform === 'bilibili')
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.label || x.id}（{x.id}）
+                  </option>
+                ))}
+            </select>
+            <input
+              style={{ marginTop: 4 }}
+              value={sendRoomManual}
+              onChange={(e) => setSendRoomManual(e.target.value.replace(/\D/g, ''))}
+              placeholder="也可手填"
+            />
+          </div>
+          <div className="field">
+            <label>
+              {t('danmakuText')}（{[...sendText].length}/{maxLen} {t('danmakuLen')}）
+            </label>
+            <input
+              value={sendText}
+              onChange={(e) => setSendText(e.target.value)}
+              maxLength={maxLen}
+              onKeyDown={(e) => e.key === 'Enter' && confirmed && doSend()}
+              placeholder="要发的内容"
+            />
+          </div>
+        </div>
+        <label className="inline-check" style={{ marginBottom: 8 }}>
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {t('danmakuConfirm')}
+        </label>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <button className="primary" onClick={doSend} disabled={!!busy || !confirmed || !sendText.trim() || !room || !acctId}>
+              {busy === 'danmaku' ? t('danmakuSending') : t('danmakuSend')}
+            </button>
+          </div>
+          <div className="field" style={{ flex: 1 }}>
+            {sent && (
+              <span className={sent.ok ? 'hint ok-text' : 'hint warn-text'} style={{ margin: 0 }}>
+                {sent.ok ? `✅ ${t('danmakuOk')}` : `❌ code=${sent.code ?? '-'} ${sent.error ?? sent.message ?? ''}${sent.hint ? ` — ${sent.hint}` : ''}`}
+              </span>
+            )}
+          </div>
+        </div>
+        {audit?.length ? (
+          <details style={{ marginTop: 8 }}>
+            <summary className="muted small">
+              {t('danmakuAudit')}（{audit.length}）· {t('danmakuAuditHint')}
+            </summary>
+            <ul className="muted small" style={{ paddingLeft: 18 }}>
+              {audit.slice(0, 10).map((a, i) => (
+                <li key={i}>
+                  {new Date(a.at).toLocaleString()} · {a.uname ?? a.mid} → 房间 {a.roomId} · 「{a.text}」 ·{' '}
+                  {a.ok ? '✅' : `❌ ${a.code ?? ''} ${a.error ?? ''}`}
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
       </section>
 
       <section className="panel">

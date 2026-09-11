@@ -170,6 +170,19 @@ pre.report {
   width: 100%; height: 62vh; border: 1px solid var(--border); border-radius: 8px; background: #fff;
 }
 /* 保存条：状态常驻在按钮旁边 —— 光靠角落的 toast 用户会当成没保存 */
+/* 折叠区块：长列表默认收起（代理节点列表一屏几十行，太占地方） */
+.collapsible { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; background: var(--panel-2); }
+.collapsible-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: transparent; border: 0; color: inherit; cursor: pointer;
+  padding: 8px 10px; font-size: 13px; border-radius: 10px;
+}
+.collapsible-head:hover { background: rgba(127, 127, 127, .08); }
+.collapsible-head .caret { width: 12px; color: var(--muted); }
+.collapsible-head .ct { font-weight: 600; }
+.collapsible-head .cs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collapsible-head .grow { flex: 1; }
+.collapsible-body { padding: 4px 10px 10px; border-top: 1px solid var(--border); }
 .save-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 4px; padding: 10px 12px;

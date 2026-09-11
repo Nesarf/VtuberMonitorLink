@@ -12,6 +12,7 @@
 //   - playwrightProxy() 浏览器侧代理（支持按来源关闭）
 import { Agent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
 import { socksAgent, socksForPlaywright } from './socks.js';
+import { decision as autoDecision } from './egress.js';
 
 let appliedUrl = null;
 let appliedMode = null;
@@ -70,7 +71,11 @@ export function playwrightProxy(cfg, mode) {
 
 /**
  * 解析一个来源/监视目标实际该走哪条路。
- * source.proxy: 'direct' | 'proxy' | 'tor' | undefined(跟随全局)
+ * source.proxy: 'direct' | 'proxy' | 'tor' | 'auto' | undefined(自动，未探测过则跟随全局)
+ *
+ * 自动模式（默认）：按「等效延迟 = avg × (1 + 丢包 × 4)」打分，且带粘滞 ——
+ * 见 egress.js。显式写了出口的来源永远优先（例如 B 站实测走代理反而 412，
+ * 它的 proxy 是硬编码 'direct'，自动模式不许推翻这种实测结论）。
  * @returns {'direct'|'proxy'|'tor'}
  */
 export function resolveProxyMode(cfg, subject) {
@@ -78,6 +83,12 @@ export function resolveProxyMode(cfg, subject) {
   if (want === 'direct') return 'direct';
   if (want === 'tor') return 'tor';
   if (want === 'proxy') return 'proxy';
+
+  // auto（或未指定）：先看有没有探测结论，没有就跟随全局配置
+  if (want === 'auto' || want === undefined || want === null || want === '') {
+    const d = autoDecision(cfg, subject);
+    if (d && d.mode) return d.mode;
+  }
   if (cfg?.proxy?.mode === 'tor') return 'tor';
   return cfg?.proxy?.enabled ? 'proxy' : 'direct';
 }

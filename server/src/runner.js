@@ -12,6 +12,7 @@ import { createLogger } from './logger.js';
 import { applyProxy } from './net.js';
 import { notify } from './notify.js';
 import { diagnoseSource } from './diagnose.js';
+import { recordOutcome } from './egress.js';
 
 /** 供 UI 轮询的实时状态 / in-memory state the UI can poll */
 export const runState = {
@@ -224,6 +225,15 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
 
     const okCount = results.filter((r) => r.ok).length;
     const failedSources = results.filter((r) => !r.ok).map((r) => r.source?.id);
+    // 真实抓取结果反馈给「自动出口」：这是判断稳不稳的第一手证据，
+    // 比几次 ping 可靠得多 —— 连续失败的站点会被自动换出口。
+    try {
+      for (const r of results) {
+        recordOutcome(cfg, r.source, { ok: !!r.ok, ms: r.ms ?? null, mode: r.egress ?? null });
+      }
+    } catch {
+      // 记录失败不影响本次运行
+    }
     runState.lastResult = {
       ok: true,
       file,

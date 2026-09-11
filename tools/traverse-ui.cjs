@@ -255,6 +255,20 @@ async function main() {
     const llmText = await mainText();
     check('the LLM page renders on its own tab', llmText.indexOf('哪些功能需要它') !== -1 || llmText.indexOf('档位设置') !== -1, llmText.split('\n')[0]);
     check('it says which features need an LLM', llmText.indexOf('需要') !== -1, 'needs table present');
+
+    // ── 折叠区块：长参考列表默认收起（代理节点一屏几十行太占地方）──
+    const foldHead = page.locator('.collapsible .collapsible-head').first();
+    const foldCount = await page.locator('.collapsible').count();
+    check('the feature matrix ships collapsed', foldCount > 0);
+    const openBefore = await page.locator('.collapsible .collapsible-body').count();
+    check('long reference lists start collapsed', openBefore === 0, foldCount + ' block(s), ' + openBefore + ' open');
+    await foldHead.click();
+    await page.waitForTimeout(300);
+    const shown = await mainText();
+    check('clicking the header reveals the list', (await page.locator('.collapsible .collapsible-body').count()) > 0 && shown.indexOf('检索') !== -1);
+    await foldHead.click();
+    await page.waitForTimeout(200);
+    check('and it collapses again', (await page.locator('.collapsible .collapsible-body').count()) === 0);
     const keyInput = page.locator('main input[type=password]').first();
     check('the API key field is masked', (await keyInput.count()) > 0);
     const keyVal = (await keyInput.count()) > 0 ? await keyInput.inputValue() : '';
@@ -284,6 +298,14 @@ async function main() {
     main = await mainText();
     check('the bilibili category is shown', main.indexOf('B 站') !== -1);
     check('the custom-source form is present', main.indexOf('自定义来源') !== -1);
+
+    // 每个站点的出口默认是「自动」，并且把判定结果写在旁边
+    const autoOpts = await page.locator('main select:has(option[value="direct"]) option', { hasText: '自动' }).count();
+    check('每站出口默认是自动匹配', autoOpts > 0, autoOpts + ' 个出口选择器带自动选项');
+    const egressShown = main.indexOf('探测后自动判定') !== -1 || main.indexOf('已判定') !== -1 || main.indexOf('试用中') !== -1;
+    check('自动判定的结果写在来源旁边', egressShown);
+    const eg = await page.evaluate(() => fetch('/api/egress').then((r) => r.json()).catch(() => null));
+    check('/api/egress answers with decisions + reasons', !!eg && typeof eg.counts === 'object' && Array.isArray(eg.decisions), eg ? Object.keys(eg.counts).join(',') || 'no decisions yet' : 'no answer');
 
     await page.locator('input[placeholder="my-feed"]').fill('ui-test-feed');
     await page.locator('input[placeholder="某某的博客"]').fill('UI 测试订阅');

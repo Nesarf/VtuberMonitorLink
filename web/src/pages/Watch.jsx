@@ -282,9 +282,10 @@ export default function Watch() {
           <div className="field" style={{ flex: '0 0 150px' }}>
             <label>{t('proxyMode')}</label>
             <select value={proxy} onChange={(e) => setProxy(e.target.value)}>
-              <option value="">{t('proxyInherit')}</option>
+              <option value="">{t('proxyAuto')}</option>
               <option value="direct">{t('proxyDirect')}</option>
               <option value="proxy">{t('proxyUse')}</option>
+              <option value="tor">Tor</option>
             </select>
           </div>
         </div>

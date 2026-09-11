@@ -26,6 +26,7 @@ import { preflight } from './analyze.js';
 import { PRESETS, activeProvider, newProvider, listModels } from './llm.js';
 import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
+import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
 import { chatRequest } from './llm.js';
@@ -994,6 +995,43 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const ext = path.extname(name).slice(1).toLowerCase();
     res.type(REPORT_MIME[ext] ?? 'text/plain; charset=utf-8').send(body);
   });
+
+  // ── 自动出口 / automatic per-site egress ──────────────────────────
+  // 每个站点按「等效延迟 = avg × (1 + 丢包 × 4)」自动挑直连或代理，
+  // 并带粘滞（优势不足 20% 就不换，避免抖动）。这里有判定 + 原因 + 得分。
+  app.get('/api/egress', (_req, res) => {
+    const cfg = getConfig();
+    const snap = egressSnapshot(cfg);
+    const byKey = {};
+    for (const d of snap.decisions) byKey[d.key] = d;
+    res.json({ ...snap, byKey });
+  });
+
+  app.post('/api/egress/decide', async (req, res) => {
+    const cfg = getConfig();
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const sources = effectiveSources(cfg).filter((s) => !ids.length || ids.includes(s.id));
+    const results = [];
+    for (const s of sources) {
+      try {
+        const p = await probeUrl(s.url, { cfg, samples: Number(req.body?.samples ?? 3) });
+        updateCache(cfg, [{ id: s.id, label: s.name?.zh ?? s.id, sourceId: s.id, ...p }]);
+        const d = egressDecision(cfg, s);
+        results.push({ id: s.id, mode: d?.mode ?? null, reason: d?.reason ?? '', confidence: d?.confidence ?? 'none' });
+      } catch (e) {
+        results.push({ id: s.id, mode: null, reason: e.message, confidence: 'none' });
+      }
+    }
+    res.json({ ok: true, results, ...egressSnapshot(cfg) });
+  });
+
+  app.post('/api/egress/clear', (_req, res) => {
+    const cfg = getConfig();
+    egressClear(cfg);
+    res.json({ ok: true });
+  });
+
+  // 探测成功后立刻重算判定，界面不用等下一次运行
 
   // ── JSON 错误兜底 / JSON error fallback ─────────────────────────
   // 路由里抛异常时，Express 默认回一张 HTML 错误页 —— 前端拿它去 JSON.parse

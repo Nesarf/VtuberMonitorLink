@@ -30,6 +30,8 @@ export default function Sources() {
   const [form, setForm] = useState({ ...BLANK });
   const [customOnly, setCustomOnly] = useState(false);
   const [diag, setDiag] = useState(null);
+  // 自动出口的判定结果：s.id -> {mode, reason, confidence}
+  const [eg, setEg] = useState({});
 
   const load = async () => {
     try {
@@ -37,6 +39,9 @@ export default function Sources() {
       setData(s);
       setHealth(h);
       setAdvice((await api.listAdvice().catch(() => ({ files: [] }))).files ?? []);
+      // 自动出口判定（失败也不影响页面其它部分）
+      const e = await api.getEgress().catch(() => null);
+      setEg(e?.byKey ?? {});
     } catch (e) {
       setErr(e.message);
     }
@@ -319,10 +324,23 @@ export default function Sources() {
                       </td>
                       <td>
                         <select value={s.proxy ?? ''} onChange={(e) => patch(s.id, { proxy: e.target.value })}>
-                          <option value="">{t('proxyInherit')}</option>
+                          <option value="">{t('proxyAuto')}</option>
                           <option value="direct">{t('proxyDirect')}</option>
                           <option value="proxy">{t('proxyUse')}</option>
+                          <option value="tor">Tor</option>
                         </select>
+                        {/* 自动模式选了什么、为什么 —— 不写出来就等于黑箱 */}
+                        {!s.proxy || s.proxy === 'auto' ? (
+                          <div className="small muted" title={eg?.[s.id]?.reason ?? ''} style={{ maxWidth: 220, marginTop: 4 }}>
+                            {eg?.[s.id]
+                              ? `${eg[s.id].mode === 'direct' ? '直连' : eg[s.id].mode === 'proxy' ? '代理' : 'Tor'} · ${eg[s.id].confidence === 'high' ? '已判定' : '试用中'}`
+                              : t('egressNotYet')}
+                          </div>
+                        ) : (
+                          <div className="small muted" style={{ marginTop: 4 }}>
+                            {t('egressPinned')}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <Lat p={h?.direct} label={t('directEgress')} t={t} />
@@ -422,9 +440,10 @@ export default function Sources() {
           <div className="field" style={{ flex: '0 0 150px' }}>
             <label>{t('egressSelect')}</label>
             <select value={form.proxy} onChange={(e) => setForm({ ...form, proxy: e.target.value })}>
-              <option value="">{t('proxyInherit')}</option>
+              <option value="">{t('proxyAuto')}</option>
               <option value="direct">{t('proxyDirect')}</option>
               <option value="proxy">{t('proxyUse')}</option>
+              <option value="tor">Tor</option>
             </select>
           </div>
         </div>

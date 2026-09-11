@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { SaveBar, useSaveState } from '../savebar.jsx';
+import Collapsible from '../Collapsible.jsx';
 import { api } from '../api.js';
 
 /** 哪些功能需要 LLM —— 直接回答「我必须配吗」 */
@@ -310,11 +311,18 @@ export default function Llm() {
         </section>
       )}
 
-      {/* 「我必须配吗」——直接列出来，省得猜 */}
+      {/* 「我必须配吗」——直接列出来，省得猜。默认收起：
+          这是「查一次就够」的参考表，长期占着半屏不值当。 */}
       <section className="panel">
         <h2>{t('llmNeedsTitle')}</h2>
         <div className="hint">{t('llmNeedsHint')}</div>
-        <table>
+        <Collapsible
+          id="llm-needs"
+          title={t('llmNeedsTable')}
+          count={NEEDS.length}
+          summary={t('llmNeedsSummary')}
+        >
+          <table>
           <thead>
             <tr>
               <th>{t('llmFeature')}</th>
@@ -331,7 +339,8 @@ export default function Llm() {
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </Collapsible>
       </section>
 
       <SaveBar st={st} onSave={save} busy={busy} />

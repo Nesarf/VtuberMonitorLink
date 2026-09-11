@@ -21,6 +21,11 @@ export const api = {
   getConfig: () => j('/api/config'),
   putConfig: (cfg) => put('/api/config', cfg),
 
+  // 每个站点的自动出口判定
+  getEgress: () => j('/api/egress'),
+  decideEgress: (ids) => post('/api/egress/decide', { ids }),
+  clearEgress: () => post('/api/egress/clear', {}),
+
   // 来源
   getSources: () => j('/api/sources'),
   patchSource: (id, patch) =>

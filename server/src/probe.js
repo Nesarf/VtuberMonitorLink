@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { netFetch } from './net.js';
 import { resolveDir } from './config.js';
+import { recordProbe } from './egress.js';
 
 export const DEFAULT_SAMPLES = 3;
 const DEFAULT_TIMEOUT = 6000;
@@ -210,6 +211,12 @@ export function updateCache(cfg, entries) {
   const cache = loadCache(cfg);
   for (const e of entries) cache[e.id] = e;
   saveCache(cfg, cache);
+  // 探测结果同时喂给「自动出口」判定：这样每个站点都会自己长出最合适的出口
+  try {
+    for (const e of entries) recordProbe(cfg, { subject: e.subject ?? { id: e.id, name: e.name, url: e.url }, probe: e });
+  } catch {
+    // 判定失败不该让探测接口跟着失败
+  }
   return cache;
 }
 

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 import { SaveBar, useSaveState } from '../savebar.jsx';
+import Collapsible from '../Collapsible.jsx';
 
 export default function Settings({ onLayout }) {
   const { t, lang } = useI18n();
@@ -989,44 +990,61 @@ export default function Settings({ onLayout }) {
             <input value={nodeTestUrl} onChange={(e) => setNodeTestUrl(e.target.value)} />
           </div>
         </div>
-        {(nodes?.groups ?? []).map((g) => (
-          <div key={g.name} style={{ marginTop: 10 }}>
-            <div className="row" style={{ alignItems: 'center' }}>
-              <b>{g.name}</b>
-              <span className="muted small">
-                {t('currentNode')}: {g.now ?? '-'} · {g.nodes.length} nodes
-              </span>
-              <button className="ghost tiny" onClick={() => testNodes(g)} disabled={busy}>
-                {t('probe')}
-              </button>
-            </div>
-            <div className="nodes">
-              <table>
-                <tbody>
-                  {g.nodes.map((n) => {
-                    const d = nodeDelays?.group === g.name ? (nodeDelays.results ?? []).find((r) => r.node === n.name) : null;
-                    const best = nodeDelays?.group === g.name && (nodeDelays.results ?? [])[0]?.node === n.name;
-                    return (
-                      <tr key={n.name} className={best ? 'best' : ''}>
-                        <td>
-                          {n.name} {n.name === g.now ? <span className="badge none">now</span> : null}
-                        </td>
-                        <td className="muted small" style={{ width: 120 }}>
-                          {d ? (d.ok ? `${d.delay} ms` : `✕ ${d.error ?? ''}`.slice(0, 40)) : n.lastDelay ? `${n.lastDelay} ms` : '—'}
-                        </td>
-                        <td style={{ width: 90 }}>
-                          <button className="ghost tiny" onClick={() => switchNode(g.name, n.name)} disabled={busy || n.name === g.now}>
-                            {t('switchTo')}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))}
+        {(nodes?.groups ?? []).map((g) => {
+          // 默认收起：以前一进设置就把整套节点列表铺开，几十行把页面顶掉一大截。
+          // 摘要里保留「当前节点 + 数量 + 最快延迟」，不点开也够判断要不要操作。
+          const fastest = g.nodes.reduce((best, n) => {
+            const d = n.lastDelay ?? Infinity;
+            return d < (best?.d ?? Infinity) ? { name: n.name, d } : best;
+          }, null);
+          return (
+            <Collapsible
+              key={g.name}
+              id={`nodes-${g.name}`}
+              title={g.name}
+              count={g.nodes.length}
+              summary={`${t('currentNode')}: ${g.now ?? '-'}${fastest && Number.isFinite(fastest.d) ? ` · ${t('fastest')} ${fastest.name} ${fastest.d}ms` : ''}`}
+              right={
+                <button
+                  className="ghost tiny"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    testNodes(g);
+                  }}
+                  disabled={busy}
+                >
+                  {t('probe')}
+                </button>
+              }
+            >
+              <div className="nodes">
+                <table>
+                  <tbody>
+                    {g.nodes.map((n) => {
+                      const d = nodeDelays?.group === g.name ? (nodeDelays.results ?? []).find((r) => r.node === n.name) : null;
+                      const best = nodeDelays?.group === g.name && (nodeDelays.results ?? [])[0]?.node === n.name;
+                      return (
+                        <tr key={n.name} className={best ? 'best' : ''}>
+                          <td>
+                            {n.name} {n.name === g.now ? <span className="badge none">now</span> : null}
+                          </td>
+                          <td className="muted small" style={{ width: 120 }}>
+                            {d ? (d.ok ? `${d.delay} ms` : `✕ ${d.error ?? ''}`.slice(0, 40)) : n.lastDelay ? `${n.lastDelay} ms` : '—'}
+                          </td>
+                          <td style={{ width: 90 }}>
+                            <button className="ghost tiny" onClick={() => switchNode(g.name, n.name)} disabled={busy || n.name === g.now}>
+                              {t('switchTo')}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Collapsible>
+          );
+        })}
         {nodes && !(nodes.groups ?? []).length && <p className="muted small">{t('controlNotFound')}</p>}
       </section>
 

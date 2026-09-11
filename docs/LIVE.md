@@ -45,6 +45,53 @@ iframe 上加 `referrerPolicy="no-referrer"`，不向 B 站回传本页地址。
 
 网格是纯前端的：列数可选（自适应 / 1–4 列），选择存在 localStorage（不污染配置文件）。
 
+## 多平台与「码率 / 帧数」——实测边界（2026-09-11）
+
+需求里提到「YouTube、Twitch 等平台的直播源 + 实时评论流，并在每个源下方显示延迟、丢包、码率、帧数」。
+先把**能做的**和**做不到的**分开，避免做出一个显示假数字的功能。
+
+### 1. 码率 / 帧数 / 丢帧：跨域嵌入播放器**测不到**
+
+YouTube / Twitch / B 站的官方嵌入播放器都跑在**跨域 iframe** 里。同源策略下父页面拿不到它的
+`<video>` 元素，因此 `getVideoPlaybackQuality()`（总帧数 / 丢帧数）、`buffered`（缓冲与直播沿）、
+协商码率（MSE/ABR）**全都读不到**。这不是实现没做，是浏览器安全边界。
+
+界面上如实写「码率 / 帧数：跨域嵌入播放器测不到」，不给假数字。
+
+**要真测只有一条路：把流地址拿过来自己播。**
+- bilibili：`getRoomPlayInfo` 可用（实测 `code=0`），但**只有真正在播的房间才有流地址** ——
+  实测时嘉然/泠鸢/hanser 都在**轮播**（`live_status=2`），返回的 stream 列表是空的。
+  拿 `<video>`/mse 自己播之后，帧数、丢帧、码率、直播沿延迟都能真测。
+- YouTube / Twitch：需要 yt-dlp / streamlink 一类工具取流，有 ToS 与稳定性代价，且要额外依赖。
+  本项目是便携 exe，不打算为它引入这种依赖。
+
+### 2. 实时评论流：bilibili 弹幕**当前被风控挡住**
+
+| 尝试 | 结果 |
+| --- | --- |
+| `getDanmuInfo`（仅 buvid3/buvid4 + referer） | **-352** |
+| `getDanmuInfo`（用 Opera profile 的 **SESSDATA** 登录态） | **-352** |
+| WebSocket `wss://<host>/sub`（protover=3，brotli） | 拿不到 token，无法建连 |
+
+即**带登录态也进不去**，判断是这批接口又加了 WBI 签名要求（本项目在 B 站动态接口上已经踩过同类风控）。
+`getDanmuInfo` 拿不到 token，后面的 brotli 解包（Node 内置 `zlib.brotliDecompressSync`）也就无从验证。
+**所以这一轮没有把弹幕塞进来** —— 半残的实时流比没有更糟。下一步是给该接口补 WBI 签名（`w_rid`/`wts`）。
+
+Twitch 的匿名 IRC（`wss://irc-ws.chat.twitch.tv` + `justinfan`）思路可行且不需要鉴权，
+但 Node 内置的 `WebSocket` **不支持走 HTTP 代理**，而本机访问 Twitch 必须走代理 ——
+所以要做得先自己实现「CONNECT → TLS 升级 → WebSocket 握手」，属于独立的一块工作。
+
+### 3. 真的做了：每个直播源的**网络层**延迟与失败率
+
+这一层是第三方页面**能够诚实测量**的，已经接上：
+
+- 每张直播卡下方有「测网络」，走本项目已有的探测器；
+- 直连测 **TCP 握手 RTT**，代理测**经代理请求的首字节时间**；「失败率」= 失败次数 ÷ 尝试次数；
+- 给出结论（哪个出口更快 / 哪个不通），正在直播的房间打开页面时会自动测前 6 个。
+
+实测样例（bilibili 直播间）：直连 **19ms / 0%**，代理 **316ms / 0%** → 「直连更快（19ms vs 316ms）」。
+
+
 ## 无痕化处理
 
 按本项目一贯的隐私约束，这一批功能做到：

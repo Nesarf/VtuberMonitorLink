@@ -35,6 +35,8 @@ export default function Live() {
   const [msg, setMsg] = useState('');
   const [rosterQ, setRosterQ] = useState('');
   const [roster, setRoster] = useState(null);
+  const [net, setNet] = useState({});
+  const [probing, setProbing] = useState('');
 
   useEffect(() => {
     localStorage.setItem(LS_KEY, JSON.stringify(grid));
@@ -45,7 +47,9 @@ export default function Live() {
   const load = async (fresh) => {
     setBusy(true);
     try {
-      setData(await api.getLive(fresh));
+      const d = await api.getLive(fresh);
+      setData(d);
+      for (const r of (d.live ?? []).slice(0, 6)) probeRoom(r);
       setErr('');
     } catch (e) {
       setErr(e.message);
@@ -72,6 +76,20 @@ export default function Live() {
       return [...g, ...live.filter((x) => !have.has(x.roomId)).map((x) => ({ roomId: x.roomId, name: x.name || x.uname }))];
     });
     setMsg(`${live.length} ${t('items')}`);
+  };
+
+  /** 网络层测速：第三方页面能诚实测到的只有这一层（延迟 / 失败率） */
+  const probeRoom = async (r) => {
+    setProbing(r.uid);
+    try {
+      const res = await api.probe({ url: r.url || `https://live.bilibili.com/${r.roomId}`, samples: 3 });
+      const one = res.results?.[0];
+      if (one) setNet((n) => ({ ...n, [r.uid]: one }));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setProbing('');
+    }
   };
 
   const findUid = async () => {
@@ -199,6 +217,30 @@ export default function Live() {
               </header>
               {r.cover ? <img className="thumb big" src={r.cover} alt="" referrerPolicy="no-referrer" loading="lazy" /> : null}
               <p>{r.title || <span className="muted">{t('liveNoTitle')}</span>}</p>
+              {/* 网络层实测延迟/丢包：这是第三方页面**能**诚实测到的部分 */}
+              <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                <button className="ghost tiny" onClick={() => probeRoom(r)} disabled={!!probing}>
+                  {probing === r.uid ? t('probingOne') : t('liveProbe')}
+                </button>
+                {net[r.uid] ? (
+                  <>
+                    <span className={`lat ${net[r.uid].direct?.ok ? (net[r.uid].direct.loss > 0 ? 'warn' : 'ok') : 'bad'}`}>
+                      {t('directEgress')} {net[r.uid].direct?.ok ? `${net[r.uid].direct.avg}ms` : '✕'} ·{' '}
+                      {Math.round((net[r.uid].direct?.loss ?? 0) * 100)}%
+                    </span>
+                    <span className={`lat ${net[r.uid].proxy?.skipped ? 'stale' : net[r.uid].proxy?.ok ? 'ok' : 'bad'}`}>
+                      {t('proxyEgress')}{' '}
+                      {net[r.uid].proxy?.skipped ? '—' : net[r.uid].proxy?.ok ? `${net[r.uid].proxy.avg}ms` : '✕'} ·{' '}
+                      {net[r.uid].proxy?.skipped ? '—' : `${Math.round((net[r.uid].proxy?.loss ?? 0) * 100)}%`}
+                    </span>
+                    <span className="muted small">{net[r.uid].hint}</span>
+                  </>
+                ) : null}
+              </div>
+              {/* 码率/帧数是**测不到**的，如实说明而不是编一个数字 */}
+              <div className="muted small" title={t('liveQualityWhy')}>
+                {t('liveQualityUnavailable')}
+              </div>
               <footer>
                 {r.areaName ? <span className="muted small">{r.areaName}</span> : null}
                 {r.url ? (

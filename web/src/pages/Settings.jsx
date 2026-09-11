@@ -660,10 +660,20 @@ export default function Settings({ onLayout }) {
               return (
                 <tr key={task.id} className={task.enabled === false ? 'row-off' : ''}>
                   <td>
-                    <input type="checkbox" checked={task.enabled !== false} onChange={(e) => patchTask(task.id, { enabled: e.target.checked })} />
+                    <input
+                      type="checkbox"
+                      aria-label={`${task.name || t('taskName')} · ${t('enabledCol')}`}
+                      checked={task.enabled !== false}
+                      onChange={(e) => patchTask(task.id, { enabled: e.target.checked })}
+                    />
                   </td>
                   <td>
-                    <input value={task.name} onChange={(e) => onTaskNameChange(task.id, e.target.value)} onBlur={() => saveSchedule(cfg.schedule.tasks ?? [])} />
+                    <input
+                      aria-label={`${t('taskName')} · ${task.id}`}
+                      value={task.name}
+                      onChange={(e) => onTaskNameChange(task.id, e.target.value)}
+                      onBlur={() => saveSchedule(cfg.schedule.tasks ?? [])}
+                    />
                     {live?.nextFire && (
                       <div className="muted small">
                         {t('nextFireAt')}: {new Date(live.nextFire).toLocaleString()}
@@ -679,19 +689,28 @@ export default function Settings({ onLayout }) {
                     ) : null}
                   </td>
                   <td>
-                    <select value={task.mode} onChange={(e) => patchTask(task.id, { mode: e.target.value })}>
+                    <select
+                      aria-label={`${task.name || t('taskName')} · ${t('taskMode')}`}
+                      value={task.mode}
+                      onChange={(e) => patchTask(task.id, { mode: e.target.value })}
+                    >
                       <option value="daily">{t('taskMode_daily')}</option>
                       <option value="merch">{t('taskMode_merch')}</option>
                       <option value="watch">{t('taskMode_watch')}</option>
                     </select>
                   </td>
                   <td>
-                    <select value={task.freq} onChange={(e) => patchTask(task.id, { freq: e.target.value })}>
+                    <select
+                      aria-label={`${task.name || t('taskName')} · ${t('freq')}`}
+                      value={task.freq}
+                      onChange={(e) => patchTask(task.id, { freq: e.target.value })}
+                    >
                       <option value="weekly">{t('freq_weekly')}</option>
                       <option value="daily">{t('freq_daily')}</option>
                     </select>
                     {task.freq === 'weekly' && (
                       <select
+                        aria-label={`${task.name || t('taskName')} · ${t('freq')} · ${WEEKDAYS[lang][task.dayOfWeek] ?? ''}`}
                         style={{ marginTop: 4 }}
                         value={task.dayOfWeek}
                         onChange={(e) => patchTask(task.id, { dayOfWeek: Number(e.target.value) })}
@@ -703,10 +722,20 @@ export default function Settings({ onLayout }) {
                     )}
                   </td>
                   <td>
-                    <input type="time" value={task.time} onChange={(e) => patchTask(task.id, { time: e.target.value })} />
+                    <input
+                      type="time"
+                      aria-label={`${task.name || t('taskName')} · ${t('time')}`}
+                      value={task.time}
+                      onChange={(e) => patchTask(task.id, { time: e.target.value })}
+                    />
                   </td>
                   <td>
-                    <input type="checkbox" checked={task.catchUp !== false} onChange={(e) => patchTask(task.id, { catchUp: e.target.checked })} />
+                    <input
+                      type="checkbox"
+                      aria-label={`${task.name || t('taskName')} · ${t('catchUp')}`}
+                      checked={task.catchUp !== false}
+                      onChange={(e) => patchTask(task.id, { catchUp: e.target.checked })}
+                    />
                   </td>
                   <td>
                     <button className="ghost tiny" onClick={() => api.runSchedule(task.id).then(loadSched)} disabled={busy}>
@@ -721,7 +750,7 @@ export default function Settings({ onLayout }) {
             })}
           </tbody>
         </table>
-        <button className="ghost" onClick={addTask} disabled={busy} style={{ marginTop: 8 }}>
+        <button className="ghost add-task" onClick={addTask} disabled={busy} style={{ marginTop: 8 }}>
           {t('addTask')}
         </button>
 

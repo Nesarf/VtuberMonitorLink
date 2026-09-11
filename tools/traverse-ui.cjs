@@ -211,6 +211,25 @@ async function main() {
     for (const section of ['浏览器', '网络代理', '定时', '界面']) {
       check('Settings has the ' + section + ' section', main.indexOf(section) !== -1);
     }
+    // a11y：任务行里的控件必须有无障碍名（BUGS #6 —— 以前只有表头，读屏读不出这一格是什么）
+    if ((await page.locator('section.tasks tbody tr').count()) === 0) {
+      // 用 class 钩子选按钮，别按文案 —— 换语言或改文案就断了
+      const add = page.locator('section.tasks button.add-task').first();
+      if (await add.count()) {
+        await add.click();
+        await page.waitForTimeout(900);
+      }
+    }
+    const ctl = page.locator('section.tasks input, section.tasks select');
+    const ctlCount = await ctl.count();
+    let named = 0;
+    for (let i = 0; i < ctlCount; i++) {
+      const el = ctl.nth(i);
+      const aria = await el.getAttribute('aria-label');
+      const wrapped = await el.evaluate((e) => !!(e.closest('label') || (e.id && document.querySelector('label[for="' + e.id + '"]'))));
+      if (aria || wrapped) named++;
+    }
+    check('every task-row control has an accessible name', ctlCount > 0 && named === ctlCount, named + '/' + ctlCount);
     // LLM 与 API Key 现在是独立页面，所以这些断言都搬到那边去做
     await tab('LLM').click();
     await page.waitForTimeout(900);

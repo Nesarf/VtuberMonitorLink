@@ -165,6 +165,10 @@ pre.report {
   background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
   padding: 16px; max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
+/* 每日情报的 .html 主文件：与在 VSCode 里打开的是同一个文件，这里原样预览 */
+.report-frame {
+  width: 100%; height: 62vh; border: 1px solid var(--border); border-radius: 8px; background: #fff;
+}
 .toast {
   position: fixed; right: 20px; bottom: 20px; background: var(--panel-2);
   border: 1px solid var(--border); border-left: 3px solid var(--accent);

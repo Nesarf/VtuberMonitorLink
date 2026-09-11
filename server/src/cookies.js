@@ -31,6 +31,20 @@ export function isSupported() {
   return process.platform === 'win32';
 }
 
+/** 临时文件根目录：配置过就用配置的，否则系统临时目录 */
+function tempRoot() {
+  const dir = String(process.env.VML_TEMP_DIR ?? '').trim();
+  if (dir) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    } catch {
+      // 配的目录不可写就退回系统临时目录，不要因为清理策略把功能弄挂
+    }
+  }
+  return os.tmpdir();
+}
+
 /** profileDir 可能是 userData 根，也可能直接是 Default，两种都认 */
 function resolveProfile(profileDir) {
   const dir = path.resolve(profileDir);
@@ -151,7 +165,9 @@ export async function readBrowserCookies(profileDir, domains) {
   const osCrypt = state?.os_crypt ?? {};
   const appBound = !!osCrypt.app_bound_encrypted_key;
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-cookies-'));
+  // cookie 库副本的落地目录：优先 VML_TEMP_DIR（由 index.js 从 config.paths.tempDir 写入，
+  // 用于守「不往 C 盘写临时文件」这类红线），没配就退回系统临时目录。
+  const tmpDir = fs.mkdtempSync(path.join(tempRoot(), 'vml-cookies-'));
   let rows = [];
   try {
     const copied = copyFamily(db, tmpDir);

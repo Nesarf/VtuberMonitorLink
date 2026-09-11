@@ -1038,6 +1038,41 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
+      {/* ── 每日情报的输出格式 / 落盘位置 ── */}
+      <section className="panel">
+        <h2>{t('outputTitle')}</h2>
+        <div className="hint">{t('outputHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('reportFormat')}</label>
+            <select value={cfg.reports?.format ?? 'html'} onChange={(e) => patch('reports.format', e.target.value)}>
+              <option value="html">html — {t('fmtHtml')}</option>
+              <option value="adoc">adoc — AsciiDoc</option>
+              <option value="md">md — Markdown</option>
+              <option value="json">json — {t('fmtJson')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '1 1 260px' }}>
+            <label>{t('tempDir')}</label>
+            <input
+              value={cfg.paths?.tempDir ?? ''}
+              placeholder={t('tempDirPh')}
+              onChange={(e) => patch('paths.tempDir', e.target.value)}
+            />
+          </div>
+          <div className="field" style={{ flex: '1 1 260px' }}>
+            <label>{t('browsersDir')}</label>
+            <input
+              value={cfg.paths?.browsersDir ?? ''}
+              placeholder={t('browsersDirPh')}
+              onChange={(e) => patch('paths.browsersDir', e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="hint">{t('tempDirHint')}</div>
+        <div className="hint">{t('browsersDirHint')}</div>
+      </section>
+
       <button className="primary" onClick={save} disabled={busy}>
         {busy ? t('saving') : t('save')}
       </button>

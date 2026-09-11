@@ -479,6 +479,19 @@ export const STRINGS = {
     privacyTitle: '隐私 / 无痕',
     privacyHint: '匿名模式下完全不使用登录态：不读浏览器 cookie、不复用 profile。准备发布或做无痕化处理时打开它。',
     anonymousMode: '匿名模式',
+    outputTitle: '输出格式与落盘位置',
+    outputHint:
+      '每日情报的主文件默认写成自带样式的 .html：VSCode 里打开即可预览，不需要装 Markdown 插件，纯文本编辑器也照样能读。无论选哪种格式，都会另存一份 .json 源（含原文），导出 Word/Excel、全文检索和逐次对比都基于它。',
+    reportFormat: '情报报告格式',
+    fmtHtml: '单文件网页（推荐，VSCode 可预览）',
+    fmtJson: '结构化数据',
+    tempDir: '临时文件目录',
+    tempDirPh: '留空 = 系统临时目录',
+    tempDirHint:
+      '读浏览器 cookie 时会先把 cookie 数据库复制到临时目录。不想写到系统盘（Windows 上即 C 盘的 %TEMP%）就指到别的盘，例如 E:\\YourCache\\tmp。',
+    browsersDir: '浏览器内核目录',
+    browsersDirPh: '留空 = 系统默认位置',
+    browsersDirHint: 'Playwright 浏览器内核的位置。Windows 默认在 %LOCALAPPDATA%（即 C 盘）；要守「不写 C 盘」的红线就指到别的盘。',
   },
   en: {
     appTitle: "Vtuber's Monitor Link",
@@ -940,6 +953,19 @@ export const STRINGS = {
     proxyModeTitle: 'Egress method',
     privacyTitle: 'Privacy / anon',
     privacyHint: 'Anonymous mode uses no login at all: no browser cookies are read and no profile is reused. Turn it on before publishing or when scrubbing.',
+    outputTitle: 'Output format & disk locations',
+    outputHint:
+      'The daily intel file defaults to self-styled .html: open it in VSCode and you get a rendered preview with no Markdown extension, and plain-text editors still read it fine. Whatever format you pick, a .json source (with the original text) is written alongside it, and Word/Excel export, full-text search and run-to-run diffs all read from that.',
+    reportFormat: 'Report format',
+    fmtHtml: 'single-file web page (recommended, previews in VSCode)',
+    fmtJson: 'structured data',
+    tempDir: 'Temp directory',
+    tempDirPh: 'empty = system temp dir',
+    tempDirHint:
+      'Reading browser cookies copies the cookie DB to a temp directory first. Point this elsewhere (e.g. E:\\YourCache\\tmp) if you do not want it written to the system drive (C:\\...\\Temp on Windows).',
+    browsersDir: 'Browser engines directory',
+    browsersDirPh: 'empty = platform default',
+    browsersDirHint: 'Where Playwright keeps browser engines. On Windows the default is under %LOCALAPPDATA% (the C drive); point it elsewhere to avoid writing to C:.',
     anonymousMode: 'Anonymous mode',
   },
 };

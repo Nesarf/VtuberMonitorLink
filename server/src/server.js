@@ -11,9 +11,11 @@ import { runOnce, runState, selectSources } from './runner.js';
 import {
   diffIntel,
   exportReport,
+  htmlShell,
   latestIntel,
   listReports,
   loadFlags,
+  markdownSource,
   previousIntel,
   readReport,
   searchReports,
@@ -757,10 +759,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // 纯 Node 手写 OOXML，不依赖 Office / COM / Python —— 便携 exe 不能假设目标机装了什么。
   app.get('/api/intel/export', (req, res) => {
     const cfg = getConfig();
-    const format = ['xlsx', 'docx', 'md'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
+    const format = ['xlsx', 'docx', 'md', 'html'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
     const data = latestIntel(cfg, Number(req.query.limit ?? 500));
     const items = applyFeatures(data.items ?? [], loadFeatureCache(cfg));
     const stamp = new Date().toISOString().slice(0, 10);
+    if (format === 'html') {
+      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.html"`);
+      return res.type('text/html; charset=utf-8').send(htmlShell(`情报集 ${stamp}`, itemsToMarkdown(items, { title: '情报集' })));
+    }
     if (format === 'md') {
       res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.md"`);
       return res.type('text/markdown; charset=utf-8').send(itemsToMarkdown(items, { title: '情报集' }));
@@ -964,18 +970,29 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const a = String(req.query.from ?? '');
     const b = String(req.query.to ?? '');
-    const left = a ? readReport(cfg, a) : null;
-    const right = b ? readReport(cfg, b) : null;
+    // 用 markdown 源做对比：报告主文件是 html/adoc/json 都能对齐
+    const left = a ? markdownSource(cfg, a) : null;
+    const right = b ? markdownSource(cfg, b) : null;
     if (left === null || right === null) return res.status(404).json({ error: 'one of the reports was not found' });
     const lines = diffLines(left, right);
     const stats = diffStats(lines);
     res.json({ from: a, to: b, stats, hunks: diffHunks(lines, 4) });
   });
 
+  // 报告主文件可能是 .html / .adoc / .md / .json，按扩展名给正确的 MIME，
+  // 前端就能直接把 .html 丢进 iframe 预览（VSCode 里也是同一种文件）。
+  const REPORT_MIME = {
+    html: 'text/html; charset=utf-8',
+    json: 'application/json; charset=utf-8',
+    md: 'text/markdown; charset=utf-8',
+    adoc: 'text/plain; charset=utf-8',
+  };
   app.get('/api/reports/:name', (req, res) => {
-    const md = readReport(getConfig(), req.params.name);
-    if (md === null) return res.status(404).json({ error: 'not found' });
-    res.type('text/markdown; charset=utf-8').send(md);
+    const name = String(req.params.name ?? '');
+    const body = readReport(getConfig(), name);
+    if (body === null) return res.status(404).json({ error: 'not found' });
+    const ext = path.extname(name).slice(1).toLowerCase();
+    res.type(REPORT_MIME[ext] ?? 'text/plain; charset=utf-8').send(body);
   });
 
   // ── JSON 错误兜底 / JSON error fallback ─────────────────────────

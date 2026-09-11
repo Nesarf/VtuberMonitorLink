@@ -14,8 +14,22 @@ import path from 'node:path';
 const PORT = Number(process.env.PORT ?? 43110);
 const HOST = '127.0.0.1';
 
+/**
+ * 把配置里的路径写进进程环境变量，供子模块/第三方库读取。
+ * - VML_TEMP_DIR：cookie 库副本等临时文件的落地目录（可避开 C 盘）
+ * - PLAYWRIGHT_BROWSERS_PATH：浏览器内核位置（默认在 Windows 上是 C 盘的 %LOCALAPPDATA%）
+ * 两个都留空时保持系统默认，便携发行版因此不会绑死任何机器路径。
+ */
+function applyPathEnv(c) {
+  const temp = String(c?.paths?.tempDir ?? '').trim();
+  if (temp) process.env.VML_TEMP_DIR = temp;
+  const browsers = String(c?.paths?.browsersDir ?? '').trim();
+  if (browsers) process.env.PLAYWRIGHT_BROWSERS_PATH = browsers;
+}
+
 let cfg = loadConfig();
 ensureDirs(cfg);
+applyPathEnv(cfg);
 // 启动即按配置应用代理（直连被阻断的环境必须显式走代理）
 await applyProxy(cfg);
 
@@ -61,6 +75,7 @@ const app = createApp({
   log,
   onConfigChanged: (next) => {
     ensureDirs(next);
+    applyPathEnv(next);
     applyProxy(next).catch(() => {}); // 代理配置变更后立即生效
     scheduler.start(next, runScheduled, log); // 配置变更后重排定时
   },

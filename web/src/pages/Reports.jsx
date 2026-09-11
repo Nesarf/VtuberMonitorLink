@@ -45,7 +45,20 @@ export default function Reports() {
     setCur(name);
     setContent(t('loading'));
     try {
-      setContent(await api.getReport(name));
+      const raw = await api.getReport(name);
+      // .json 源文件里存着 markdown 原文，取出来用站内渲染器显示；
+      // .html 报告直接用 iframe 预览（和 VSCode 里打开是同一个文件）。
+      if (/\.json$/i.test(name)) {
+        try {
+          const j = JSON.parse(raw);
+          const md = Array.isArray(j.runs) ? j.runs.map((r) => r.markdown).join('\n\n---\n\n') : (j.markdown ?? raw);
+          setContent(md);
+        } catch {
+          setContent(raw);
+        }
+      } else {
+        setContent(raw);
+      }
     } catch (e) {
       setContent(`❌ ${e.message}`);
     }
@@ -183,7 +196,20 @@ export default function Reports() {
               {raw ? t('rendered') : t('rawMarkdown')}
             </button>
           </h2>
-          {raw ? (
+          {/\.html$/i.test(cur) ? (
+            // 每日情报默认就是这种自带样式的 .html：渲染视图直接原样预览，
+            // 「原始」切到源码，两条路都能看。
+            raw ? (
+              <pre className="report">{content}</pre>
+            ) : (
+              <iframe
+                title={cur}
+                className="report-frame"
+                sandbox=""
+                src={`/api/reports/${encodeURIComponent(cur)}`}
+              />
+            )
+          ) : raw || /\.adoc$/i.test(cur) ? (
             <pre className="report">{content}</pre>
           ) : (
             <Markdown text={content} className="report-md" highlight={kw} />

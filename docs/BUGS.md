@@ -11,6 +11,9 @@
 
 | # | 现象 | 根因 | 状态 |
 | --- | --- | --- | --- |
+| 15 | 巡检断言「点开 .html 报告应出现 iframe 预览」总是失败，且点到的其实是 `.md` 那一行 | 用 Playwright `hasText: '.html'` 挑表格行 —— **每行「对比」下拉里都列着别的报告名**，于是 `.html` 的文件名在 `.md` 那一行的文本里也匹配上了 | **已修**（改成先取 `button.link` 的文本列表再按 `/\.html$/` 选名字；断言输出里带上 `clicked=… opened=…`，下次一眼就能看出挑错了行） |
+| 14 | `npm run build` 只跑了 vite，没出 exe；直接跑 `node npm-cli.js` 报 `Cannot find module` | `build` 脚本 = `vite build`，打包是独立的 `tools/build-portable.cjs`；而 `npm-cli.js` 不在仓库里（在 Node 安装目录下） | **已修**（打 exe 走 `node tools\build-portable.cjs`；这条写进 RELEASE.md 的流程） |
+| 13 | 打包时 `EBUSY: resource busy or locked, copyfile …VtuberMonitorLink.exe` | 正在运行的 app 锁住了 exe | **已修**（先停 app 再打包；脚本给出可操作提示，不再拿过滤后的输出把错误吞掉） |
 | 12 | `GET /api/client-log` 返回 500 | 新加的路由用了 `resolveDir` 但没 import（`server.js` 只 import 了 `APP_ROOT`） | **已修**（补 import；JSON 错误兜底把它变成 500 而不是崩进程） |
 | 11 | 设置页整个白屏 | 我在 `if (!cfg) return` **之后**加了 `useRef` → 首帧/后续帧 hook 数不一致 → React #310 卸掉整棵树。**同一类错误第二次犯** | **已修**（hook 全部提到早退之前；文件里注释写明踩过两次） |
 | 10 | 每次保存配置都排一次补跑；新建的任务立刻被判为「错过」并马上跑 | 补跑判断只看「上次执行 < 上一个应触发时间」：① 没历史 = 从未执行 ⇒ 一律当成错过；② `scheduler.start()` 在 `onConfigChanged` 里，每存一次配置就重排一次 | **已修**（三道闸门：必须跑过至少一次 / 同「任务+时间点」只补一次 / 只补 7 天内。验证：新任务 0 次、真错过 1 次、再存 10 次 0 次） |

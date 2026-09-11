@@ -332,15 +332,54 @@ async function main() {
     check('the source filter is populated from the data', opts > 1, opts + ' options');
 
     // --------------------------------------------------------------- reports
-    process.stdout.write('\n8. Reports: render, search, export\n');
+    process.stdout.write('\n8. Reports: preview, render, search, export\n');
+    // 每日情报默认改成 .html 了，但 Markdown 渲染路径不能因此坏掉：
+    // 放一份老式 .md 报告进去，两种格式都要能看。
+    const legacy = path.join(appDir, 'reports', 'legacy-sample.md');
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(
+      legacy,
+      '# 旧报告契约\n\n## 小节\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- 列表项\n\n[链接](https://example.com)\n',
+      'utf8',
+    );
     await tab('报告').click();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1200);
     const reportRows = await page.locator('main table.reportlist tbody tr').count();
     check('the run produced a report row', reportRows > 0, reportRows + ' rows');
-    await page.locator('main table.reportlist tbody tr button.link').first().click();
-    await page.waitForTimeout(1200);
+
+    // ① 默认格式：.html 主文件 → 页内 iframe 预览，内容真的渲染出来了
+    // 注意：不能用 hasText 挑行 —— 每行「对比」下拉里都有别的报告名，
+    // 会把 .html 的名字匹到 .md 那一行上去（踩过一次）。
+    const names = (await page.locator('main table.reportlist button.link').allInnerTexts()).map((s) => s.trim());
+    const htmlName = names.find((n) => /\.html$/i.test(n));
+    check('the daily report is a .html, not .md', !!htmlName, names.join(', '));
+    await page.locator('main table.reportlist button.link').filter({ hasText: htmlName }).first().click();
+    await page.waitForTimeout(1500);
+    const openedH2 = (await page.locator('main h2').first().innerText().catch(() => '?')).trim();
+    check(
+      'the .html report previews in an iframe, not as raw text',
+      (await page.locator('main iframe.report-frame').count()) > 0,
+      'clicked=' + htmlName + ' opened=' + openedH2,
+    );
+    const frame = page.frameLocator('main iframe.report-frame');
+    const fHead = await frame.locator('h1, h2, h3').count();
+    check('the preview really rendered (headings)', fHead > 0, fHead + ' headings');
+    const fTable = await frame.locator('table').count();
+    check('tables survive into the .html report', fTable > 0, fTable + ' table(s)');
+    const fLinks = await frame.locator('a').count();
+    check('links stay clickable in the .html report', fLinks > 0, fLinks + ' links');
+    await page.locator('main button', { hasText: '原始 Markdown' }).click();
+    await page.waitForTimeout(400);
+    check('the raw toggle shows the .html source', (await page.locator('main pre.report').count()) > 0);
+    await page.locator('main button', { hasText: '渲染视图' }).click();
+    await page.waitForTimeout(400);
+    check('and switching back restores the preview', (await page.locator('main iframe.report-frame').count()) > 0);
+
+    // ② 老式 .md 报告：站内 Markdown 渲染路径仍然可用
+    await page.locator('main table.reportlist tbody tr', { hasText: 'legacy-sample.md' }).first().locator('button.link').click();
+    await page.waitForTimeout(1000);
     const rendered = await page.locator('main .md').count();
-    check('the report renders as Markdown, not raw text', rendered > 0);
+    check('a legacy .md report still renders as Markdown', rendered > 0);
     const h2s = await page.locator('main .md h2').count();
     check('headings are rendered as real elements', h2s > 0, h2s + ' h2');
     const tables = await page.locator('main .md table').count();

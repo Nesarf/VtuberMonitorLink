@@ -140,6 +140,21 @@ export const DEFAULT_CONFIG = {
     feedsDir: 'feeds',
     logsDir: 'logs',
     watchDir: 'watch',
+    // 临时文件目录。留空 = 系统临时目录（对便携发行的通用默认）。
+    // 这台机器有「不往 C 盘写临时文件」的红线，所以本机配置会指到 E 盘。
+    // 使用者：读浏览器 cookie 库时的副本、以及需要落临时文件的抓取。
+    tempDir: '',
+    // Playwright 浏览器内核目录。留空 = Playwright 默认位置
+    // （Windows 上是 %LOCALAPPDATA%\ms-playwright，即 C 盘）。
+    // 守红线就指到 E 盘；启动时写进 PLAYWRIGHT_BROWSERS_PATH。
+    browsersDir: '',
+  },
+  reports: {
+    // 每日情报输出格式。默认 html：VSCode 直接预览，不需要 Markdown 插件。
+    // html = 自带样式的单文件网页 / adoc = AsciiDoc / md = 旧行为 / json = 结构化
+    format: 'html',
+    // 除主文件外始终写一份 .json 源（含 markdown 原文），供导出 Word / 检索 / 逐次对比
+    keepJsonSource: true,
   },
   sources: {
     // id -> { enabled: boolean, login: 'none'|'optional'|'required' }

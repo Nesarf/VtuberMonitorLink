@@ -352,7 +352,13 @@ export const STRINGS = {
     liveTitle: '开播监测与多屏观看',
     liveHint:
       '开播是最有时效性的情报 —— 比任何关键词都值得立刻知道。这里显示监测对象的开播状态，并可以直接把多个直播间铺成网格同时看（用 B 站官方内嵌播放器，不经过任何转发，也不涉及登录态）。注意「轮播」不是真开播，所以单独标出来。',
-    liveProbe: '测网络',
+    liveAddOther: '添加其他平台',
+    liveAddOtherHint:
+      '三家都实测可嵌：Twitch 的嵌入页 CSP 明确放行 127.0.0.1，YouTube 的 /embed/ 没有 frame-ancestors，bilibili 的 blanc 无限制。加进来之后和其它格子一样可混排。',
+    livePlatform: '平台',
+    liveId: '频道 / 房间 / 视频 ID',
+    liveProxyCaveat:
+      '带 * 的平台（Twitch / YouTube）需要你的**浏览器**本身能访问它们 —— 本机直连不通，所以浏览器要走系统代理，否则格子里会是一片空白或加载失败。bilibili 不需要。',    liveProbe: '测网络',
     liveQualityUnavailable: '码率 / 帧数：跨域嵌入播放器测不到（浏览器同源策略），不是没实现',
     liveQualityWhy:
       'YouTube / Twitch / B 站的官方嵌入播放器都跑在跨域 iframe 里，父页面拿不到它的 <video> 元素，因此 getVideoPlaybackQuality()、buffered、码率都读不到。要真测这些，必须把流地址拿过来自己播（bilibili 可由 getRoomPlayInfo 拿到，但只有真开播的房间才有；YouTube/Twitch 需要 yt-dlp 一类的工具来取流，有 ToS 与稳定性代价）。上面那一行「测网络」测的是网络层延迟与失败率，这一层是第三方页面能够诚实测量的。',    liveCheck: '检查开播状态',
@@ -776,7 +782,13 @@ export const STRINGS = {
     liveTitle: 'Live status and multi-screen',
     liveHint:
       'Going live is the most time-sensitive intel there is. This shows the live status of everything you monitor, and tiles several rooms into a grid (the official bilibili embed player - no relay, no login involved). Note that a rerun/carousel is NOT a real broadcast, so it is labelled separately.',
-    liveProbe: 'Probe network',
+    liveAddOther: 'Add another platform',
+    liveAddOtherHint:
+      'All three are embeddable - measured: Twitch explicitly allows 127.0.0.1 in its frame-ancestors CSP, YouTube /embed/ sends no frame-ancestors, and bilibili blanc is unrestricted. Added tiles mix freely with the rest.',
+    livePlatform: 'Platform',
+    liveId: 'Channel / room / video id',
+    liveProxyCaveat:
+      'Platforms marked * (Twitch / YouTube) need your BROWSER to be able to reach them. This machine cannot reach them directly, so the browser must go through the system proxy, otherwise the tile stays blank. bilibili needs no proxy.',    liveProbe: 'Probe network',
     liveQualityUnavailable: 'Bitrate / FPS: not measurable through a cross-origin embed (same-origin policy) - not unimplemented',
     liveQualityWhy:
       'The official YouTube / Twitch / bilibili embeds all run in a cross-origin iframe, so the parent page cannot reach their <video> element and therefore cannot read getVideoPlaybackQuality(), buffered, or the negotiated bitrate. Measuring those for real means playing the stream ourselves: bilibili exposes URLs via getRoomPlayInfo (but only for genuinely live rooms), while YouTube/Twitch need a yt-dlp-class tool, with ToS and stability costs. The probe button above measures network latency and failure rate, which is the layer a third-party page can measure honestly.',    liveCheck: 'Check live status',

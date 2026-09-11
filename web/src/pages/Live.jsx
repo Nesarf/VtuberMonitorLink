@@ -13,6 +13,40 @@ import { api } from '../api.js';
 const LS_KEY = 'vml-live-grid';
 const LS_COLS = 'vml-live-cols';
 
+/**
+ * 多屏格子的地址规则。三家都实测可嵌（2026-09-11）：
+ *   bilibili  live.bilibili.com/blanc/<roomId>      无 frame 限制
+ *   twitch    player.twitch.tv/?channel=&parent=    CSP frame-ancestors 明确放行 127.0.0.1
+ *   youtube   youtube.com/embed/...                 无 frame-ancestors
+ * Twitch 的 parent 必须等于**嵌入页的域名**，否则拒绝；本工具跑在 127.0.0.1，所以就是它。
+ */
+export const PLATFORMS = [
+  { id: 'bilibili', label: 'bilibili', hint: '直播间号，如 22637261', needsProxy: false },
+  { id: 'twitch', label: 'Twitch', hint: '频道名，如 neurosama', needsProxy: true },
+  { id: 'youtube', label: 'YouTube', hint: '频道 ID(UC…，取直播) 或视频 ID', needsProxy: true },
+];
+
+export function tileSrc(tile) {
+  const id = String(tile.id ?? '').trim();
+  if (tile.platform === 'twitch') {
+    return `https://player.twitch.tv/?channel=${encodeURIComponent(id)}&parent=127.0.0.1&muted=true&autoplay=true`;
+  }
+  if (tile.platform === 'youtube') {
+    // UC 开头是频道（用 live_stream 取当前直播），否则当成视频 ID
+    return id.startsWith('UC')
+      ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(id)}`
+      : `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
+  }
+  return `https://live.bilibili.com/blanc/${encodeURIComponent(id)}?hidePanel=1`;
+}
+
+export function tileUrl(tile) {
+  const id = String(tile.id ?? '').trim();
+  if (tile.platform === 'twitch') return `https://twitch.tv/${id}`;
+  if (tile.platform === 'youtube') return id.startsWith('UC') ? `https://www.youtube.com/channel/${id}/live` : `https://youtu.be/${id}`;
+  return `https://live.bilibili.com/${id}`;
+}
+
 function statusOf(s) {
   if (s === 1) return { key: 'live', label: '直播中', cls: 'badge required' };
   if (s === 2) return { key: 'round', label: '轮播', cls: 'badge optional' };
@@ -37,6 +71,9 @@ export default function Live() {
   const [roster, setRoster] = useState(null);
   const [net, setNet] = useState({});
   const [probing, setProbing] = useState('');
+  const [manualPlatform, setManualPlatform] = useState('twitch');
+  const [manualId, setManualId] = useState('');
+  const [manualLabel, setManualLabel] = useState('');
 
   useEffect(() => {
     localStorage.setItem(LS_KEY, JSON.stringify(grid));
@@ -63,17 +100,33 @@ export default function Live() {
   }, []);
 
   const all = useMemo(() => [...(data?.live ?? []), ...(data?.round ?? []), ...(data?.off ?? [])], [data]);
-  const inGrid = (roomId) => grid.some((g) => g.roomId === roomId);
+  const inGrid = (roomId) => grid.some((g) => g.platform === 'bilibili' && g.id === String(roomId));
   const addToGrid = (room) =>
-    setGrid((g) => (g.some((x) => x.roomId === room.roomId) ? g : [...g, { roomId: room.roomId, name: room.name || room.uname }]));
-  const removeFromGrid = (roomId) => setGrid((g) => g.filter((x) => x.roomId !== roomId));
+    setGrid((g) =>
+      g.some((x) => x.platform === 'bilibili' && x.id === String(room.roomId))
+        ? g
+        : [...g, { platform: 'bilibili', id: String(room.roomId), label: room.name || room.uname || String(room.roomId) }]
+    );
+  const removeFromGrid = (platform, id) => setGrid((g) => g.filter((x) => !(x.platform === platform && x.id === id)));
+
+  const addManual = () => {
+    const id = manualId.trim();
+    if (!id) return;
+    setGrid((g) =>
+      g.some((x) => x.platform === manualPlatform && x.id === id)
+        ? g
+        : [...g, { platform: manualPlatform, id, label: manualLabel.trim() || id }]
+    );
+    setManualId('');
+    setManualLabel('');
+  };
 
   const addAllLive = () => {
     const live = data?.live ?? [];
     if (!live.length) return setMsg(t('noLiveNow'));
     setGrid((g) => {
-      const have = new Set(g.map((x) => x.roomId));
-      return [...g, ...live.filter((x) => !have.has(x.roomId)).map((x) => ({ roomId: x.roomId, name: x.name || x.uname }))];
+      const have = new Set(g.filter((x) => x.platform === 'bilibili').map((x) => x.id));
+      return [...g, ...live.filter((x) => !have.has(String(x.roomId))).map((x) => ({ platform: 'bilibili', id: String(x.roomId), label: x.name || x.uname || String(x.roomId) }))];
     });
     setMsg(`${live.length} ${t('items')}`);
   };
@@ -175,24 +228,19 @@ export default function Live() {
           </h2>
           <div style={gridStyle}>
             {grid.map((g) => (
-              <div className="player" key={g.roomId}>
+              <div className="player" key={g.platform + ':' + g.id}>
                 <div className="player-head">
-                  <span>{g.name || g.roomId}</span>
+                  <span className="chip">{g.platform}</span>
+                  <span>{g.label || g.id}</span>
                   <span className="spacer" style={{ flex: 1 }} />
-                  <a href={`https://live.bilibili.com/${g.roomId}`} target="_blank" rel="noreferrer noopener" className="small">
+                  <a href={tileUrl(g)} target="_blank" rel="noreferrer noopener" className="small">
                     ↗
                   </a>
-                  <button className="ghost tiny" onClick={() => removeFromGrid(g.roomId)}>
+                  <button className="ghost tiny" onClick={() => removeFromGrid(g.platform, g.id)}>
                     ✕
                   </button>
                 </div>
-                <iframe
-                  src={`https://live.bilibili.com/blanc/${g.roomId}?hidePanel=1`}
-                  title={String(g.name || g.roomId)}
-                  allowFullScreen
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                />
+                <iframe src={tileSrc(g)} title={String(g.label || g.id)} allowFullScreen referrerPolicy="no-referrer" loading="lazy" />
               </div>
             ))}
           </div>
@@ -254,6 +302,44 @@ export default function Live() {
         })}
       </section>
       {all.length === 0 && <p className="muted">{t('liveNoTargets')}</p>}
+
+      {/* 手动添加其他平台的直播源 —— Twitch / YouTube 都实测可嵌（见 docs/LIVE.md） */}
+      <section className="panel">
+        <h2>{t('liveAddOther')}</h2>
+        <div className="hint">{t('liveAddOtherHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 150px' }}>
+            <label>{t('livePlatform')}</label>
+            <select value={manualPlatform} onChange={(e) => setManualPlatform(e.target.value)}>
+              {PLATFORMS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                  {p.needsProxy ? ' *' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>{t('liveId')}</label>
+            <input
+              value={manualId}
+              onChange={(e) => setManualId(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addManual()}
+              placeholder={PLATFORMS.find((p) => p.id === manualPlatform)?.hint ?? ''}
+            />
+          </div>
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('label')}</label>
+            <input value={manualLabel} onChange={(e) => setManualLabel(e.target.value)} placeholder="显示用的名字" />
+          </div>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <button className="primary" onClick={addManual} disabled={!manualId.trim()}>
+              {t('addToGrid')}
+            </button>
+          </div>
+        </div>
+        <div className="hint" style={{ margin: 0 }}>{t('liveProxyCaveat')}</div>
+      </section>
 
       <section className="panel">
         <h2>{t('liveFindUid')}</h2>

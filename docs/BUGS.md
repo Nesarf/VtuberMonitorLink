@@ -11,6 +11,8 @@
 
 | # | 现象 | 根因 | 状态 |
 | --- | --- | --- | --- |
+| 17 | 繁体界面出现「部分繁体 + 部分简体」混排（`情報 / 檢索 / 运行 / 监视`） | 简→繁靠**手写对照表**，而「简繁同形字」与「我漏掉的字」在表里无法区分：`运`/`监` 漏了 → 它们原样留在繁体界面里。586 个汉字里只有 203 个有映射 | **已修**（删掉整张手写表，改为构建期用 **OpenCC 词典**整份生成 `locales/generated.js`：`t`/`hk`/`twp` 三变体，3×447 条。生成器 `tools/i18n-hant.mjs` 带三道自检：① ASCII/占位符结构不许被改；② 差异率异常低＝词典没加载，报错；③ 单字复查「疑似漏转简体字」，未复核的直接让构建失败。`npm run verify` 会校验词条是否最新） |
+| 16 | 「自检」把命中的 API Key 原文打印到了终端 | `verify-release.cjs` 报告问题时回显了匹配到的整行 | **已修**（`redact()`：只报文件/行号/长度，输出 `"sk-…<35 chars redacted>"`。**自检的第一职责是不制造泄漏**） |
 | 15 | 巡检断言「点开 .html 报告应出现 iframe 预览」总是失败，且点到的其实是 `.md` 那一行 | 用 Playwright `hasText: '.html'` 挑表格行 —— **每行「对比」下拉里都列着别的报告名**，于是 `.html` 的文件名在 `.md` 那一行的文本里也匹配上了 | **已修**（改成先取 `button.link` 的文本列表再按 `/\.html$/` 选名字；断言输出里带上 `clicked=… opened=…`，下次一眼就能看出挑错了行） |
 | 14 | `npm run build` 只跑了 vite，没出 exe；直接跑 `node npm-cli.js` 报 `Cannot find module` | `build` 脚本 = `vite build`，打包是独立的 `tools/build-portable.cjs`；而 `npm-cli.js` 不在仓库里（在 Node 安装目录下） | **已修**（打 exe 走 `node tools\build-portable.cjs`；这条写进 RELEASE.md 的流程） |
 | 13 | 打包时 `EBUSY: resource busy or locked, copyfile …VtuberMonitorLink.exe` | 正在运行的 app 锁住了 exe | **已修**（先停 app 再打包；脚本给出可操作提示，不再拿过滤后的输出把错误吞掉） |

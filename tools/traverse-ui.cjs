@@ -204,8 +204,21 @@ async function main() {
     await langSel.selectOption('zh-TW');
     await page.waitForTimeout(400);
     const twTabs = await page.locator('nav.tabs button').allInnerTexts();
-    // 繁体变体暂时回落简体：简→繁对照表补全之前，宁可字形一致也不要混排（见 i18n.jsx 注释）
-    check('台湾正体在繁体表补全前保持一致字形', twTabs.join('|').indexOf('设置') !== -1, twTabs.join(' | '));
+    // 台湾正体走 OpenCC 的 twp 词典（字形 + 用词一起转）：設定/資訊/網路 这一套
+    check('台湾正体是繁体 + 台湾用词', twTabs.join('|').indexOf('設定') !== -1, twTabs.join(' | '));
+    check(
+      '台湾正体里没有漏转的简体字',
+      !/运行|监视|设置|报告|来源/.test(twTabs.join('|')),
+      twTabs.join(' | '),
+    );
+    await langSel.selectOption('zh-HK');
+    await page.waitForTimeout(400);
+    const hkTabs = await page.locator('nav.tabs button').allInnerTexts();
+    check('香港繁体同样是繁体', hkTabs.join('|').indexOf('設定') !== -1 || hkTabs.join('|').indexOf('設置') !== -1, hkTabs.join(' | '));
+    await langSel.selectOption('zh-Hant');
+    await page.waitForTimeout(400);
+    const hantTabs = await page.locator('nav.tabs button').allInnerTexts();
+    check('通用繁体可用', hantTabs.join('|').indexOf('情報') !== -1 || hantTabs.join('|').indexOf('資訊') !== -1, hantTabs.join(' | '));
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();

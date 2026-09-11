@@ -4,7 +4,8 @@
 // 其余 24 个地区在 locales/index.js 里**只写差异**，沿 chain 逐级回落。
 // 新增语言：往 LOCALES 加一行 + 写一份 dict，缺键自动落到 en-US，不会白屏。
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { LOCALES, byCode, negotiate, toHant, toTwTerms } from './locales/index.js';
+import { LOCALES, byCode, negotiate } from './locales/index.js';
+import { GENERATED } from './locales/generated.js';
 import { GB_SPELL, GB_STEMS, HAND } from './locales/overlays.js';
 
 /** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
@@ -1079,28 +1080,15 @@ export function I18nProvider({ children }) {
 
   const loc = byCode(lang) ?? byCode('en-US');
 
-  // 推导出来的整份地区词条（繁体 / 英式拼写），只算一次
-  //
-  // ⚠️ 繁体这里有个**已知缺陷，暂时关闭**：
-  //    简→繁靠一张手写对照表，而「不该变的字」和「我漏掉的字」在表里无法区分，
-  //    于是它安静地产出「部分繁体 + 部分简体」的混排界面 —— 比不转换更糟。
-  //    实测缺口：zh 词条 586 个汉字里只有 203 个有映射，其余 454 个既可能是同形字、
-  //    也可能是我漏的（运/监 就是漏的，所以「运行/监视」没转）。
-  //    在补全并加「覆盖率检查」之前：zh-Hant / zh-HK / zh-TW 一律回落简体，
-  //    保持**字形一致**（一致地简体 > 混着来）。繁体变体一旦表补齐就打开。
-  const HANT_READY = false;
-
+  // 推导出来的地区词条。繁体不再是运行期查表 —— 它由 tools/i18n-hant.mjs
+  // 在构建期用 OpenCC 词典整份生成（见 locales/generated.js）：
+  //   zh-Hant → t（通用）· zh-HK → hk（香港）· zh-TW → twp（台湾正体，含用词）
+  // 生成器带自检：ASCII/占位符结构不许被破坏、差异率异常要报错、
+  // 未复核的「疑似漏转简体字」直接让构建失败。
   const derived = useMemo(() => {
     const brit = convertDict(STRINGS.en, toBritish);
-    const hant = HANT_READY ? convertDict(STRINGS.zh, toHant) : null;
     return {
-      ...(hant
-        ? {
-            'zh-Hant': hant,
-            'zh-HK': hant, // 香港：字形转繁，用词保留
-            'zh-TW': convertDict(hant, toTwTerms), // 台湾：再套一层用词（档案/资料/预设…）
-          }
-        : {}),
+      ...GENERATED,
       'en-GB': brit,
       'en-AU': brit, // 澳洲跟随英式拼写
       'en-CA': brit, // 加拿大拼写英式为主

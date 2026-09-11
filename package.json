@@ -14,6 +14,8 @@
     "dev:server": "node server/src/index.js",
     "dev:web": "vite --config web/vite.config.js",
     "build": "vite build --config web/vite.config.js",
+    "i18n:hant": "node tools/i18n-hant.mjs",
+    "i18n:hant:check": "node tools/i18n-hant.mjs --check",
     "start": "node server/src/index.js",
     "smoke": "node server/scripts/smoke.mjs",
     "sanitize-check": "node server/scripts/sanitize-check.mjs",
@@ -22,13 +24,14 @@
     "paths": "node launcher/launch.cjs --paths",
     "build:exe": "node tools/build-portable.cjs",
     "build:portable": "node tools/build-portable.cjs --with-browsers",
-    "verify": "node tools/verify-release.cjs",
+    "verify": "node tools/i18n-hant.mjs --check && node tools/verify-release.cjs",
     "traverse": "node tools/traverse-release.cjs",
     "traverse:ui": "node tools/traverse-ui.cjs",
-    "release": "node tools/build-portable.cjs && node tools/verify-release.cjs && node tools/traverse-release.cjs && node tools/traverse-ui.cjs"
+    "release": "node tools/i18n-hant.mjs && node tools/build-portable.cjs && node tools/verify-release.cjs && node tools/traverse-release.cjs && node tools/traverse-ui.cjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "opencc-js": "^1.4.2",
     "postject": "^1.0.0-alpha.6"
   },
   "engines": {

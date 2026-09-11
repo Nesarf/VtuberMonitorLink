@@ -193,10 +193,10 @@ async function main() {
       await page.waitForTimeout(300);
     }
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('eight navigation tabs render', tabs.length === 8, tabs.join(' | '));
+    check('nine navigation tabs render', tabs.length === 9, tabs.join(' | '));
     check(
       'the Intel, Search, Live and Watch tabs are present',
-      ['情报', '检索', '直播', '监视'].every((x) => tabs.includes(x)),
+      ['情报', '检索', '直播', '监视', 'LLM'].every((x) => tabs.includes(x)),
       tabs.join(' | ')
     );
 
@@ -208,9 +208,15 @@ async function main() {
     await tab('设置').click();
     await page.waitForTimeout(700);
     let main = await mainText();
-    for (const section of ['浏览器', 'LLM 分析', '网络代理', '定时', '界面']) {
+    for (const section of ['浏览器', '网络代理', '定时', '界面']) {
       check('Settings has the ' + section + ' section', main.indexOf(section) !== -1);
     }
+    // LLM 与 API Key 现在是独立页面，所以这些断言都搬到那边去做
+    await tab('LLM').click();
+    await page.waitForTimeout(900);
+    const llmText = await mainText();
+    check('the LLM page renders on its own tab', llmText.indexOf('哪些功能需要它') !== -1 || llmText.indexOf('档位设置') !== -1, llmText.split('\n')[0]);
+    check('it says which features need an LLM', llmText.indexOf('需要') !== -1, 'needs table present');
     const keyInput = page.locator('main input[type=password]').first();
     check('the API key field is masked', (await keyInput.count()) > 0);
     const keyVal = (await keyInput.count()) > 0 ? await keyInput.inputValue() : '';
@@ -224,6 +230,9 @@ async function main() {
     }
     const modelOptions = await page.locator('#vml-models option').count();
     check('the model datalist is populated', modelOptions > 0, modelOptions + ' options');
+    await tab('设置').click();
+    await page.waitForTimeout(700);
+    main = await mainText();
     const providerOptions = await page.locator('main select').first().locator('option').count();
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);

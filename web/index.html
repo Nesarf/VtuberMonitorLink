@@ -4,6 +4,70 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vtuber's Monitor Link</title>
+    <!--
+      客户端错误信标 / client error beacon
+
+      为什么必须有它：React 抛 #310 这类错误时，整棵树会被卸掉、页面变白，
+      而**服务端完全看不到** —— 请求日志只记 HTTP，浏览器里的报错传不出来。
+      排查时只能靠人在旁边看着，这在「持续监测」里是不可接受的。
+      这里在任何模块加载之前先挂上监听：页面错误、未处理的 Promise、以及
+      控制台的 error 都发一条到 /api/client-log，落进服务端日志与
+      logs/client-errors.jsonl。
+      注意：只上报错误信息本身（含来源与行号），不上报任何用户数据。
+    -->
+    <script>
+      (function () {
+        var seen = {};
+        function send(kind, message, extra) {
+          try {
+            var key = kind + '|' + String(message).slice(0, 120);
+            // 同一个错误反复抛（比如渲染循环）只报一次，别把日志淹掉
+            if (seen[key]) return;
+            seen[key] = 1;
+            var payload = JSON.stringify({
+              kind: kind,
+              message: String(message).slice(0, 800),
+              source: (extra && extra.source) || null,
+              line: (extra && extra.line) || null,
+              col: (extra && extra.col) || null,
+              stack: (extra && extra.stack ? String(extra.stack).slice(0, 1200) : null),
+              href: location.pathname + location.hash,
+              ua: navigator.userAgent.slice(0, 120),
+              at: new Date().toISOString(),
+            });
+            if (navigator.sendBeacon) navigator.sendBeacon('/api/client-log', new Blob([payload], { type: 'application/json' }));
+            else fetch('/api/client-log', { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload, keepalive: true });
+          } catch (e) {
+            /* 上报本身失败就算了，绝不能因此再抛一个错 */
+          }
+        }
+        window.addEventListener('error', function (ev) {
+          if (ev && ev.target && ev.target.tagName && ev.target !== window) {
+            send('resource', ev.target.tagName + ' failed to load: ' + (ev.target.src || ev.target.href || ''));
+            return;
+          }
+          send('error', (ev && (ev.message || (ev.error && ev.error.message))) || 'unknown error', {
+            source: ev && ev.filename,
+            line: ev && ev.lineno,
+            col: ev && ev.colno,
+            stack: ev && ev.error && ev.error.stack,
+          });
+        }, true);
+        window.addEventListener('unhandledrejection', function (ev) {
+          var r = ev && ev.reason;
+          send('rejection', (r && (r.message || r)) || 'unhandled rejection', { stack: r && r.stack });
+        });
+        var origError = console.error;
+        console.error = function () {
+          try {
+            send('console', Array.prototype.map.call(arguments, function (a) {
+              return a && a.message ? a.message : String(a);
+            }).join(' ').slice(0, 400));
+          } catch (e) {}
+          return origError.apply(console, arguments);
+        };
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -2,7 +2,7 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { APP_ROOT } from './config.js';
+import { APP_ROOT, resolveDir } from './config.js';
 import { CATEGORIES, effectiveSources, sanitizeCustomSource } from './sources.js';
 import { FETCH_KINDS } from './fetchers/index.js';
 import { detectBrowsers } from './fetchers/browser.js';
@@ -851,6 +851,63 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   app.get('/api/danmaku/audit', (_req, res) => res.json({ entries: readAudit(getConfig(), 50) }));
+
+  // ── 客户端错误上报 / client error beacon ─────────────────────────
+  // 页面抛错时整棵树会被卸掉、页面变白，而服务端原本一无所知。
+  // 前端在 index.html 里就挂了监听，这里只负责落盘 + 进服务端日志。
+  app.post('/api/client-log', (req, res) => {
+    const cfg = getConfig();
+    const b = req.body ?? {};
+    const entry = {
+      at: b.at ?? new Date().toISOString(),
+      kind: String(b.kind ?? 'unknown').slice(0, 24),
+      message: String(b.message ?? '').slice(0, 800),
+      source: b.source ? String(b.source).slice(0, 200) : null,
+      line: b.line ?? null,
+      col: b.col ?? null,
+      stack: b.stack ? String(b.stack).slice(0, 1200) : null,
+      href: b.href ? String(b.href).slice(0, 200) : null,
+      ua: b.ua ? String(b.ua).slice(0, 160) : null,
+    };
+    try {
+      const f = path.join(resolveDir(cfg, 'logsDir'), 'client-errors.jsonl');
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.appendFileSync(f, JSON.stringify(entry) + '\n', 'utf8');
+    } catch {
+      /* 落盘失败也要继续 */
+    }
+    log?.warn(`前端错误 / client ${entry.kind}: ${entry.message}${entry.source ? ` @ ${entry.source}:${entry.line}` : ''}`);
+    res.json({ ok: true });
+  });
+
+  // 读取已记录的前端错误（给排查用）
+  app.get('/api/client-log', (_req, res) => {
+    const cfg = getConfig();
+    const f = path.join(resolveDir(cfg, 'logsDir'), 'client-errors.jsonl');
+    let entries = [];
+    try {
+      if (fs.existsSync(f)) {
+        entries = fs
+          .readFileSync(f, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .slice(-100)
+          .map((l) => {
+            try {
+              return JSON.parse(l);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean)
+          .reverse();
+      }
+    } catch {
+      /* ignore */
+    }
+    res.json({ count: entries.length, entries });
+  });
 
   // ── 人物档案 / entities ──────────────────────────────────────────
   // 把特征抽取出来的人名聚合成对象：他/她出现过哪些条目、什么游戏、哪些事件。

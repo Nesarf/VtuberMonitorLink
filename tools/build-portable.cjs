@@ -252,7 +252,20 @@ function main() {
     }    if (process.platform === 'darwin') {
       spawnSync('codesign', ['--sign', '-', stageExe], { stdio: 'inherit' });
     }
-    copyFile(stageExe, exeOut);
+    try {
+      copyFile(stageExe, exeOut);
+    } catch (err) {
+      // Windows 不允许覆盖正在运行的 exe。使用者（或刚才那个调试实例）还开着时
+      // 这里会抛 EBUSY —— 裸错误看不出所以然，所以翻译成人话再说。
+      if (err && err.code === 'EBUSY') {
+        throw new Error(
+          'exe 正在运行，无法覆盖 / the exe is currently running and cannot be replaced:\n    ' +
+            exeOut +
+            '\n  先关掉它再打包（或者用 --out 输出到别的目录）。'
+        );
+      }
+      throw err;
+    }
     if (process.platform !== 'win32') fs.chmodSync(exeOut, 0o755);
     log('  -> ' + exeOut + '  (' + Math.round(fs.statSync(exeOut).size / 1048576) + ' MB)');
   } else {

@@ -1,4 +1,6 @@
-// Settings.jsx — 设置页：浏览器 / LLM 多档位 / 代理 / 定时 / 界面
+// Settings.jsx — 设置页：浏览器 / 代理 / 定时 / 界面 / 计划任务 / 推送 / 排版 / 节点 / 导入导出 / 隐私
+// 注意：LLM 与 API Key 已单独拉出成独立页面（pages/Llm.jsx）—— 它埋在设置里时
+// 使用者根本找不到，档位为空更是连输入框都不渲染。
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -30,10 +32,6 @@ export default function Settings({ onLayout }) {
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
     api.getBrowsers().then((b) => setBrowsers(b.detected ?? [])).catch(() => {});
-    api
-      .getLlm()
-      .then((r) => setPresets(r.presets ?? []))
-      .catch(() => {});
     api.getSchedule().then(setSched).catch(() => {});
     api.getNotify().then(setNotifyInfo).catch(() => {});
   }, []);
@@ -466,121 +464,6 @@ export default function Settings({ onLayout }) {
             {loginMsg && <div className={loginOk ? 'hint ok-text' : 'hint warn-text'} style={{ margin: 0 }}>{loginMsg}</div>}
           </div>
         </div>
-      </section>
-
-      {/* ── LLM 多档位 ── */}
-      <section className="panel">
-        <h2>{t('llmTitle')}</h2>
-        <div className="hint">{t('llmHint')}</div>
-
-        {providers.length === 0 && <div className="hint">⚠ {t('llmNeedKey')}</div>}
-
-        {providers.length > 0 && (
-          <div className="row">
-            <div className="field" style={{ flex: '0 0 240px' }}>
-              <label>{t('llmActive')}</label>
-              <select value={activeId} onChange={(e) => patch('llm.activeId', e.target.value)}>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.model || '?'}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field" style={{ flex: '0 0 200px' }}>
-              <label>{t('llmAddProfile')}</label>
-              <div className="row" style={{ gap: 6 }}>
-                <select value={newPreset} onChange={(e) => setNewPreset(e.target.value)} style={{ flex: 1 }}>
-                  {presets.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <button className="ghost tiny" onClick={addProfile} disabled={busy}>
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {active && (
-          <>
-            <div className="row">
-              <div className="field">
-                <label>{t('baseUrl')}</label>
-                <input value={active.baseUrl} onChange={(e) => patchProvider('baseUrl', e.target.value)} />
-              </div>
-              <div className="field">
-                <label>{t('apiKey')}</label>
-                <div className="row" style={{ gap: 6 }}>
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={active.apiKey ?? ''}
-                    onChange={(e) => patchProvider('apiKey', e.target.value)}
-                    placeholder="sk-..."
-                    style={{ flex: 1 }}
-                  />
-                  <button className="ghost tiny" onClick={() => setShowKey((v) => !v)}>
-                    {showKey ? t('hideKey') : t('showKey')}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="row">
-              <div className="field">
-                <label>{t('model')}</label>
-                <input
-                  list="vml-models"
-                  value={active.model ?? ''}
-                  onChange={(e) => patchProvider('model', e.target.value)}
-                />
-                <datalist id="vml-models">
-                  {[...new Set([...(active.models ?? []), ...(((presets.find((p) => p.id === active.preset) ?? {}).models) ?? [])])].map(
-                    (m) => (
-                      <option key={m} value={m} />
-                    )
-                  )}
-                </datalist>
-              </div>
-              <div className="field" style={{ flex: '0 0 160px' }}>
-                <label>{t('reasoningEffort')}</label>
-                <select value={active.reasoningEffort ?? ''} onChange={(e) => patchProvider('reasoningEffort', e.target.value)}>
-                  <option value="">-</option>
-                  {['low', 'medium', 'high'].map((v) => (
-                    <option key={v} value={v}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field" style={{ flex: '0 0 150px' }}>
-                <label>{t('maxTokens')}</label>
-                <input
-                  type="number"
-                  value={active.maxTokens ?? 8192}
-                  onChange={(e) => patchProvider('maxTokens', Number(e.target.value))}
-                />
-              </div>
-            </div>
-            <div className="row">
-              <div className="field" style={{ flex: '0 0 auto' }}>
-                <button className="ghost" onClick={testLlm} disabled={busy}>
-                  {t('testLlm')}
-                </button>
-              </div>
-              <div className="field" style={{ flex: '0 0 auto' }}>
-                <button className="ghost" onClick={fetchModels} disabled={busy}>
-                  {t('llmFetchModels')}
-                </button>
-              </div>
-              <div className="field" style={{ flex: '0 0 auto' }}>
-                <button className="ghost danger" onClick={deleteProfile} disabled={busy || providers.length <= 1}>
-                  {t('llmDeleteProfile')}
-                </button>
-              </div>
-            </div>
-          </>
-        )}
       </section>
 
       {/* ── 代理 / Proxy ── */}

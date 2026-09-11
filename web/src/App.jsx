@@ -5,6 +5,7 @@ import { applyLayout } from './layout.js';
 import { api } from './api.js';
 import Intel from './pages/Intel.jsx';
 import Search from './pages/Search.jsx';
+import Llm from './pages/Llm.jsx';
 import Live from './pages/Live.jsx';
 import Run from './pages/Run.jsx';
 import Sources from './pages/Sources.jsx';
@@ -12,7 +13,7 @@ import Watch from './pages/Watch.jsx';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 
-const TABS = ['intel', 'search', 'live', 'run', 'sources', 'watch', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'live', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
 export default function App() {
   const { t, lang, setLang } = useI18n();
@@ -77,6 +78,7 @@ export default function App() {
     intel: t('tab_intel'),
     search: t('tab_search'),
     live: t('tab_live'),
+    llm: t('tab_llm'),
     run: t('tab_run'),
     sources: t('tab_sources'),
     watch: t('tab_watch'),
@@ -117,6 +119,7 @@ export default function App() {
         {tab === 'intel' && <Intel layout={layout} />}
         {tab === 'search' && <Search layout={layout} />}
         {tab === 'live' && <Live />}
+        {tab === 'llm' && <Llm />}
         {tab === 'run' && <Run />}
         {tab === 'sources' && <Sources />}
         {tab === 'watch' && <Watch />}

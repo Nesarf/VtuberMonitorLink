@@ -247,3 +247,54 @@ pre.diff {
 .hint.ok-text { color: var(--ok); }
 .hint.warn-text { color: var(--warn); }
 
+
+/* ── 排版变量：由 App 从 config.ui.layout 写到 :root ── */
+:root {
+  --vml-cols: auto;
+  --vml-gap: 12px;
+  --vml-fs: 14px;
+  --vml-pad: 14px;
+  --vml-accent: var(--accent);
+}
+
+/* ── 健康看板 ── */
+.board { margin: 10px 0 14px; }
+.board .summary { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.lat { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); margin-right: 6px; }
+.lat.ok { color: var(--ok); border-color: var(--ok); }
+.lat.warn { color: var(--warn); border-color: var(--warn); }
+.lat.bad { color: var(--err); border-color: var(--err); }
+.lat.stale { opacity: .55; }
+.problems { border-left: 3px solid var(--err); background: var(--del-bg); padding: 8px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 10px; }
+
+/* ── 站点缩略图 ── */
+.thumb { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); object-fit: cover; vertical-align: middle; flex: 0 0 auto; }
+.thumb.big { width: 100%; height: 96px; object-fit: cover; border-radius: 8px; margin-bottom: 6px; }
+.srcname { display: flex; align-items: center; gap: 8px; }
+
+/* ── 排版模式 ── */
+.cards { grid-template-columns: repeat(var(--vml-cols), minmax(0, 1fr)) !important; gap: var(--vml-gap) !important; }
+.cards, .layout-list, .layout-timeline { display: grid; }
+.layout-list { grid-template-columns: 1fr; gap: calc(var(--vml-gap) / 2); }
+.layout-timeline { grid-template-columns: 1fr; gap: 0; position: relative; padding-left: 18px; }
+.layout-timeline::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+.layout-timeline .card { position: relative; border: none; border-radius: 0; background: transparent; padding: 8px 0; }
+.layout-timeline .card::before { content: ''; position: absolute; left: -17px; top: 16px; width: 8px; height: 8px; border-radius: 50%; background: var(--vml-accent); }
+.layout-table .card { border-radius: 6px; }
+.layout-compact .card { padding: 8px 10px; gap: 4px; }
+.layout-compact .card p { font-size: 12.5px; }
+.layout-compact .thumbs img { width: 56px; height: 56px; }
+.card { border-left: 3px solid transparent; }
+.card.starred { border-left-color: var(--warn); background: linear-gradient(90deg, var(--mark-bg), transparent 40%); }
+.card .flagbar { display: flex; gap: 6px; align-items: center; }
+.card .flagbar button { background: transparent; border: none; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; color: var(--muted); }
+.card .flagbar button.on { color: var(--warn); }
+.card.unread h3, .card.unread p { font-weight: 500; }
+.io .row { align-items: center; }
+.tasks .row { align-items: flex-end; }
+.tasks table td { vertical-align: top; }
+.preview-list { margin: 4px 0 0; padding-left: 16px; font-size: 11px; color: var(--muted); }
+.advice-list { margin: 0; padding-left: 18px; font-size: 13px; }
+.advice-list li { margin-bottom: 6px; }
+.nodes { max-height: 320px; overflow: auto; }
+.nodes tr.best td { background: var(--add-bg); }

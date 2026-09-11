@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 
-export default function Settings() {
+export default function Settings({ onLayout }) {
   const { t, lang } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [browsers, setBrowsers] = useState([]);
@@ -15,6 +15,15 @@ export default function Settings() {
   const [domain, setDomain] = useState('bilibili.com');
   const [loginMsg, setLoginMsg] = useState('');
   const [loginOk, setLoginOk] = useState(false);
+  // 计划任务 / 通知 / 节点 / 导入导出
+  // 注意：所有 hook 必须排在下面那句 `if (!cfg) return` 之前 —— 否则首帧
+  // 与数据到齐后的帧 hook 数量不一致，React 会抛 #310 并把整棵树卸掉。
+  const [sched, setSched] = useState(null);
+  const [notifyInfo, setNotifyInfo] = useState(null);
+  const [nodes, setNodes] = useState(null);
+  const [nodeTestUrl, setNodeTestUrl] = useState('https://www.bilibili.com/');
+  const [nodeDelays, setNodeDelays] = useState(null);
+  const [newNotifyKind, setNewNotifyKind] = useState('bark');
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
@@ -23,6 +32,8 @@ export default function Settings() {
       .getLlm()
       .then((r) => setPresets(r.presets ?? []))
       .catch(() => {});
+    api.getSchedule().then(setSched).catch(() => {});
+    api.getNotify().then(setNotifyInfo).catch(() => {});
   }, []);
 
   if (!cfg) return <div className="panel">{t('loading')}</div>;
@@ -145,6 +156,166 @@ export default function Settings() {
     } catch (e) {
       setLoginOk(false);
       setLoginMsg(`❌ ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ── 计划任务 / 通知 / 节点 / 导入导出（handler 放这里，hook 已提到早退之前） ──
+  const loadSched = () => api.getSchedule().then(setSched).catch(() => {});
+  const loadNotify = () => api.getNotify().then(setNotifyInfo).catch(() => {});
+
+  const saveSchedule = async (tasks) => {
+    setBusy(true);
+    try {
+      await api.putConfig({ ...cfg, schedule: { ...cfg.schedule, tasks } });
+      await loadSched();
+      setMsg(t('saved'));
+      setTimeout(() => setMsg(''), 2000);
+    } catch (e) {
+      flash(e.message, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addTask = async () => {
+    const tasks = [
+      ...(cfg.schedule?.tasks ?? []),
+      {
+        id: `task-${Date.now().toString(36)}`,
+        name: `${t('taskMode_daily')} ${(cfg.schedule?.tasks?.length ?? 0) + 1}`,
+        enabled: true,
+        mode: 'daily',
+        freq: 'weekly',
+        dayOfWeek: 2,
+        time: '23:30',
+        catchUp: true,
+      },
+    ];
+    setCfg((c) => ({ ...c, schedule: { ...c.schedule, tasks } }));
+    await saveSchedule(tasks);
+  };
+
+  const patchTask = async (id, patch) => {
+    const tasks = (cfg.schedule?.tasks ?? []).map((x) => (x.id === id ? { ...x, ...patch } : x));
+    setCfg((c) => ({ ...c, schedule: { ...c.schedule, tasks } }));
+    await saveSchedule(tasks);
+  };
+
+  const removeTask = async (id) => {
+    const tasks = (cfg.schedule?.tasks ?? []).filter((x) => x.id !== id);
+    setCfg((c) => ({ ...c, schedule: { ...c.schedule, tasks } }));
+    await saveSchedule(tasks);
+  };
+
+  const addNotify = async () => {
+    setBusy(true);
+    try {
+      await api.putConfig(cfg);
+      await api.newNotify(newNotifyKind, {});
+      const fresh = await api.getConfig();
+      setCfg(fresh);
+      await loadNotify();
+      flash(t('saved'));
+    } catch (e) {
+      flash(e.message, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const patchNotify = (id, patch) => {
+    setCfg((c) => ({
+      ...c,
+      notify: { ...(c.notify ?? {}), targets: (c.notify?.targets ?? []).map((x) => (x.id === id ? { ...x, ...patch } : x)) },
+    }));
+  };
+
+  const removeNotify = (id) => {
+    setCfg((c) => ({
+      ...c,
+      notify: { ...(c.notify ?? {}), targets: (c.notify?.targets ?? []).filter((x) => x.id !== id) },
+    }));
+  };
+
+  const testNotify = async (target) => {
+    setBusy(true);
+    flash(t('testing'), 0);
+    try {
+      await api.putConfig(cfg);
+      const r = await api.testNotify(target);
+      flash(r.ok ? `✅ ${t('notifyTestOk')}` : `❌ ${r.result?.error ?? 'failed'}`, 0);
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detectNodes = async () => {
+    setBusy(true);
+    flash(t('detecting'), 0);
+    try {
+      const d = await api.proxyControl();
+      if (!d.ok) return flash(`❌ ${d.error ?? t('controlNotFound')}`, 0);
+      const n = await api.proxyNodes(d.url);
+      setNodes(n);
+      flash(`✅ ${t('controlFound')}: ${d.url}${d.version ? ` (${d.version})` : ''}`);
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const testNodes = async (group) => {
+    setBusy(true);
+    flash(t('probing'), 0);
+    try {
+      const r = await api.proxyNodeTest({
+        group: group.name,
+        nodes: group.nodes.map((n) => n.name),
+        url: nodeTestUrl,
+      });
+      setNodeDelays({ group: group.name, ...r });
+      flash(`${t('done')}: ${group.name}`);
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchNode = async (group, node) => {
+    setBusy(true);
+    try {
+      await api.proxyNodeSelect({ group, node });
+      flash(`✅ ${t('switched')}: ${node}`);
+      const d = await api.proxyControl();
+      if (d.ok) setNodes(await api.proxyNodes(d.url));
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const r = await api.importConfig(parsed.config ?? parsed);
+      setCfg(r.config);
+      applyTheme(r.config.ui?.theme);
+      onLayout?.(r.config.ui?.layout);
+      await loadNotify();
+      await loadSched();
+      flash(t('imported'));
+    } catch (e) {
+      flash(`❌ ${e.message}`, 0);
     } finally {
       setBusy(false);
     }
@@ -498,6 +669,406 @@ export default function Settings() {
               <option value="false">off</option>
             </select>
             <div className="hint" style={{ margin: 0 }}>{t('notifyHint')}</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 计划任务 ── */}
+      <section className="panel tasks">
+        <h2>{t('scheduleTasks')}</h2>
+        <div className="hint">{t('scheduleHint2')}</div>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 50 }}>{t('enabledCol')}</th>
+              <th>{t('taskName')}</th>
+              <th style={{ width: 130 }}>{t('taskMode')}</th>
+              <th style={{ width: 150 }}>{t('freq')}</th>
+              <th style={{ width: 100 }}>{t('time')}</th>
+              <th style={{ width: 90 }}>{t('catchUp')}</th>
+              <th style={{ width: 190 }}>{t('actions')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(cfg.schedule?.tasks ?? []).map((task) => {
+              const live = (sched?.tasks ?? []).find((x) => x.id === task.id);
+              return (
+                <tr key={task.id} className={task.enabled === false ? 'row-off' : ''}>
+                  <td>
+                    <input type="checkbox" checked={task.enabled !== false} onChange={(e) => patchTask(task.id, { enabled: e.target.checked })} />
+                  </td>
+                  <td>
+                    <input value={task.name} onChange={(e) => patchTask(task.id, { name: e.target.value })} />
+                    {live?.nextFire && (
+                      <div className="muted small">
+                        {t('nextFireAt')}: {new Date(live.nextFire).toLocaleString()}
+                        {live.lastFire ? ` · ${t('lastFire')}: ${new Date(live.lastFire).toLocaleString()}` : ''}
+                      </div>
+                    )}
+                    {live?.preview?.length ? (
+                      <ul className="preview-list">
+                        {live.preview.slice(0, 3).map((p, i) => (
+                          <li key={i}>{new Date(p).toLocaleString()}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </td>
+                  <td>
+                    <select value={task.mode} onChange={(e) => patchTask(task.id, { mode: e.target.value })}>
+                      <option value="daily">{t('taskMode_daily')}</option>
+                      <option value="merch">{t('taskMode_merch')}</option>
+                      <option value="watch">{t('taskMode_watch')}</option>
+                    </select>
+                  </td>
+                  <td>
+                    <select value={task.freq} onChange={(e) => patchTask(task.id, { freq: e.target.value })}>
+                      <option value="weekly">{t('freq_weekly')}</option>
+                      <option value="daily">{t('freq_daily')}</option>
+                    </select>
+                    {task.freq === 'weekly' && (
+                      <select
+                        style={{ marginTop: 4 }}
+                        value={task.dayOfWeek}
+                        onChange={(e) => patchTask(task.id, { dayOfWeek: Number(e.target.value) })}
+                      >
+                        {WEEKDAYS[lang].map((d, i) => (
+                          <option key={i} value={i}>{d}</option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td>
+                    <input type="time" value={task.time} onChange={(e) => patchTask(task.id, { time: e.target.value })} />
+                  </td>
+                  <td>
+                    <input type="checkbox" checked={task.catchUp !== false} onChange={(e) => patchTask(task.id, { catchUp: e.target.checked })} />
+                  </td>
+                  <td>
+                    <button className="ghost tiny" onClick={() => api.runSchedule(task.id).then(loadSched)} disabled={busy}>
+                      {t('taskRunNow')}
+                    </button>{' '}
+                    <button className="ghost tiny danger" onClick={() => removeTask(task.id)} disabled={busy}>
+                      {t('delete')}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <button className="ghost" onClick={addTask} disabled={busy} style={{ marginTop: 8 }}>
+          {t('addTask')}
+        </button>
+
+        <h3 style={{ fontSize: 13, marginTop: 18 }}>{t('historyTitle')}</h3>
+        {(sched?.history ?? []).length === 0 ? (
+          <p className="muted small">{t('noScheduleHistory')}</p>
+        ) : (
+          <ul className="muted small" style={{ paddingLeft: 18 }}>
+            {sched.history.slice(0, 10).map((h, i) => (
+              <li key={i}>
+                {new Date(h.at).toLocaleString()} · {h.name ?? h.taskId} · {h.mode ?? ''} {h.catchUp ? '（补跑）' : ''}{' '}
+                {h.ok ? '✅' : `❌ ${h.error ?? ''}`}
+                {h.items != null ? ` · ${h.items} 条` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* ── 告警推送 ── */}
+      <section className="panel">
+        <h2>{t('notifyTitle')}</h2>
+        <div className="hint">{t('notifyPanelHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 180px' }}>
+            <label>{t('addTarget')}</label>
+            <div className="row" style={{ gap: 6 }}>
+              <select value={newNotifyKind} onChange={(e) => setNewNotifyKind(e.target.value)} style={{ flex: 1 }}>
+                {(notifyInfo?.kinds ?? []).map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name}
+                  </option>
+                ))}
+              </select>
+              <button className="ghost tiny" onClick={addNotify} disabled={busy}>
+                +
+              </button>
+            </div>
+          </div>
+          <div className="field" style={{ flex: '0 0 180px' }}>
+            <label>{t('desktopNotify')}</label>
+            <select
+              value={String(cfg.notify?.desktop !== false)}
+              onChange={(e) => patch('notify.desktop', e.target.value === 'true')}
+            >
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          </div>
+        </div>
+
+        {(cfg.notify?.targets ?? []).length === 0 ? (
+          <p className="muted small">—</p>
+        ) : (
+          (cfg.notify?.targets ?? []).map((ntf) => {
+            const kind = (notifyInfo?.kinds ?? []).find((k) => k.id === ntf.kind);
+            return (
+              <div className="row" key={ntf.id} style={{ alignItems: 'flex-end' }}>
+                <div className="field" style={{ flex: '0 0 150px' }}>
+                  <label>{t('notifyKind')}</label>
+                  <input value={ntf.name ?? kind?.name ?? ntf.kind} onChange={(e) => patchNotify(ntf.id, { name: e.target.value })} />
+                </div>
+                {kind?.fields?.includes('key') && (
+                  <div className="field">
+                    <label>{ntf.kind === 'bark' ? 'Bark key' : 'SendKey'}</label>
+                    <input value={ntf.key ?? ''} onChange={(e) => patchNotify(ntf.id, { key: e.target.value })} />
+                  </div>
+                )}
+                {kind?.fields?.includes('server') && (
+                  <div className="field">
+                    <label>Server</label>
+                    <input value={ntf.server ?? ''} onChange={(e) => patchNotify(ntf.id, { server: e.target.value })} placeholder="https://api.day.app" />
+                  </div>
+                )}
+                {kind?.fields?.includes('token') && (
+                  <div className="field">
+                    <label>Bot Token</label>
+                    <input value={ntf.token ?? ''} onChange={(e) => patchNotify(ntf.id, { token: e.target.value })} />
+                  </div>
+                )}
+                {kind?.fields?.includes('chatId') && (
+                  <div className="field" style={{ flex: '0 0 140px' }}>
+                    <label>chat_id</label>
+                    <input value={ntf.chatId ?? ''} onChange={(e) => patchNotify(ntf.id, { chatId: e.target.value })} />
+                  </div>
+                )}
+                {kind?.fields?.includes('webhookUrl') && (
+                  <div className="field">
+                    <label>Webhook URL</label>
+                    <input value={ntf.webhookUrl ?? ''} onChange={(e) => patchNotify(ntf.id, { webhookUrl: e.target.value })} />
+                  </div>
+                )}
+                <div className="field" style={{ flex: '0 0 140px' }}>
+                  <label>{t('notifyOn')}</label>
+                  <select value={ntf.on ?? 'alerts'} onChange={(e) => patchNotify(ntf.id, { on: e.target.value })}>
+                    <option value="alerts">{t('on_alerts')}</option>
+                    <option value="always">{t('on_always')}</option>
+                    <option value="failures">{t('on_failures')}</option>
+                  </select>
+                </div>
+                <div className="field" style={{ flex: '0 0 auto' }}>
+                  <button className="ghost tiny" onClick={() => testNotify(ntf)} disabled={busy}>
+                    {t('testNotify')}
+                  </button>{' '}
+                  <button className="ghost tiny danger" onClick={() => removeNotify(ntf.id)} disabled={busy}>
+                    {t('delete')}
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </section>
+
+      {/* ── 排版 DIY ── */}
+      <section className="panel">
+        <h2>{t('layoutTitle')}</h2>
+        <div className="hint">{t('layoutHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 260px' }}>
+            <label>{t('layoutMode')}</label>
+            <select
+              value={cfg.ui?.layout?.mode ?? 'cards'}
+              onChange={(e) => {
+                patch('ui.layout.mode', e.target.value);
+                onLayout?.({ ...(cfg.ui?.layout ?? {}), mode: e.target.value });
+              }}
+            >
+              {['cards', 'list', 'compact', 'timeline', 'table'].map((m) => (
+                <option key={m} value={m}>
+                  {t(`layout_${m}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 130px' }}>
+            <label>{t('columns')}</label>
+            <select
+              value={String(cfg.ui?.layout?.columns ?? 'auto')}
+              onChange={(e) => {
+                const v = e.target.value === 'auto' ? 'auto' : Number(e.target.value);
+                patch('ui.layout.columns', v);
+                onLayout?.({ ...(cfg.ui?.layout ?? {}), columns: v });
+              }}
+            >
+              <option value="auto">{t('columns_auto')}</option>
+              {[1, 2, 3, 4].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 150px' }}>
+            <label>{t('density')}</label>
+            <select
+              value={cfg.ui?.layout?.density ?? 'comfortable'}
+              onChange={(e) => {
+                patch('ui.layout.density', e.target.value);
+                onLayout?.({ ...(cfg.ui?.layout ?? {}), density: e.target.value });
+              }}
+            >
+              <option value="comfortable">{t('density_comfortable')}</option>
+              <option value="compact">{t('density_compact')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 180px' }}>
+            <label>{t('fontScale')}</label>
+            <input
+              type="range"
+              min="0.85"
+              max="1.35"
+              step="0.05"
+              value={cfg.ui?.layout?.fontScale ?? 1}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                patch('ui.layout.fontScale', v);
+                onLayout?.({ ...(cfg.ui?.layout ?? {}), fontScale: v });
+              }}
+            />
+          </div>
+          <div className="field" style={{ flex: '0 0 120px' }}>
+            <label>{t('accent')}</label>
+            <input
+              value={cfg.ui?.layout?.accent ?? ''}
+              placeholder="#5b8cff"
+              onChange={(e) => {
+                patch('ui.layout.accent', e.target.value);
+                onLayout?.({ ...(cfg.ui?.layout ?? {}), accent: e.target.value });
+              }}
+            />
+          </div>
+        </div>
+        <div className="row">
+          {['showThumbs', 'showStats', 'showTime', 'showSource'].map((k) => (
+            <div className="field" style={{ flex: '0 0 150px' }} key={k}>
+              <label>{t(k)}</label>
+              <select
+                value={String(cfg.ui?.layout?.[k] !== false)}
+                onChange={(e) => {
+                  const v = e.target.value === 'true';
+                  patch(`ui.layout.${k}`, v);
+                  onLayout?.({ ...(cfg.ui?.layout ?? {}), [k]: v });
+                }}
+              >
+                <option value="true">on</option>
+                <option value="false">off</option>
+              </select>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 代理节点 ── */}
+      <section className="panel">
+        <h2>{t('nodesTitle')}</h2>
+        <div className="hint">{t('nodesHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <button className="ghost" onClick={detectNodes} disabled={busy}>
+              {t('detectControl')}
+            </button>
+          </div>
+          <div className="field">
+            <label>{t('testAgainst')}</label>
+            <input value={nodeTestUrl} onChange={(e) => setNodeTestUrl(e.target.value)} />
+          </div>
+        </div>
+        {(nodes?.groups ?? []).map((g) => (
+          <div key={g.name} style={{ marginTop: 10 }}>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <b>{g.name}</b>
+              <span className="muted small">
+                {t('currentNode')}: {g.now ?? '-'} · {g.nodes.length} nodes
+              </span>
+              <button className="ghost tiny" onClick={() => testNodes(g)} disabled={busy}>
+                {t('probe')}
+              </button>
+            </div>
+            <div className="nodes">
+              <table>
+                <tbody>
+                  {g.nodes.map((n) => {
+                    const d = nodeDelays?.group === g.name ? (nodeDelays.results ?? []).find((r) => r.node === n.name) : null;
+                    const best = nodeDelays?.group === g.name && (nodeDelays.results ?? [])[0]?.node === n.name;
+                    return (
+                      <tr key={n.name} className={best ? 'best' : ''}>
+                        <td>
+                          {n.name} {n.name === g.now ? <span className="badge none">now</span> : null}
+                        </td>
+                        <td className="muted small" style={{ width: 120 }}>
+                          {d ? (d.ok ? `${d.delay} ms` : `✕ ${d.error ?? ''}`.slice(0, 40)) : n.lastDelay ? `${n.lastDelay} ms` : '—'}
+                        </td>
+                        <td style={{ width: 90 }}>
+                          <button className="ghost tiny" onClick={() => switchNode(g.name, n.name)} disabled={busy || n.name === g.now}>
+                            {t('switchTo')}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+        {nodes && !(nodes.groups ?? []).length && <p className="muted small">{t('controlNotFound')}</p>}
+      </section>
+
+      {/* ── 配置导入导出 ── */}
+      <section className="panel io">
+        <h2>{t('ioTitle')}</h2>
+        <div className="hint">{t('ioHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <a className="ghost" href={api.exportConfigUrl(false)}>
+              {t('exportNoSecrets')}
+            </a>
+          </div>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <a className="ghost danger" href={api.exportConfigUrl(true)}>
+              {t('exportWithSecrets')}
+            </a>
+          </div>
+          <div className="field">
+            <label>{t('importConfig')}</label>
+            <input type="file" accept="application/json,.json" onChange={(e) => importFile(e.target.files?.[0])} />
+            <div className="hint" style={{ margin: 0 }}>{t('importHint')}</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 隐私 / 无痕 ── */}
+      <section className="panel">
+        <h2>{t('privacyTitle')}</h2>
+        <div className="hint">{t('privacyHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 160px' }}>
+            <label>{t('anonymousMode')}</label>
+            <select value={String(cfg.privacy?.anonymousMode === true)} onChange={(e) => patch('privacy.anonymousMode', e.target.value === 'true')}>
+              <option value="false">off</option>
+              <option value="true">on</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>Referer / Origin</label>
+            <select value={String(cfg.privacy?.sendReferer !== false)} onChange={(e) => patch('privacy.sendReferer', e.target.value === 'true')}>
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 180px' }}>
+            <label>{t('probeTtl')}</label>
+            <input type="number" value={cfg.ui?.probeTtlMinutes ?? 30} onChange={(e) => patch('ui.probeTtlMinutes', Number(e.target.value))} />
           </div>
         </div>
       </section>

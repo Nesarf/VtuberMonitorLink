@@ -8,10 +8,29 @@ import { FETCH_KINDS } from './fetchers/index.js';
 import { detectBrowsers } from './fetchers/browser.js';
 import { makeProxyAgent } from './net.js';
 import { runOnce, runState, selectSources } from './runner.js';
-import { exportReport, latestIntel, listReports, readReport, searchReports } from './reports.js';
+import {
+  diffIntel,
+  exportReport,
+  latestIntel,
+  listReports,
+  loadFlags,
+  previousIntel,
+  readReport,
+  searchReports,
+  setFlag,
+} from './reports.js';
+import { diffHunks, diffLines, diffStats } from './diff.js';
 import { preflight } from './analyze.js';
 import { PRESETS, activeProvider, newProvider, listModels } from './llm.js';
 import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
+import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
+import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
+import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
+import { chatRequest } from './llm.js';
+import { netFetch } from './net.js';
+import { NOTIFY_KINDS, maskTarget, newTarget, notify, sanitizeTarget as sanitizeNotifyTarget } from './notify.js';
+import * as proxyctl from './proxyctl.js';
+import { getThumbnail, listThumbs, readThumb } from './thumbs.js';
 import * as scheduler from './scheduler.js';
 
 export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
@@ -270,16 +289,54 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(await preflight(getConfig()));
   });
 
+  // ── 自定义来源自检 / diagnostics for a user-added source ─────────
+  // 连通正常就不产出任何文件；只有明显异常才生成一份人可读的诊断 markdown。
+  app.post('/api/sources/:id/diagnose', async (req, res) => {
+    const cfg = getConfig();
+    const source = effectiveSources(cfg).find((s) => s.id === req.params.id);
+    if (!source) return res.status(404).json({ error: `unknown source: ${req.params.id}` });
+    try {
+      const r = await diagnoseSource(source, cfg, log);
+      res.json({ ok: true, sourceId: source.id, ...r });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/advice', (_req, res) => res.json({ files: listAdvice(getConfig()) }));
+
+  // 点开就是一份可读网页（?raw=1 拿原始 markdown）
+  app.get('/api/advice/:file', (req, res) => {
+    const raw = req.query.raw === '1';
+    const got = readAdvice(getConfig(), req.params.file, !raw);
+    if (!got) return res.status(404).json({ error: 'not found' });
+    res.type(got.mime).send(raw ? got.markdown : got.html);
+  });
+
+  app.delete('/api/advice/:file', (req, res) => {
+    const cfg = getConfig();
+    const p = path.join(adviceDir(cfg), path.basename(req.params.file));
+    try {
+      fs.rmSync(p, { force: true });
+    } catch {
+      /* ignore */
+    }
+    res.json({ ok: true, removed: path.basename(req.params.file) });
+  });
+
   // ── 情报条目 / intel items ───────────────────────────────────────
   app.get('/api/intel', (req, res) => {
     const cfg = getConfig();
     const data = latestIntel(cfg, Number(req.query.limit ?? 400));
+    const flags = loadFlags(cfg);
     const source = String(req.query.source ?? '').trim();
     const q = String(req.query.q ?? '').trim().toLowerCase();
     const onlyAlerts = req.query.alerts === '1';
-    let items = data.items ?? [];
+    let items = (data.items ?? []).map((i) => ({ ...i, flag: flags[i.id] ?? null }));
     if (source) items = items.filter((i) => i.sourceId === source);
     if (onlyAlerts) items = items.filter((i) => i.keywords?.length);
+    if (req.query.starred === '1') items = items.filter((i) => i.flag?.starred);
+    if (req.query.unread === '1') items = items.filter((i) => !i.flag?.read);
     if (q) items = items.filter((i) => `${i.title ?? ''} ${i.text ?? ''}`.toLowerCase().includes(q));
     res.json({
       generatedAt: data.generatedAt ?? null,
@@ -289,8 +346,366 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       total: (data.items ?? []).length,
       count: items.length,
       runs: data.runs ?? [],
+      starred: (data.items ?? []).filter((i) => flags[i.id]?.starred).length,
       items,
     });
+  });
+
+  // 星标 / 已读
+  app.patch('/api/intel/:id', (req, res) => {
+    const cfg = getConfig();
+    const { starred, read, note } = req.body ?? {};
+    const flag = setFlag(cfg, req.params.id, {
+      ...(starred === undefined ? {} : { starred: !!starred }),
+      ...(read === undefined ? {} : { read: !!read }),
+      ...(note === undefined ? {} : { note: String(note).slice(0, 500) }),
+    });
+    res.json({ ok: true, id: req.params.id, flag });
+  });
+
+  // 本次 vs 上次
+  app.get('/api/intel/diff', (_req, res) => res.json(diffIntel(getConfig())));
+
+  // ── 连通性探测 / reachability ────────────────────────────────────
+  app.get('/api/probe', (_req, res) => {
+    const cfg = getConfig();
+    res.json({ cache: loadCache(cfg), ttlMinutes: cfg.ui?.probeTtlMinutes ?? 30 });
+  });
+
+  app.post('/api/probe', async (req, res) => {
+    const cfg = getConfig();
+    const samples = Math.max(1, Math.min(10, Number(req.body?.samples) || cfg.ui?.probeSamples || DEFAULT_SAMPLES));
+    const modes = Array.isArray(req.body?.modes) && req.body.modes.length ? req.body.modes : ['direct', 'proxy'];
+    const ids = Array.isArray(req.body?.ids) && req.body.ids.length ? req.body.ids : req.body?.id ? [req.body.id] : null;
+    const oneUrl = String(req.body?.url ?? '').trim();
+
+    const targets = [];
+    if (oneUrl) {
+      targets.push({ id: oneUrl, url: oneUrl, label: oneUrl });
+    } else {
+      const all = effectiveSources(cfg);
+      const picked = ids ? all.filter((s) => ids.includes(s.id)) : all.filter((s) => s.enabled);
+      for (const s of picked) if (s.url) targets.push({ id: s.id, url: s.url, label: s.name?.zh ?? s.id, source: s });
+    }
+    if (!targets.length) return res.status(400).json({ error: '没有可测的目标 / nothing to probe' });
+    if (targets.length > 40) targets.length = 40;
+
+    const out = [];
+    for (const t of targets) {
+      try {
+        const r = await probeUrl(t.url, { cfg, samples, modes });
+        out.push({ id: t.id, label: t.label, sourceId: t.source?.id ?? null, ...r });
+      } catch (e) {
+        out.push({ id: t.id, label: t.label, url: t.url, error: e.message, at: new Date().toISOString() });
+      }
+    }
+    updateCache(cfg, out);
+    res.json({ ok: true, probed: out.length, samples, results: out });
+  });
+
+  // ── 站点健康看板 / source health board ───────────────────────────
+  app.get('/api/health', (_req, res) => {
+    const cfg = getConfig();
+    const cache = loadCache(cfg);
+    const ttl = cfg.ui?.probeTtlMinutes ?? 30;
+    const intel = latestIntel(cfg, 1);
+    const lastRun = new Map((intel.sources ?? []).map((s) => [s.id, s]));
+    const sources = effectiveSources(cfg)
+      .filter((s) => s.enabled)
+      .map((s) => {
+        const p = cache[s.id];
+        const run = lastRun.get(s.id);
+        return {
+          id: s.id,
+          label: s.name?.zh ?? s.id,
+          category: s.category,
+          url: s.url,
+          egress: s.proxy ?? (cfg.proxy?.enabled ? 'proxy' : 'direct'),
+          direct: p?.modes?.direct ?? null,
+          proxy: p?.modes?.proxy ?? null,
+          verdict: p?.verdict ?? null,
+          hint: p?.hint ?? null,
+          probeAt: p?.at ?? null,
+          probeFresh: isFresh(p, ttl),
+          lastRunOk: run ? run.ok : null,
+          lastRunBytes: run?.bytes ?? null,
+        };
+      });
+    const problems = sources.filter(
+      (s) => (!s.probeAt || s.probeFresh === false) === false && (s.verdict === 'none' || s.lastRunOk === false)
+    );
+    res.json({
+      at: new Date().toISOString(),
+      probed: sources.filter((s) => s.probeAt).length,
+      total: sources.length,
+      problems,
+      sources,
+    });
+  });
+
+  // ── 站点缩略图 / site thumbnails ─────────────────────────────────
+  app.get('/api/thumb', async (req, res) => {
+    const cfg = getConfig();
+    const url = String(req.query.url ?? '').trim();
+    if (!url) return res.status(400).json({ error: 'url is required' });
+    const source = effectiveSources(cfg).find((s) => s.id === req.query.sourceId);
+    const mode = req.query.mode === 'screenshot' ? 'screenshot' : req.query.mode === 'icon' ? 'icon' : 'auto';
+    const r = await getThumbnail(url, {
+      cfg,
+      subject: source,
+      refresh: req.query.refresh === '1',
+      mode,
+      log,
+    });
+    if (req.query.json === '1') return res.json(r);
+    // 「这个站没有可用的缩略图」是正常结果，不是错误 —— 别用 404 让前端把它当请求失败
+    if (!r.ok) return res.json({ ok: false, error: r.error, site: url });
+    res.json({ ok: true, ...r, image: `/api/thumb/file/${encodeURIComponent(r.file)}` });
+  });
+
+  app.get('/api/thumb/file/:file', (req, res) => {
+    const got = readThumb(getConfig(), req.params.file);
+    if (!got) return res.status(404).json({ error: 'not found' });
+    res.setHeader('cache-control', 'public, max-age=86400');
+    res.type(got.type).send(got.buf);
+  });
+
+  app.get('/api/thumb/list', (_req, res) => {
+    const cfg = getConfig();
+    res.json({ dir: 'thumbs/', files: listThumbs(cfg) });
+  });
+
+  // ── 计划任务 / schedules ─────────────────────────────────────────
+  app.get('/api/schedule', (_req, res) => {
+    const cfg = getConfig();
+    const tasks = (cfg.schedule?.tasks ?? []).map((t) => ({
+      ...t,
+      nextFire: scheduler.computeTaskNextFire(t)?.toISOString() ?? null,
+      preview: scheduler.previewTask(t, 5),
+      lastFire: scheduler.readHistory(cfg, 200).find((h) => h.taskId === t.id)?.at ?? null,
+    }));
+    res.json({
+      tasks,
+      nextFire: scheduler.nextFire(),
+      running: scheduler.runningTasks(),
+      history: scheduler.readHistory(cfg, 30),
+      merchEveryDays: cfg.schedule?.merchEveryDays ?? 14,
+    });
+  });
+
+  app.post('/api/schedule/run', async (req, res) => {
+    const cfg = getConfig();
+    const id = String(req.body?.id ?? '');
+    const task = (cfg.schedule?.tasks ?? []).find((t) => t.id === id);
+    if (!task) return res.status(404).json({ error: `unknown task: ${id}` });
+    if (runState.running) return res.status(409).json({ error: 'a run is already in progress' });
+    res.json({ ok: true, started: task.mode, task: task.id });
+    runOnce({ cfg: getConfig(), mode: task.mode })
+      .then((r) => scheduler.appendHistory(cfg, { taskId: task.id, name: task.name, manual: true, ok: !!r?.ok, error: r?.error ?? null }))
+      .catch((e) => log?.error(`manual scheduled run failed — ${e.message}`));
+  });
+
+  // ── 通知推送 / alert destinations ────────────────────────────────
+  app.get('/api/notify', (_req, res) => {
+    const cfg = getConfig();
+    res.json({
+      kinds: NOTIFY_KINDS,
+      desktop: cfg.notify?.desktop !== false,
+      targets: (cfg.notify?.targets ?? []).map(maskTarget),
+      count: (cfg.notify?.targets ?? []).length,
+    });
+  });
+
+  app.post('/api/notify/new', (req, res) => {
+    const cfg = getConfig();
+    const t = newTarget(req.body?.kind ?? 'bark', req.body?.overrides ?? {});
+    cfg.notify = cfg.notify ?? {};
+    cfg.notify.targets = [...(cfg.notify.targets ?? []), t];
+    setConfig(cfg);
+    res.json({ ok: true, target: maskTarget(t) });
+  });
+
+  // 用「尚未保存的目标」试推一条
+  app.post('/api/notify/test', async (req, res) => {
+    const cfg = getConfig();
+    const wanted = sanitizeNotifyTarget(req.body?.target ?? {}, 0);
+    const saved = (cfg.notify?.targets ?? []).find((t) => t.id === wanted.id);
+    // 前端回传的是掩码，别拿 *** 去发
+    const merged = { ...(saved ?? {}), ...wanted, enabled: true, on: 'always' };
+    for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
+      if (!wanted[k] || /\*\*\*/.test(String(wanted[k]))) merged[k] = saved?.[k] ?? wanted[k] ?? '';
+    }
+    const r = await notify({ ...cfg, notify: { targets: [merged] } }, log, {
+      title: "Vtuber's Monitor Link 测试通知",
+      body: '这条是测试消息。看到它就说明推送通道是通的。',
+      level: 'info',
+    });
+    res.json({ ok: r.results[0]?.ok === true, result: r.results[0] ?? null });
+  });
+
+  // ── 代理内核控制 / proxy control (mihomo / Clash) ─────────────────
+  app.get('/api/proxy/control', async (_req, res) => {
+    const cfg = getConfig();
+    const d = await proxyctl.detectControl(cfg);
+    res.json(d);
+  });
+
+  app.get('/api/proxy/nodes', async (req, res) => {
+    const cfg = getConfig();
+    const control = String(req.query.control ?? '').trim() || undefined;
+    try {
+      const r = await proxyctl.listGroups(cfg, control);
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, hint: '需要在内核配置里打开 external-controller' });
+    }
+  });
+
+  // 每个节点到**某个具体站点**的延迟 —— 「按站点挑最快节点」就靠这个
+  app.post('/api/proxy/nodes/test', async (req, res) => {
+    const cfg = getConfig();
+    const { group, nodes, url, timeout } = req.body ?? {};
+    if (!group || !Array.isArray(nodes) || !nodes.length) return res.status(400).json({ error: 'group and nodes are required' });
+    try {
+      const r = await proxyctl.groupDelaysFor(cfg, req.body?.control, group, nodes, url, Number(timeout) || 5000);
+      res.json({ ok: true, ...r });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/proxy/node', async (req, res) => {
+    const cfg = getConfig();
+    const { group, node } = req.body ?? {};
+    if (!group || !node) return res.status(400).json({ error: 'group and node are required' });
+    try {
+      res.json(await proxyctl.selectNode(cfg, req.body?.control, group, node));
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── 配置导入导出 / config import & export ────────────────────────
+  app.get('/api/config/export', (req, res) => {
+    const cfg = getConfig();
+    const withSecrets = req.query.secrets === '1';
+    const clone = JSON.parse(JSON.stringify(cfg));
+    if (!withSecrets) {
+      for (const p of clone.llm?.providers ?? []) p.apiKey = '';
+      for (const t of clone.watch?.targets ?? []) if (t.botPassword) t.botPassword = '';
+      for (const t of clone.notify?.targets ?? []) {
+        for (const k of ['key', 'token', 'chatId', 'webhookUrl']) if (t[k]) t[k] = '';
+      }
+    }
+    const body = JSON.stringify(
+      { app: "Vtuber's Monitor Link", version: 2, exportedAt: new Date().toISOString(), secrets: withSecrets, config: clone },
+      null,
+      2
+    );
+    res.setHeader('content-disposition', `attachment; filename="vml-config-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.type('application/json; charset=utf-8').send(body);
+  });
+
+  app.post('/api/config/import', (req, res) => {
+    const incoming = req.body?.config ?? req.body;
+    if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'expected a config object' });
+    const cur = getConfig();
+    // 空字符串不覆盖已有密钥：脱敏导出再导入时不该把 Key 抹掉
+    const merge = (a, b) => {
+      if (Array.isArray(b)) return b;
+      if (b && typeof b === 'object') {
+        const out = { ...(a ?? {}) };
+        for (const [k, v] of Object.entries(b)) {
+          if (v === '' && typeof out[k] === 'string' && out[k]) continue;
+          out[k] = merge(out[k], v);
+        }
+        return out;
+      }
+      return b;
+    };
+    const next = setConfig(merge(cur, incoming));
+    onConfigChanged?.(next);
+    res.json({ ok: true, config: next });
+  });
+
+  // ── 检索 / search ────────────────────────────────────────────────
+  // 纯本地匹配：不需要 LLM，也不需要联网。LLM 只用于可选的「帮我认人」助手。
+  app.post('/api/search', (req, res) => {
+    const cfg = getConfig();
+    const flags = loadFlags(cfg);
+    res.json(search(cfg, req.body ?? {}, flags));
+  });
+
+  app.get('/api/search/tags', (_req, res) => {
+    const cfg = getConfig();
+    res.json(tagCloud(cfg, loadFlags(cfg)));
+  });
+
+  app.put('/api/search/tags', (req, res) => {
+    const cfg = getConfig();
+    const tags = req.body?.tags ?? {};
+    if (!tags || typeof tags !== 'object') return res.status(400).json({ error: 'tags must be an object' });
+    const clean = {};
+    for (const [k, v] of Object.entries(tags)) {
+      const key = String(k).slice(0, 40);
+      if (!key) continue;
+      clean[key] = (Array.isArray(v) ? v : []).map((x) => String(x).slice(0, 40)).slice(0, 20);
+    }
+    saveVocab(cfg, clean);
+    res.json({ ok: true, tags: loadVocab(cfg) });
+  });
+
+  // 可选助手：只记得特征、忘了名字时用。没有配 LLM 就明确告诉前端「用不了」。
+  app.post('/api/search/assist', async (req, res) => {
+    const cfg = getConfig();
+    const p = activeProvider(cfg);
+    if (!p.apiKey) {
+      return res.json({
+        ok: false,
+        needsLlm: true,
+        error: '「帮我认人」需要配置 LLM；普通检索不需要，直接用关键词和标签就行',
+      });
+    }
+    const description = String(req.body?.description ?? '').slice(0, 2000);
+    if (!description.trim()) return res.status(400).json({ error: 'description is required' });
+
+    const sample = corpusSample(cfg, 150);
+    const req2 = chatRequest(p, [
+      {
+        role: 'system',
+        content:
+          '你是 VTuber 情报检索助手。用户只记得一些特征（外貌/声音/直播内容/名场面/所属关系），忘了名字。' +
+          '请给出候选，并给出**可直接用于检索的关键词**。只输出 JSON，不要别的话。',
+      },
+      {
+        role: 'user',
+        content:
+          `用户描述：${description}\n\n` +
+          `本地已收集的条目样本（可能相关，也可能无关）：\n${sample.join('\n')}\n\n` +
+          '请输出：{"candidates":[{"name":"可能的名字","reason":"为什么这么猜","confidence":0-1}],' +
+          '"searchTerms":["可直接检索的词"],"tags":["可能的标签"]}',
+      },
+    ]);
+    try {
+      const r = await netFetch(
+        req2.url,
+        { method: 'POST', headers: req2.headers, body: JSON.stringify(req2.body), signal: AbortSignal.timeout(120000) },
+        { cfg }
+      );
+      const text = await r.text();
+      if (!r.ok) return res.json({ ok: false, error: `LLM HTTP ${r.status} — ${text.slice(0, 200)}` });
+      const content = JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
+      const m = /\{[\s\S]*\}/.exec(content);
+      let parsed = null;
+      try {
+        parsed = m ? JSON.parse(m[0]) : null;
+      } catch {
+        /* 模型没给干净 JSON */
+      }
+      res.json({ ok: true, provider: { name: p.name, model: req2.body.model }, raw: content, ...(parsed ?? {}) });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    }
   });
 
   // ── 报告 / reports ───────────────────────────────────────────────
@@ -309,10 +724,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type(out.mime).send(out.body);
   });
 
+  // 两份报告的逐行对比
+  app.get('/api/reports/diff', (req, res) => {
+    const cfg = getConfig();
+    const a = String(req.query.from ?? '');
+    const b = String(req.query.to ?? '');
+    const left = a ? readReport(cfg, a) : null;
+    const right = b ? readReport(cfg, b) : null;
+    if (left === null || right === null) return res.status(404).json({ error: 'one of the reports was not found' });
+    const lines = diffLines(left, right);
+    const stats = diffStats(lines);
+    res.json({ from: a, to: b, stats, hunks: diffHunks(lines, 4) });
+  });
+
   app.get('/api/reports/:name', (req, res) => {
     const md = readReport(getConfig(), req.params.name);
     if (md === null) return res.status(404).json({ error: 'not found' });
     res.type('text/markdown; charset=utf-8').send(md);
+  });
+
+  // ── JSON 错误兜底 / JSON error fallback ─────────────────────────
+  // 路由里抛异常时，Express 默认回一张 HTML 错误页 —— 前端拿它去 JSON.parse
+  // 只会得到 "Unexpected token '<'"，非常难查。这里统一改成 JSON。
+  app.use((err, req, res, _next) => {
+    log?.error('API 异常 / route error — ' + req.method + ' ' + req.originalUrl + ': ' + (err.stack ?? err.message));
+    if (res.headersSent) return;
+    res.status(err.status ?? 500).json({ error: err.message ?? 'internal error', route: req.originalUrl });
   });
 
   // ── 静态前端 / built web app ─────────────────────────────────────

@@ -7,8 +7,11 @@ import { analyze, preflight } from './analyze.js';
 import { collectItems, matchedKeywords } from './items.js';
 import { checkAll } from './watch.js';
 import { ensureDirs, runLogPath, saveFeedFiles, saveItems, saveReport } from './reports.js';
+import path from 'node:path';
 import { createLogger } from './logger.js';
 import { applyProxy } from './net.js';
+import { notify } from './notify.js';
+import { diagnoseSource } from './diagnose.js';
 
 /** 供 UI 轮询的实时状态 / in-memory state the UI can poll */
 export const runState = {
@@ -23,6 +26,7 @@ export const runState = {
   watchDone: 0,
   itemCount: 0,
   alerts: 0,
+  advice: [],
   lastResult: null,
   lastError: null,
   tail: [],
@@ -42,9 +46,9 @@ export function selectSources(cfg, mode) {
 }
 
 /**
- * @param {{cfg:object, mode?:'daily'|'merch'|'watch'}} args
+ * @param {{cfg:object, mode?:'daily'|'merch'|'watch', task?:object, catchUp?:boolean}} args
  */
-export async function runOnce({ cfg, mode = 'daily' }) {
+export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = false }) {
   if (runState.running) return { ok: false, error: '已有一个运行在进行中 / a run is already in progress' };
 
   ensureDirs(cfg);
@@ -55,6 +59,17 @@ export async function runOnce({ cfg, mode = 'daily' }) {
   log.info = (m) => (push(`[INFO] ${m}`), origInfo(m));
   log.warn = (m) => (push(`[WARN] ${m}`), origWarn(m));
   log.error = (m) => (push(`[ERR ] ${m}`), origErr(m));
+  if (task) log.info(`计划任务「${task.name}」${catchUp ? '（补跑 / catch-up）' : ''} 开始`);
+
+  /** 统一收口一条推送 / one place for outbound alerts */
+  const pushNotify = async (title, body, level) => {
+    try {
+      const r = await notify(cfg, log, { title, body, level });
+      if (r.sent) log.info(`已推送 ${r.sent} 个通道 / delivered to ${r.sent} channel(s)`);
+    } catch (err) {
+      log.warn(`推送失败 / notify failed — ${err.message}`);
+    }
+  };
 
   Object.assign(runState, {
     running: true,
@@ -85,6 +100,7 @@ export async function runOnce({ cfg, mode = 'daily' }) {
     if (!pre.ok) {
       log.error(`前置检查失败 / preflight failed — ${pre.error}`);
       runState.lastError = `LLM 前置检查失败：${pre.error}`;
+      await pushNotify(`${mode === 'merch' ? '通贩扫描' : '情报收集'}失败`, `LLM 前置检查未通过：${pre.error}`, 'error');
       return { ok: false, error: runState.lastError };
     }
     log.info(`LLM 就绪 / ready: ${pre.provider?.name ?? '?'} · ${pre.provider?.model ?? '?'}`);
@@ -148,6 +164,7 @@ export async function runOnce({ cfg, mode = 'daily' }) {
     const a = await analyze({ cfg, results, watchResults, mode, log });
     if (!a.ok) {
       runState.lastError = a.error;
+      await pushNotify(`${mode === 'merch' ? '通贩扫描' : '情报收集'}分析失败`, a.error, 'error');
       return { ok: false, error: a.error, results };
     }
 
@@ -157,6 +174,7 @@ export async function runOnce({ cfg, mode = 'daily' }) {
     log.info(`报告已保存 / report saved: ${file}`);
 
     const okCount = results.filter((r) => r.ok).length;
+    const failedSources = results.filter((r) => !r.ok).map((r) => r.source?.id);
     runState.lastResult = {
       ok: true,
       file,
@@ -164,17 +182,63 @@ export async function runOnce({ cfg, mode = 'daily' }) {
       date,
       sourcesOk: okCount,
       sourcesTotal: results.length,
+      failedSources,
       watchTotal: watchResults.length,
       alerts,
       items: items.length,
       provider: a.provider ?? null,
       chars: a.markdown.length,
+      task: task?.id ?? null,
+      catchUp,
     };
+
+    // 7) 自检放在**最后**：先抓完、先出报告，最后才只对出异常的来源做诊断
+    //    （连通正常的完全不打扰）。诊断链接会随推送一起发出去。
+    const adviceFiles = [];
+    runState.step = 'diagnosing';
+    if (cfg?.run?.diagnoseFailed !== false) {
+      const bad = results.filter((r) => !r.ok && r.source?.url).map((r) => r.source);
+      if (bad.length) {
+        log.info(`运行结束后自检 ${bad.length} 个异常来源 / diagnosing ${bad.length} failed source(s)`);
+        for (const s of bad) {
+          try {
+            const d = await diagnoseSource(s, cfg, log);
+            if (d.advice) adviceFiles.push({ id: s.id, url: d.advice.url, file: d.advice.file });
+          } catch (err) {
+            log.warn(`${s.id}: 自检失败 / diagnose failed — ${err.message}`);
+          }
+        }
+      }
+    }
+    runState.advice = adviceFiles;
+    runState.lastResult.advice = adviceFiles;
     runState.step = 'done';
+
+    // 8) 推送：有告警就报告警，否则按通道策略报摘要
+    const alertLines = [];
+    for (const r of watchResults) {
+      for (const e of r.events ?? []) {
+        if (e.reasons?.length) alertLines.push(`· ${e.title || e.text || ''}（${e.reasons.join('、')}）`.slice(0, 160));
+      }
+    }
+    const kwHits = items.filter((i) => i.keywords?.length);
+    const headline = alerts || kwHits.length ? `⚠ 命中 ${alerts + kwHits.length} 条告警` : '运行完成';
+    const body = [
+      `来源 ${okCount}/${results.length}，情报 ${items.length} 条，监视 ${watchResults.length} 个`,
+      alerts ? `\n【监视告警】\n${alertLines.slice(0, 8).join('\n')}` : '',
+      kwHits.length ? `\n【关键词命中】\n${kwHits.slice(0, 8).map((i) => `· ${String(i.text || i.title).slice(0, 90)}`).join('\n')}` : '',
+      adviceFiles.length ? `\n【诊断文件】\n${adviceFiles.map((a) => `· ${a.id}：${a.url}`).join('\n')}` : '',
+      `\n报告：${path.basename(file)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    await pushNotify(headline, body, alerts || kwHits.length ? 'alert' : 'info');
+
     return { ok: true, file, results, watchResults, items, summary: runState.lastResult };
   } catch (err) {
     runState.lastError = err.message;
     log.error(`运行异常 / run crashed — ${err.message}`);
+    await pushNotify('运行异常', err.message, 'error');
     return { ok: false, error: err.message };
   } finally {
     runState.running = false;

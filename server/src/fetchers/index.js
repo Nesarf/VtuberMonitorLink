@@ -26,6 +26,17 @@ export const FETCH_KINDS = [
 ];
 
 /**
+ * 该不该在失败后换另一个出口重试。
+ * 只在来源**没有显式指定出口**时才换 —— 像 B 站这种「显式 direct 否则被风控」的来源，
+ * 自动改成走代理只会更糟。
+ */
+function otherEgress(cfg, source) {
+  if (cfg?.run?.autoFailover === false) return null;
+  if (source?.proxy) return null; // 已显式指定，尊重它
+  return cfg?.proxy?.enabled && cfg?.proxy?.url ? 'direct' : 'proxy';
+}
+
+/**
  * 依次抓取选中的来源（顺序执行，便于按 rateLimit 主动间隔）
  * @param {Array} sources 生效来源（enabled = true）
  * @param {{cfg:object, log:object}} ctx
@@ -44,13 +55,37 @@ export async function fetchAll(sources, ctx) {
       results.push({ source: s, ok: false, error: `unknown fetch kind: ${s.fetch}` });
       continue;
     }
+
+    let r = null;
+    let usedEgress = s.proxy ?? (ctx.cfg?.proxy?.enabled ? 'proxy' : 'direct');
     try {
-      const r = await fn(s, ctx);
-      results.push({ source: s, ...r });
+      r = await fn(s, ctx);
     } catch (err) {
       ctx.log?.error(`${s.id}: ${err.message}`);
-      results.push({ source: s, ok: false, error: err.message });
+      r = { ok: false, error: err.message };
     }
+
+    // 自动换出口重试一次
+    if (!r?.ok) {
+      const alt = otherEgress(ctx.cfg, s);
+      if (alt) {
+        ctx.log?.warn(`${s.id}: 失败，自动改用「${alt}」重试一次 / retrying via ${alt}`);
+        try {
+          const r2 = await fn({ ...s, proxy: alt }, ctx);
+          if (r2?.ok) {
+            r2.failover = { from: usedEgress, to: alt, firstError: r?.error ?? null };
+            usedEgress = alt;
+            r = r2;
+          } else {
+            r = { ...r, failoverTried: alt, failoverError: r2?.error ?? null };
+          }
+        } catch (err) {
+          r = { ...r, failoverTried: alt, failoverError: err.message };
+        }
+      }
+    }
+
+    results.push({ source: s, egress: usedEgress, ...r });
   }
   return results;
 }

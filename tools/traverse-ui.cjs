@@ -183,7 +183,7 @@ async function main() {
       await page.waitForTimeout(300);
     }
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('six navigation tabs render', tabs.length === 6, tabs.join(' | '));
+    check('seven navigation tabs render', tabs.length === 7, tabs.join(' | '));
     check('the new Intel and Watch tabs are present', tabs.includes('情报') && tabs.includes('监视'), tabs.join(' | '));
 
     const tab = (label) => page.locator('nav.tabs button', { hasText: label }).first();
@@ -231,12 +231,17 @@ async function main() {
     await page.waitForTimeout(1200);
     main = await mainText();
     check('a custom source can be added from the UI', main.indexOf('ui-test-feed') !== -1);
-    const delBtn = page.locator('main button', { hasText: '删除' }).first();
-    if (await delBtn.count()) {
-      await delBtn.click();
-      await page.waitForTimeout(1200);
-      main = await mainText();
-      check('and removed again', main.indexOf('ui-test-feed') === -1);
+    // 精确定位到那一行的删除按钮 —— 页面上还有其它「删除」（诊断文件、监视对象）
+    const rowDel = page.locator('main table tbody tr', { hasText: 'ui-test-feed' }).locator('button', { hasText: '删除' }).first();
+    if (await rowDel.count()) {
+      await rowDel.click();
+      await page.waitForTimeout(1500);
+      // 用接口断言而不是页面文本：自检生成的诊断文件名里也带着来源 id
+      const after = await (await fetch(base + '/api/sources')).json();
+      const gone = !(after.sources ?? []).some((s) => s.id === 'ui-test-feed');
+      check('and removed again', gone, gone ? 'gone from the catalog' : 'still present');
+    } else {
+      check('and removed again', false, 'no delete button on the custom source row');
     }
 
     // ----------------------------------------------------------------- watch
@@ -341,8 +346,78 @@ async function main() {
     main = await mainText();
     check('full-text search over reports works', main.indexOf('处命中') !== -1 || main.indexOf('没有命中') !== -1, (main.match(/\d+ 处命中/) || ['no hits'])[0]);
 
+    // ---------------------------------------------------------------- search
+    process.stdout.write('\n9. Search: local keyword / tag / time filtering\n');
+    const tabsNow = await page.locator('nav.tabs button').allInnerTexts();
+    check('the Search tab was added', tabsNow.includes('检索'), tabsNow.join(' | '));
+    await tab('检索').click();
+    await page.waitForTimeout(1500);
+    main = await mainText();
+    check('Search page renders', main.indexOf('情报检索') !== -1);
+    check('it states that no LLM is needed', main.indexOf('不需要 LLM') !== -1);
+
+    // 拿一条真实条目里的词来搜（这次运行刚抓过 B 站动态）
+    const corpus = await (await fetch(base + '/api/intel')).json();
+    const sample = (corpus.items ?? []).find((i) => (i.text ?? '').length > 4);
+    const term = sample ? String(sample.text).replace(/\[[^\]]+\]/g, '').trim().slice(0, 2) : '糖';
+    await page.locator('main input').first().fill(term);
+    await page.locator('main button', { hasText: '搜索' }).first().click();
+    await page.waitForTimeout(1500);
+    const hits = await page.locator('main .card').count();
+    check('a keyword search returns cards', hits > 0, `${hits} cards for "${term}"`);
+
+    // 直接打接口验证过滤语义
+    const apiSearch = await (
+      await fetch(base + '/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+    ).json();
+    check('POST /api/search works with no query at all', Array.isArray(apiSearch.items) && typeof apiSearch.total === 'number', `${apiSearch.total} items in corpus`);
+    check('facets are returned (tags / sources / categories / months)', !!apiSearch.facets?.tags && !!apiSearch.facets?.months, `${apiSearch.facets?.tags?.length ?? 0} tag facets`);
+
+    const ranged = await (
+      await fetch(base + '/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from: '2000-01-01', to: '2000-12-31' }),
+      })
+    ).json();
+    check('a time range with no data returns nothing, and says why', ranged.total === 0 && ranged.outsideTimeRange > 0, `${ranged.outsideTimeRange} excluded by the range`);
+    const recent = await (
+      await fetch(base + '/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from: new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10) }),
+      })
+    ).json();
+    check('a recent range still returns items (relative times were normalised)', recent.total > 0, `${recent.total} items in the last 7 days`);
+    const bySource = await (
+      await fetch(base + '/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: 'bili-opus-jaran' }),
+      })
+    ).json();
+    check('filtering by source works', bySource.items.every((i) => i.sourceId === 'bili-opus-jaran') && bySource.total > 0, `${bySource.total} items`);
+    const tagRes = await (await fetch(base + '/api/search/tags')).json();
+    check('the tag vocabulary is exposed with aliases', (tagRes.vocabulary ?? []).some((v) => v.canon === '2434' && v.aliases.length > 0), `${(tagRes.vocabulary ?? []).length} tag groups`);
+    check('auto tags were extracted from the corpus', (tagRes.auto ?? []).length > 0, `${(tagRes.auto ?? []).length} auto tags`);
+    const aliasSearch = await (
+      await fetch(base + '/api/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ q: 'ニジサンジ' }),
+      })
+    ).json();
+    check('an alias query expands instead of erroring', Array.isArray(aliasSearch.expanded) && aliasSearch.expanded[0].length >= 1, JSON.stringify(aliasSearch.expanded?.[0] ?? []));
+
+    main = await mainText();
+    check('the optional identify helper is clearly marked as needing an LLM', main.indexOf('需要 LLM') !== -1);
+
     // ---------------------------------------------------------------- hygiene
-    process.stdout.write('\n9. runtime hygiene\n');
+    process.stdout.write('\n10. runtime hygiene\n');
     check('no uncaught page errors', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
     check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
     check('no failed /api call during the walk', badApi.length === 0, badApi.slice(0, 3).join(' | '));

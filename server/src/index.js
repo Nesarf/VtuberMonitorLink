@@ -22,6 +22,23 @@ await applyProxy(cfg);
 const log = createLogger(path.join(resolveDir(cfg, 'logsDir'), 'server.log'));
 log.info(`Vtuber's Monitor Link starting… (root: ${APP_ROOT})`);
 
+/** 计划任务触发 → 跑一次并记历史 */
+async function runScheduled(task, meta = {}) {
+  const r = await runOnce({ cfg, mode: task.mode, task, catchUp: !!meta.catchUp });
+  scheduler.appendHistory(cfg, {
+    taskId: task.id,
+    name: task.name,
+    mode: task.mode,
+    catchUp: !!meta.catchUp,
+    ok: !!r?.ok,
+    error: r?.error ?? null,
+    items: r?.summary?.items ?? null,
+    alerts: r?.summary?.alerts ?? null,
+    file: r?.file ? path.basename(r.file) : null,
+  });
+  return r;
+}
+
 function openBrowser(url) {
   try {
     const cmd =
@@ -45,7 +62,7 @@ const app = createApp({
   onConfigChanged: (next) => {
     ensureDirs(next);
     applyProxy(next).catch(() => {}); // 代理配置变更后立即生效
-    scheduler.start(next, () => runOnce({ cfg, mode: 'daily' }), log); // 配置变更后重排定时
+    scheduler.start(next, runScheduled, log); // 配置变更后重排定时
   },
 });
 
@@ -66,7 +83,7 @@ server.on('error', (err) => {
 });
 
 // 内置调度器
-scheduler.start(cfg, () => runOnce({ cfg, mode: 'daily' }), log);
+scheduler.start(cfg, runScheduled, log);
 
 // 优雅退出
 for (const sig of ['SIGINT', 'SIGTERM']) {

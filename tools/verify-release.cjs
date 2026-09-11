@@ -248,8 +248,27 @@ function main() {
   );
   if (bomFiles.length) notes.push('UTF-8 BOM present in: ' + bomFiles.join(', '));
 
-  // ------------------------------------------------------------- 4. run data
-  process.stdout.write('\n4. shipped run data\n');
+  // ------------------------------------------------------------- 4. syntax
+  // 这一条是被真事教出来的：一个以数字开头的对象键（3D披露 / 2434）让
+  // server 起不来，而打包脚本只看 exe 的 --doctor（那时还没加载到那个模块）。
+  // 随包的每一个 JS 都过一遍 node --check，才不会再让语法错误上路。
+  process.stdout.write('\n4. shipped script syntax (node --check)\n');
+  const scripts = walk(args.dir, [], (rel) => rel.includes('node_modules/') || rel === name + EXE).filter((p) =>
+    /\.(js|cjs|mjs)$/i.test(p)
+  );
+  let syntaxBad = 0;
+  for (const p of scripts) {
+    const r = spawnSync(process.execPath, ['--check', p], { encoding: 'utf8', timeout: 30000 });
+    if (r.status !== 0) {
+      syntaxBad++;
+      const first = String(r.stderr ?? '').trim().split(/\r?\n/).slice(0, 3).join(' | ');
+      problems.push('syntax error in ' + path.relative(args.dir, p).replace(/\\/g, '/') + ' — ' + first);
+    }
+  }
+  process.stdout.write('   checked ' + scripts.length + ' scripts, ' + syntaxBad + ' with errors\n');
+
+  // ------------------------------------------------------------- 5. run data
+  process.stdout.write('\n5. shipped run data\n');
   const cfgPath = path.join(args.dir, 'app', 'config.json');
   if (fs.existsSync(cfgPath)) {
     try {
@@ -263,7 +282,7 @@ function main() {
   } else {
     process.stdout.write('   [ok]   no app/config.json (created on first save)\n');
   }
-  for (const d of ['reports', 'feeds', 'logs', 'watch']) {
+  for (const d of ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice']) {
     const dir = path.join(args.dir, 'app', d);
     const count = fs.existsSync(dir) ? walk(dir, []).length : 0;
     if (count) problems.push('app/' + d + '/ ships ' + count + ' file(s) of run data');
@@ -271,7 +290,7 @@ function main() {
   }
 
   // ---------------------------------------------------------------- 5. report
-  process.stdout.write('\n5. result\n');
+  process.stdout.write('\n6. result\n');
   for (const n of notes) process.stdout.write('   note: ' + n + '\n');
   if (problems.length) {
     for (const p of problems) process.stdout.write('   PROBLEM: ' + p + '\n');

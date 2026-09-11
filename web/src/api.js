@@ -67,6 +67,56 @@ export const api = {
   getReports: () => j('/api/reports'),
   getReport: (name) => fetch(`/api/reports/${encodeURIComponent(name)}`).then((r) => r.text()),
   searchReports: (q) => j(`/api/reports/search?q=${encodeURIComponent(q)}`),
+  diffReports: (from, to) => j(`/api/reports/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   exportUrl: (name, format = 'html') =>
     `/api/reports/${encodeURIComponent(name)}/export?format=${format}`,
+
+  // 连通性探测
+  getProbe: () => j('/api/probe'),
+  probe: (payload) => post('/api/probe', payload),
+  getHealth: () => j('/api/health'),
+
+  // 站点缩略图
+  thumbMeta: (url, sourceId, mode) =>
+    j(`/api/thumb?url=${encodeURIComponent(url)}${sourceId ? `&sourceId=${encodeURIComponent(sourceId)}` : ''}${mode ? `&mode=${mode}` : ''}`),
+
+  // 自检与诊断文件
+  diagnose: (id) => post(`/api/sources/${encodeURIComponent(id)}/diagnose`, {}),
+  listAdvice: () => j('/api/advice'),
+  deleteAdvice: (file) => j(`/api/advice/${encodeURIComponent(file)}`, { method: 'DELETE' }),
+
+  // 计划任务
+  getSchedule: () => j('/api/schedule'),
+  runSchedule: (id) => post('/api/schedule/run', { id }),
+
+  // 通知推送
+  getNotify: () => j('/api/notify'),
+  newNotify: (kind, overrides) => post('/api/notify/new', { kind, overrides }),
+  testNotify: (target) => post('/api/notify/test', { target }),
+
+  // 代理内核
+  proxyControl: () => j('/api/proxy/control'),
+  proxyNodes: (control) => j(`/api/proxy/nodes${control ? `?control=${encodeURIComponent(control)}` : ''}`),
+  proxyNodeTest: (payload) => post('/api/proxy/nodes/test', payload),
+  proxyNodeSelect: (payload) => post('/api/proxy/node', payload),
+
+  // 配置导入导出
+  exportConfigUrl: (secrets) => `/api/config/export${secrets ? '?secrets=1' : ''}`,
+  importConfig: (config) => post('/api/config/import', { config }),
+
+  // 情报
+  getIntelDiff: () => j('/api/intel/diff'),
+  flagIntel: (id, patch) =>
+    j(`/api/intel/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+
+  // 检索（纯本地匹配，不需要 LLM）
+  search: (query) => post('/api/search', query),
+  searchTags: () => j('/api/search/tags'),
+  saveSearchTags: (tags) => put('/api/search/tags', { tags }),
+  // 可选助手：只在「忘了名字」时用
+  assist: (description) => post('/api/search/assist', { description }),
 };

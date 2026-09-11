@@ -3,9 +3,18 @@
 //
 // 条目形状 / item shape:
 //   { id, kind, sourceId, sourceName:{zh,en}, title, text, url, time, images[], stats{}, extra }
+//
+// id 用**内容派生**而不是下标：星标/已读要跨运行保持，用 `sourceId#3` 这种下标
+// 下次换个顺序就全对不上了。
+import crypto from 'node:crypto';
 import { CATEGORIES } from './sources.js';
 
 const LIMIT_DEFAULT = 60;
+
+function contentId(sourceId, it) {
+  const basis = `${sourceId}|${it.url ?? ''}|${it.title ?? ''}|${it.id ?? ''}`;
+  return `${sourceId}:${crypto.createHash('sha1').update(basis).digest('hex').slice(0, 16)}`;
+}
 
 function clean(s = '') {
   return String(s)
@@ -81,19 +90,23 @@ export function normalizeResult(result, limit = LIMIT_DEFAULT) {
     raw = [{ title: '', text: String(result.content).slice(0, 800), url: src.url ?? '', time: '', images: [], stats: {} }];
   }
 
-  return raw.slice(0, limit).map((it, i) => ({
-    ...base,
-    id: it.id ?? `${src.id}#${i}`,
-    kind: it.kind ?? src.fetch ?? 'text',
-    title: it.title ?? '',
-    text: it.text ?? '',
-    url: it.url ?? src.url ?? '',
-    time: it.time ?? '',
-    images: Array.isArray(it.images) ? it.images.slice(0, 12) : [],
-    stats: it.stats ?? {},
-    extra: it.extra ?? undefined,
-    sourceUid: it.sourceUid,
-  }));
+  return raw.slice(0, limit).map((it, i) => {
+    const item = {
+      ...base,
+      id: it.id ?? contentId(src.id, it),
+      kind: it.kind ?? src.fetch ?? 'text',
+      title: it.title ?? '',
+      text: it.text ?? '',
+      url: it.url ?? src.url ?? '',
+      time: it.time ?? '',
+      images: Array.isArray(it.images) ? it.images.slice(0, 12) : [],
+      stats: it.stats ?? {},
+      extra: it.extra ?? undefined,
+      sourceUid: it.sourceUid,
+      seq: i,
+    };
+    return item;
+  });
 }
 
 /** 汇总所有来源 / collect every result into one flat list */

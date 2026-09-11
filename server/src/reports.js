@@ -76,6 +76,12 @@ export function saveItems(cfg, date, items, meta = {}) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, '_items.json');
   const payload = { generatedAt: new Date().toISOString(), date, count: items.length, ...meta, items };
+  // 上一次的结果留一份，供「本次 vs 上次」对比用；只留一份，不无限堆积
+  try {
+    if (fs.existsSync(file)) fs.copyFileSync(file, path.join(dir, '_items-prev.json'));
+  } catch {
+    /* 留不下就算了，不影响本次落盘 */
+  }
   fs.writeFileSync(file, JSON.stringify(payload, null, 1), 'utf8');
   return file;
 }
@@ -108,6 +114,84 @@ export function latestIntel(cfg, limit = 400) {
     }
   }
   return { generatedAt: null, items: [], runs };
+}
+
+/** 上一次运行的情报条目（对比用）/ the previous run's items */
+export function previousIntel(cfg) {
+  const root = resolveDir(cfg, 'feedsDir');
+  if (!fs.existsSync(root)) return { generatedAt: null, items: [] };
+  const days = fs
+    .readdirSync(root)
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()
+    .reverse();
+  for (const d of days) {
+    const f = path.join(root, d, '_items-prev.json');
+    if (!fs.existsSync(f)) continue;
+    try {
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      return { generatedAt: j.generatedAt ?? null, date: j.date ?? d, items: j.items ?? [] };
+    } catch {
+      /* ignore */
+    }
+  }
+  return { generatedAt: null, items: [] };
+}
+
+/** 本次 vs 上次：新增 / 消失 / 仍在 / 变化的条目 */
+export function diffIntel(cfg) {
+  const cur = latestIntel(cfg, 1000);
+  const prev = previousIntel(cfg);
+  const prevMap = new Map((prev.items ?? []).map((i) => [i.id, i]));
+  const curMap = new Map((cur.items ?? []).map((i) => [i.id, i]));
+
+  const added = (cur.items ?? []).filter((i) => !prevMap.has(i.id));
+  const removed = (prev.items ?? []).filter((i) => !curMap.has(i.id));
+  const changed = [];
+  for (const [id, now] of curMap) {
+    const before = prevMap.get(id);
+    if (!before) continue;
+    if (String(before.text ?? '') === String(now.text ?? '')) continue;
+    changed.push({ id, before, after: now });
+  }
+  // 关注量增长之类的「同 id 但数值变了」也算变化
+  return {
+    current: { at: cur.generatedAt ?? null, date: cur.date ?? null, count: (cur.items ?? []).length },
+    previous: { at: prev.generatedAt ?? null, date: prev.date ?? null, count: (prev.items ?? []).length },
+    hasPrevious: (prev.items ?? []).length > 0,
+    added,
+    removed,
+    changed,
+  };
+}
+
+// ───────────────────────────────────────── 星标 / 已读 / flags
+
+function flagsPath(cfg) {
+  return path.join(resolveDir(cfg, 'feedsDir'), 'flags.json');
+}
+
+export function loadFlags(cfg) {
+  try {
+    const f = flagsPath(cfg);
+    if (!fs.existsSync(f)) return {};
+    return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+export function setFlag(cfg, id, patch) {
+  const flags = loadFlags(cfg);
+  const cur = flags[id] ?? {};
+  flags[id] = { ...cur, ...patch, at: new Date().toISOString() };
+  const f = flags[id];
+  const hasTags = Array.isArray(f.tags) && f.tags.length > 0;
+  if (!f.starred && !f.read && !f.note && !hasTags) delete flags[id];
+  const file = flagsPath(cfg);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(flags, null, 1), 'utf8');
+  return flags[id] ?? null;
 }
 
 // ───────────────────────────────────────── 导出与检索 / export & search

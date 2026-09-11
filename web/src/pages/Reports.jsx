@@ -14,6 +14,18 @@ export default function Reports() {
   const [kw, setKw] = useState([]);
   const [q, setQ] = useState('');
   const [hits, setHits] = useState(null);
+  const [cmp, setCmp] = useState(null);
+  const [cmpTo, setCmpTo] = useState('');
+
+  const compare = async (from, to) => {
+    setCmpTo(to);
+    if (!to) return setCmp(null);
+    try {
+      setCmp({ from, to, ...(await api.diffReports(from, to)) });
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
 
   const load = () =>
     api
@@ -117,6 +129,7 @@ export default function Reports() {
                 <th style={{ width: 100 }}>size</th>
                 <th style={{ width: 180 }}>modified</th>
                 <th style={{ width: 200 }}>{t('actions')}</th>
+                <th style={{ width: 150 }}>{t('compare')}</th>
               </tr>
             </thead>
             <tbody>
@@ -136,6 +149,21 @@ export default function Reports() {
                     <a className="ghost tiny" href={api.exportUrl(r.name, 'json')}>
                       {t('exportJson')}
                     </a>
+                  </td>
+                  <td style={{ width: 150 }}>
+                    {cur === r.name || !list ? null : (
+                      <select value="" onChange={(e) => e.target.value && compare(r.name, e.target.value)}>
+                        <option value="">{t('compare')}…</option>
+                        {list
+                          .filter((x) => x.name !== r.name)
+                          .slice(0, 12)
+                          .map((x) => (
+                            <option key={x.name} value={x.name}>
+                              {x.name}
+                            </option>
+                          ))}
+                      </select>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -157,6 +185,29 @@ export default function Reports() {
           ) : (
             <Markdown text={content} className="report-md" highlight={kw} />
           )}
+        </section>
+      )}
+
+      {cmp && (
+        <section className="panel">
+          <h2>
+            {t('compare')}: {cmp.from} → {cmp.to}
+            <button className="ghost tiny" style={{ marginLeft: 12 }} onClick={() => compare('', '')}>
+              {t('close')}
+            </button>
+          </h2>
+          <div className="hint" style={{ marginBottom: 8 }}>
+            <span className="chip delta-up">+{cmp.stats?.added ?? 0}</span>
+            <span className="chip delta-down">-{cmp.stats?.removed ?? 0}</span>
+          </div>
+          <pre className="diff">
+            {(cmp.hunks ?? []).slice(0, 300).map((l, i) => (
+              <div key={i} className={`diff-line op-${l.op === '+' ? 'add' : l.op === '-' ? 'del' : l.op === '@' ? 'ctx' : 'same'}`}>
+                {l.op === '@' ? '' : l.op + ' '}
+                {l.text}
+              </div>
+            ))}
+          </pre>
         </section>
       )}
     </>

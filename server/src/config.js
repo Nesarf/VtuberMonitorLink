@@ -36,11 +36,13 @@ export const DEFAULT_CONFIG = {
     temperature: 0.3,
   },
   schedule: {
-    enabled: false,
+    // 多条计划任务；旧版的扁平写法（enabled/mode/dayOfWeek/time）会自动迁移成一条
+    enabled: false, // 兼容字段，实际以 tasks 为准
     mode: 'weekly', // weekly | daily
-    dayOfWeek: 2, // 0=Sun … 6=Sat（2=Tuesday）
+    dayOfWeek: 2,
     time: '23:30',
     merchEveryDays: 14,
+    tasks: [],
   },
   run: {
     // 预抓取节流：Reddit 类站点按 IP 限流，主动拉开间隔比连击重试有效
@@ -48,6 +50,10 @@ export const DEFAULT_CONFIG = {
     maxParallel: 3,
     // 每次运行是否顺带检查监视对象 / also run the watch targets
     watchWithRun: true,
+    // 某个出口失败时，自动换另一个出口再试一次（来源没显式指定出口时才生效）
+    autoFailover: true,
+    // 运行**最后**对出异常的来源做自检并生成诊断文件（连通正常的不打扰）
+    diagnoseFailed: true,
   },
   proxy: {
     // 重要：Node 的 fetch(undici) 默认**不读**系统代理；
@@ -55,6 +61,14 @@ export const DEFAULT_CONFIG = {
     // 例外：部分站点（如 B 站）走代理反而被风控，可按来源设 direct。
     enabled: false,
     url: '',
+    // mihomo / Clash.Meta 的控制接口（用于列节点、切节点、测每个节点到某站的延迟）
+    controlUrl: '',
+    controlSecret: '',
+  },
+  notify: {
+    desktop: true,
+    // [{ id, kind, name, enabled, on: always|alerts|failures, key, server, token, chatId, webhookUrl }]
+    targets: [],
   },
   bilibili: {
     // 免登录的图文动态每页 20 条，pages 控制翻几页
@@ -76,8 +90,29 @@ export const DEFAULT_CONFIG = {
   },
   ui: {
     theme: 'auto', // auto | light | dark
-    notify: true, // 运行结束后弹桌面通知
+    notify: true, // 兼容字段，实际看 notify.desktop
     intelPerSource: 24,
+    probeSamples: 3,
+    probeTtlMinutes: 30,
+    // 报告 / 情报的呈现排版（网页里可 DIY，参考小鸡词典那种卡片罗列）
+    layout: {
+      mode: 'cards', // cards | list | compact | timeline | table
+      columns: 'auto', // auto | 1 | 2 | 3 | 4
+      density: 'comfortable', // comfortable | compact
+      fontScale: 1, // 0.85 ~ 1.35
+      showThumbs: true,
+      showStats: true,
+      showTime: true,
+      showSource: true,
+      accent: '', // 留空用主题色
+    },
+  },
+  privacy: {
+    // 匿名模式：完全不使用登录态（不读浏览器 cookie、不复用 profile），
+    // 发布前自检与「无痕化」场景下打开它最省心。
+    anonymousMode: false,
+    // 抓取时是否发送 Referer / Origin 这类可能带上站点身份的请求头
+    sendReferer: true,
   },
   paths: {
     reportsDir: 'reports',
@@ -131,11 +166,13 @@ export function resolveDir(cfg, key) {
 }
 
 /**
- * 首次保存时把旧的扁平 LLM 配置升级成档位列表。
+ * 首次保存时把旧的扁平配置升级成新结构。
  * 只在真正写盘时调用，读配置时不动文件。
  */
 export function migrateConfig(cfg) {
   const next = mergeDefaults(cfg);
+
+  // ── LLM：扁平 → 档位列表
   const llm = next.llm ?? {};
   if (!Array.isArray(llm.providers) || llm.providers.length === 0) {
     if (llm.apiKey || (llm.baseUrl && llm.baseUrl !== DEFAULT_CONFIG.llm.baseUrl)) {
@@ -162,5 +199,33 @@ export function migrateConfig(cfg) {
   if (Array.isArray(next.llm?.providers) && next.llm.providers.length && !next.llm.activeId) {
     next.llm.activeId = next.llm.providers[0].id;
   }
+
+  // ── 定时：扁平 → 任务列表
+  const sched = next.schedule ?? {};
+  if (!Array.isArray(sched.tasks) || sched.tasks.length === 0) {
+    if (sched.enabled) {
+      next.schedule = {
+        ...sched,
+        tasks: [
+          {
+            id: 'task-1',
+            name: sched.mode === 'daily' ? '每天情报收集' : '每周情报收集',
+            enabled: true,
+            mode: 'daily',
+            freq: sched.mode === 'daily' ? 'daily' : 'weekly',
+            dayOfWeek: Number.isInteger(sched.dayOfWeek) ? sched.dayOfWeek : 2,
+            time: sched.time ?? '23:30',
+            catchUp: true,
+          },
+        ],
+      };
+    }
+  }
+
+  // ── 桌面通知开关搬家：ui.notify → notify.desktop
+  if (next.notify && next.ui && next.ui.notify === false && next.notify.desktop === DEFAULT_CONFIG.notify.desktop) {
+    next.notify = { ...next.notify, desktop: false };
+  }
+
   return next;
 }

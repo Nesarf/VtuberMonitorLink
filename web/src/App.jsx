@@ -1,22 +1,25 @@
+// App.jsx — 六页壳 + 主题 + 排版变量 + 运行结束通知
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from './i18n.jsx';
+import { applyLayout } from './layout.js';
 import { api } from './api.js';
 import Intel from './pages/Intel.jsx';
+import Search from './pages/Search.jsx';
 import Run from './pages/Run.jsx';
 import Sources from './pages/Sources.jsx';
 import Watch from './pages/Watch.jsx';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 
-const TABS = ['intel', 'run', 'sources', 'watch', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'run', 'sources', 'watch', 'settings', 'reports'];
 
 export default function App() {
   const { t, lang, setLang } = useI18n();
   const [tab, setTab] = useState('run');
   const [alerts, setAlerts] = useState(0);
+  const [layout, setLayout] = useState(null);
   const prevRun = useRef(null);
 
-  // 应用主题 + 订阅「运行结束」的桌面通知
   useEffect(() => {
     let stop = false;
     api
@@ -24,19 +27,27 @@ export default function App() {
       .then((c) => {
         if (stop) return;
         applyTheme(c.ui?.theme);
+        setLayout(c.ui?.layout ?? {});
+        applyLayout(c.ui?.layout);
       })
       .catch(() => {});
+
+    // 设置页改排版时广播，壳立刻跟着变
+    const onLayout = (e) => {
+      setLayout(e.detail ?? {});
+      applyLayout(e.detail);
+    };
+    window.addEventListener('vml-layout', onLayout);
 
     const tick = async () => {
       try {
         const st = await api.getState();
         const wasRunning = prevRun.current?.running;
-        const finishedAt = st.finishedAt;
-        if (wasRunning && !st.running && finishedAt && finishedAt !== prevRun.current?.finishedAt) {
+        if (wasRunning && !st.running && st.finishedAt && st.finishedAt !== prevRun.current?.finishedAt) {
           const ok = !!st.lastResult;
           notify(ok ? t('runTitle') : `${t('runTitle')} · ${t('failed')}`, ok ? t('done') : st.lastError ?? '');
         }
-        prevRun.current = { running: st.running, finishedAt };
+        prevRun.current = { running: st.running, finishedAt: st.finishedAt };
         setAlerts(st.alerts ?? 0);
       } catch {
         /* 服务没起来时静默 */
@@ -47,6 +58,7 @@ export default function App() {
     return () => {
       stop = true;
       clearInterval(timer);
+      window.removeEventListener('vml-layout', onLayout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -62,11 +74,17 @@ export default function App() {
 
   const labels = {
     intel: t('tab_intel'),
+    search: t('tab_search'),
     run: t('tab_run'),
     sources: t('tab_sources'),
     watch: t('tab_watch'),
     settings: t('tab_settings'),
     reports: t('tab_reports'),
+  };
+
+  const applyLayoutNow = (next) => {
+    setLayout(next);
+    applyLayout(next);
   };
 
   return (
@@ -77,7 +95,11 @@ export default function App() {
           <div className="sub">{t('appSub')}</div>
         </div>
         <div className="spacer" />
-        {alerts > 0 && <span className="chip alert">⚠ {alerts} {t('alerts')}</span>}
+        {alerts > 0 && (
+          <span className="chip alert">
+            ⚠ {alerts} {t('alerts')}
+          </span>
+        )}
         <button className="ghost lang" onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}>
           {lang === 'zh' ? 'English' : '中文'}
         </button>
@@ -90,12 +112,13 @@ export default function App() {
         ))}
       </nav>
       <main>
-        {tab === 'intel' && <Intel />}
+        {tab === 'intel' && <Intel layout={layout} />}
+        {tab === 'search' && <Search layout={layout} />}
         {tab === 'run' && <Run />}
         {tab === 'sources' && <Sources />}
         {tab === 'watch' && <Watch />}
-        {tab === 'settings' && <Settings />}
-        {tab === 'reports' && <Reports />}
+        {tab === 'settings' && <Settings onLayout={applyLayoutNow} />}
+        {tab === 'reports' && <Reports layout={layout} />}
       </main>
     </>
   );

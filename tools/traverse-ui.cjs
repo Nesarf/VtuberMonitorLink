@@ -230,6 +230,25 @@ async function main() {
       if (aria || wrapped) named++;
     }
     check('every task-row control has an accessible name', ctlCount > 0 && named === ctlCount, named + '/' + ctlCount);
+
+    // 保存状态必须看得见（以前的 toast 只有 2.5 秒、贴在屏幕最角上，用户当成没保存）
+    const fmtSel = page.locator('main select:has(option[value="adoc"])').first();
+    check('the output-format picker is present', (await fmtSel.count()) > 0);
+    await fmtSel.selectOption('adoc');
+    await page.waitForTimeout(300);
+    const dirtyText = await page.locator('.save-status.dirty').first().innerText().catch(() => '');
+    check('editing a field shows a persistent unsaved-changes state', dirtyText.length > 0, dirtyText);
+    await page.locator('.save-bar button.primary').first().click();
+    await page.waitForTimeout(1200);
+    const okText = (await page.locator('.save-status.ok').first().innerText().catch(() => '')).trim();
+    check('saving leaves a persistent saved state with a timestamp', /(已保存|Saved)/.test(okText) && /\d{1,2}:\d{2}/.test(okText), okText);
+    const stillThere = await page.waitForTimeout(3200).then(() => page.locator('.save-status.ok').first().innerText().catch(() => ''));
+    check('the saved state is still there after the toast would have gone', stillThere.trim().length > 0, stillThere.trim());
+    // 恢复成 html：后面的报告断言依赖默认输出格式
+    await fmtSel.selectOption('html');
+    await page.waitForTimeout(200);
+    await page.locator('.save-bar button.primary').first().click();
+    await page.waitForTimeout(1000);
     // LLM 与 API Key 现在是独立页面，所以这些断言都搬到那边去做
     await tab('LLM').click();
     await page.waitForTimeout(900);

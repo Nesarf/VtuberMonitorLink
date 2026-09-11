@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, WEEKDAYS, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
+import { SaveBar, useSaveState } from '../savebar.jsx';
 
 export default function Settings({ onLayout }) {
   const { t, lang } = useI18n();
@@ -11,6 +12,8 @@ export default function Settings({ onLayout }) {
   const [browsers, setBrowsers] = useState([]);
   const [presets, setPresets] = useState([]);
   const [msg, setMsg] = useState('');
+  const [msgKind, setMsgKind] = useState('');
+  const st = useSaveState();
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [newPreset, setNewPreset] = useState('deepseek');
@@ -43,6 +46,7 @@ export default function Settings({ onLayout }) {
   const active = providers.find((p) => p.id === activeId) ?? providers[0] ?? null;
 
   const patch = (path, value) => {
+    st.dirty();
     setCfg((c) => {
       const next = structuredClone(c);
       const keys = path.split('.');
@@ -55,6 +59,7 @@ export default function Settings({ onLayout }) {
 
   const patchProvider = (field, value) => {
     if (!active) return;
+    st.dirty();
     setCfg((c) => {
       const next = structuredClone(c);
       const list = next.llm.providers ?? [];
@@ -65,20 +70,24 @@ export default function Settings({ onLayout }) {
     });
   };
 
-  const flash = (m, ms = 2500) => {
+  const flash = (m, ms = 2500, kind = '') => {
     setMsg(m);
+    setMsgKind(kind);
     if (ms) setTimeout(() => setMsg(''), ms);
   };
 
   const save = async () => {
     setBusy(true);
+    st.saving();
     try {
       const next = await api.putConfig(cfg);
       setCfg(next);
       applyTheme(next.ui?.theme);
-      flash(t('saved'));
+      st.saved();
+      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 4000, 'ok');
     } catch (e) {
-      flash(e.message, 0);
+      st.failed(e.message);
+      flash(e.message, 0, 'err');
     } finally {
       setBusy(false);
     }
@@ -167,13 +176,15 @@ export default function Settings({ onLayout }) {
 
   const saveSchedule = async (tasks) => {
     setBusy(true);
+    st.saving();
     try {
       await api.putConfig({ ...cfg, schedule: { ...cfg.schedule, tasks } });
       await loadSched();
-      setMsg(t('saved'));
-      setTimeout(() => setMsg(''), 2000);
+      st.saved();
+      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 3000, 'ok');
     } catch (e) {
-      flash(e.message, 0);
+      st.failed(e.message);
+      flash(e.message, 0, 'err');
     } finally {
       setBusy(false);
     }
@@ -184,6 +195,7 @@ export default function Settings({ onLayout }) {
    * 反复写盘（实测敲 10 个字发了 10 次 PUT）。本地先改，停止输入 800ms 后再存。
    */
   const onTaskNameChange = (id, name) => {
+    st.dirty();
     const tasks = (cfg.schedule?.tasks ?? []).map((x) => (x.id === id ? { ...x, name } : x));
     setCfg((c) => ({ ...c, schedule: { ...c.schedule, tasks } }));
     if (scheduleSaveTimer.current) clearTimeout(scheduleSaveTimer.current);
@@ -1102,10 +1114,8 @@ export default function Settings({ onLayout }) {
         <div className="hint">{t('browsersDirHint')}</div>
       </section>
 
-      <button className="primary" onClick={save} disabled={busy}>
-        {busy ? t('saving') : t('save')}
-      </button>
-      {msg && <div className="toast">{msg}</div>}
+      <SaveBar st={st} onSave={save} busy={busy} />
+      {msg && <div className={'toast ' + msgKind}>{msg}</div>}
     </>
   );
 }

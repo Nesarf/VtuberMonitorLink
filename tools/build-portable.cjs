@@ -38,7 +38,7 @@ function log(msg) {
 }
 
 function parseArgs(argv) {
-  const out = { out: path.join(ROOT, 'dist'), name: 'VtuberMonitorLink', sea: true, install: true, browsers: false, runtime: false };
+  const out = { out: path.join(ROOT, 'dist'), name: 'VtuberMonitorLink', sea: true, install: true, browsers: false, runtime: false, zip: true, fresh: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = path.resolve(argv[++i]);
@@ -47,6 +47,8 @@ function parseArgs(argv) {
     else if (a === '--no-install') out.install = false;
     else if (a === '--with-runtime') out.runtime = true;
     else if (a === '--with-browsers') out.browsers = true;
+    else if (a === '--no-zip') out.zip = false;
+    else if (a === '--fresh') out.fresh = true;
   }
   return out;
 }
@@ -286,6 +288,36 @@ function main() {
 
   // ------------------------------------------------------------- 4. app tree
   log('[4/7] application files');
+  //
+  // ⚠️ 运行期数据必须活着穿过这次构建。
+  // 以前这里是「直接 rmrf(appDir) 再重建」，而 app/ 里放着**用户的 config.json
+  // （含 API Key）和全部历史**（reports/feeds/logs/watch/thumbs/advice）。
+  // 结果：每次修完 bug 重新打包，API Key 就被清空、历史全没了。
+  // 现在先把这些挪到 build/ 下的暂存区，重建完再放回去。
+  // 想要一份干净出厂状态就用 --fresh。
+  const RUNTIME_KEEP = ['config.json', 'reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
+  const stash = path.join(buildDir, 'app-runtime-stash');
+  const stashed = [];
+  if (!args.fresh && fs.existsSync(appDir)) {
+    rmrf(stash);
+    for (const rel of RUNTIME_KEEP) {
+      const from = path.join(appDir, rel);
+      if (!fs.existsSync(from)) continue;
+      fs.mkdirSync(stash, { recursive: true });
+      const to = path.join(stash, rel);
+      try {
+        fs.renameSync(from, to);
+      } catch {
+        // 跨盘时 rename 会失败（EXDEV），退回复制 + 删除
+        copyDir(from, to, () => false);
+        rmrf(from);
+      }
+      stashed.push(rel);
+    }
+    if (stashed.length) log('  preserving runtime state: ' + stashed.join(', '));
+  } else if (args.fresh) {
+    log('  --fresh: runtime state will NOT be preserved');
+  }
   rmrf(appDir);
   const skipRuntime = (p) => {
     const rel = path.relative(ROOT, p).replace(/\\/g, '/');
@@ -314,6 +346,21 @@ function main() {
     copyFile(path.join(ROOT, 'config.example.json'), path.join(appDir, 'config.example.json'));
   }
   log('  -> app/');
+
+  // 把暂存的运行期数据放回去（API Key、报告、情报、日志、监视基线……）
+  if (stashed.length) {
+    for (const rel of stashed) {
+      const from = path.join(stash, rel);
+      const to = path.join(appDir, rel);
+      try {
+        fs.renameSync(from, to);
+      } catch {
+        copyDir(from, to, () => false);
+      }
+    }
+    rmrf(stash);
+    log('  restored runtime state: ' + stashed.join(', '));
+  }
 
   // ------------------------------------------------------------- 5. runtime deps
   log('[5/7] server dependencies');
@@ -372,6 +419,16 @@ function main() {
     if (doctor.status !== 0) throw new Error('--doctor reported a problem');
   } else {
     log('  (no exe to verify)');
+  }
+
+  // -------------------------------------------------------------- 8. release zip
+  // 发行包必须干净：运行期数据（API Key / 历史）不进包，由 make-zip.mjs 保证。
+  if (args.zip) {
+    log('');
+    log('[8/8] release zip');
+    const plat = process.platform === 'win32' ? 'win' : process.platform;
+    const zipName = `${args.name}-${rootPkg.version}-${plat}-${process.arch}.zip`;
+    run(process.execPath, [path.join(__dirname, 'make-zip.mjs'), pkgDir, path.join(args.out, zipName)]);
   }
 
   log('');

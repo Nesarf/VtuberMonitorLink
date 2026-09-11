@@ -6,6 +6,7 @@
 // 不再是死路；③ 明确写出哪些功能需要它、哪些不需要。
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
+import { SaveBar, useSaveState } from '../savebar.jsx';
 import { api } from '../api.js';
 
 /** 哪些功能需要 LLM —— 直接回答「我必须配吗」 */
@@ -24,6 +25,8 @@ export default function Llm() {
   const [cfg, setCfg] = useState(null);
   const [presets, setPresets] = useState([]);
   const [msg, setMsg] = useState('');
+  const [msgKind, setMsgKind] = useState('');
+  const st = useSaveState();
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [newPreset, setNewPreset] = useState('deepseek');
@@ -50,15 +53,20 @@ export default function Llm() {
   const activeId = cfg.llm?.activeId ?? providers[0]?.id ?? '';
   const active = providers.find((p) => p.id === activeId) ?? providers[0] ?? null;
 
-  const flash = (m, ms = 2500) => {
+  const flash = (m, ms = 2500, kind = '') => {
     setMsg(m);
+    setMsgKind(kind);
     if (ms) setTimeout(() => setMsg(''), ms);
   };
 
-  const patchLlm = (patch) => setCfg((c) => ({ ...c, llm: { ...c.llm, ...patch } }));
+  const patchLlm = (patch) => {
+    st.dirty();
+    setCfg((c) => ({ ...c, llm: { ...c.llm, ...patch } }));
+  };
 
   const patchProvider = (field, value) => {
     if (!active) return;
+    st.dirty();
     setCfg((c) => {
       const next = structuredClone(c);
       const list = next.llm.providers ?? [];
@@ -71,12 +79,15 @@ export default function Llm() {
 
   const save = async () => {
     setBusy(true);
+    st.saving();
     try {
       const next = await api.putConfig(cfg);
       setCfg(next);
-      flash(t('saved'));
+      st.saved();
+      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 4000, 'ok');
     } catch (e) {
-      flash(e.message, 0);
+      st.failed(e.message);
+      flash(e.message, 0, 'err');
     } finally {
       setBusy(false);
     }
@@ -323,10 +334,8 @@ export default function Llm() {
         </table>
       </section>
 
-      <button className="primary" onClick={save} disabled={busy}>
-        {busy ? t('saving') : t('save')}
-      </button>
-      {msg && <div className="toast">{msg}</div>}
+      <SaveBar st={st} onSave={save} busy={busy} />
+      {msg && <div className={'toast ' + msgKind}>{msg}</div>}
     </>
   );
 }

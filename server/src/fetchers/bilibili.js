@@ -10,6 +10,7 @@
 //     稳定返回 20 条，含正文 / 点赞数 / opus 链接 —— 这是主力路径。
 //   • 登录态的取值顺序：来源自带 cookie → 配置的浏览器 profile → 浏览器渲染兜底。
 import { netFetch, resolveProxyMode } from '../net.js';
+import { wbiFetch } from '../wbi.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -228,21 +229,19 @@ export async function fetchBilibiliDynamic(source, ctx) {
 
   if (login.cookie) {
     const bv = await ensureBuvid(ctx);
+    // WBI 签名：这条端点风控极严（实测不带签名稳定 -352），
+    // 而「有登录态」并不够 —— 签名才是过风控的关键。签名加在 query 上。
     const url = `${API}/x/polymer/web-dynamic/v1/feed/space?host_mid=${encodeURIComponent(uid)}&timezone_offset=-480&platform=web&features=itemOpusStyle`;
     let j = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const r = await netFetch(
-        url,
-        {
-          headers: {
-            ...baseHeaders(uid),
-            cookie: cookieHeader(bv, login.cookie),
-          },
-          signal: AbortSignal.timeout(25000),
+      const r = await wbiFetch(ctx.cfg, url, {
+        headers: {
+          ...baseHeaders(uid),
+          cookie: cookieHeader(bv, login.cookie),
         },
-        { cfg: ctx.cfg, subject: source }
-      );
-      j = await r.json().catch(() => null);
+        log: ctx.log ?? null,
+      });
+      j = r.json ?? null;
       if (j?.code === 0) break;
       if (attempt < 2) await new Promise((res) => setTimeout(res, 1500));
     }

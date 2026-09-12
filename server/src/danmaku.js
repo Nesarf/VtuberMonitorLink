@@ -15,6 +15,7 @@ import { resolveDir } from './config.js';
 import { netFetch } from './net.js';
 import { readBrowserCookies } from './cookies.js';
 import { listAccounts, ACCOUNT_UA } from './accounts.js';
+import { wbiPost } from './wbi.js';
 
 const SEND_URL = 'https://api.live.bilibili.com/msg/send';
 const MAX_LEN = 20; // B 站直播间弹幕长度上限
@@ -136,10 +137,13 @@ export async function sendDanmaku(cfg, log, req) {
 
   let result;
   try {
-    const r = await netFetch(
+    // 发送也要 WBI 签名：B 站的新风控对写接口一视同仁，不带签名会被 -352 挡掉。
+    // 签名加在 **query** 上，表单体保持原样（把签名塞进体会让服务端认为签名不对）。
+    const r = await wbiPost(
+      cfg,
       SEND_URL,
       {
-        method: 'POST',
+        body: body.toString(),
         headers: {
           'user-agent': ACCOUNT_UA,
           'content-type': 'application/x-www-form-urlencoded',
@@ -148,19 +152,11 @@ export async function sendDanmaku(cfg, log, req) {
           referer: `https://live.bilibili.com/${roomId}`,
           origin: 'https://live.bilibili.com',
         },
-        body: body.toString(),
-        signal: AbortSignal.timeout(20000),
-      },
-      { cfg, mode: 'direct' } // 与其它 bilibili 调用一致：直连才通，走代理会被风控
+        log,
+      }
     );
-    const text = await r.text();
-    let j = null;
-    try {
-      j = JSON.parse(text);
-    } catch {
-      /* 非 JSON 就下面统一处理 */
-    }
-    const code = j?.code ?? null;
+    const j = r.json ?? null;
+    const code = j?.code ?? (r.ok ? 0 : null);
     const ok = code === 0;
     result = {
       ok,

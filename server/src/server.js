@@ -77,7 +77,6 @@ import {
   toPlainText,
 } from './share.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
-import { listAccounts } from './accounts.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
 import { spawn } from 'node:child_process';
 import {
@@ -942,13 +941,21 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   // ── 登录账号与发弹幕 / accounts & danmaku ────────────────────────
   // 账号发现只读；发送会用使用者本人身份公开发言，所以设计上层层设卡（见 danmaku.js）。
-  app.get('/api/accounts', async (_req, res) => {
+  //
+  // **必须走 60 秒缓存**：listAccounts 是阻塞调用（同步 SQLite + execFileSync 解 DPAPI），
+  // 一次要 3~4 秒，而这期间整个 Node 事件循环是停的 —— 直播页一挂载就会请求这个接口，
+  // 于是「打开直播页 → 整个控制台卡住 4 秒、别的页面全停在『加载中』」。
+  // 这不是「慢」，是一个接口把服务冻住了（和 BUGS #37 同一类）。
+  // 对外发声前（发弹幕/发帖）仍然强制现读，见 danmaku.js 与 /api/share/post。
+  app.get('/api/accounts', async (req, res) => {
     const cfg = getConfig();
-    const r = await listAccounts(cfg);
+    const { accounts, cached, error } = await getAccounts(cfg, { force: req.query.force === '1' });
     res.json({
-      ...r,
+      accounts,
+      cached: !!cached,
+      ...(error ? { error } : {}),
       // 再强调一次：这里只回传身份信息与能力，绝不回传任何 cookie 值
-      canSendAny: r.accounts.some((a) => a.canSend),
+      canSendAny: accounts.some((a) => a.canSend),
       limits: { maxLen: MAX_LEN, minIntervalMs: MIN_INTERVAL_MS },
     });
   });

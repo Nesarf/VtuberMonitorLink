@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { ROOT, readDicts, usedKeys } from './lib/i18n-source.mjs';
+import { inheritableAncestors } from './lib/locale-chain.mjs';
 import { byCode, LOCALES } from '../web/src/locales/index.js';
 import { HAND, HAND_COMMON } from '../web/src/locales/overlays.js';
 
@@ -47,6 +48,8 @@ const args = {
   // 这种断言会被真实缓存命中打败）；手动跑时也方便「换个模型试一遍而不污染正式缓存」。
   cacheDir: '',
   out: '',
+  // 假引擎的行为开关（只有 --engine mock 才看它）：echo = 原样回原文，用来测「不合格就不写」
+  mockMode: '',
 };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
@@ -59,6 +62,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (a === '--bust') args.bust = String(process.argv[++i] ?? 'terms');
   else if (a === '--cache-dir') args.cacheDir = path.resolve(process.argv[++i]);
   else if (a === '--out') args.out = path.resolve(process.argv[++i]);
+  else if (a === '--mock-mode') args.mockMode = String(process.argv[++i] ?? '');
   else if (a === '--review') args.review = process.argv[++i];
   else if (a === '--url') args.url = process.argv[++i];
   else if (a === '--key') args.key = process.argv[++i];
@@ -157,10 +161,15 @@ export function restore(text, tokens) {
  * 为什么需要：覆盖率只统计「有没有值」，于是「值是中文原文」也算 100% —— 度量是虚的。
  * 判据：非中日文目标语言里出现汉字（术语表里有意保留原文的词先剔掉）。
  * 日语例外（汉字本来就是正常书写）。
+ *
+ * 剔除保留词必须**先长后短**：术语表里同时有「嘉然」和「嘉然今天吃什么」，
+ * 先剔短的话长词会被切碎成「今天吃什么」，反而制造出一堆假的「未翻译」。
  */
 export function looksUntranslated(text, locale, glossary = {}) {
   if (!text || String(locale).startsWith('ja')) return false;
-  const keep = Object.keys(glossary).filter((k) => !k.startsWith('_') && glossary[k]?.default === k);
+  const keep = Object.keys(glossary)
+    .filter((k) => !k.startsWith('_') && glossary[k]?.default === k)
+    .sort((a, b) => b.length - a.length);
   let s = String(text);
   for (const t of keep) s = s.split(t).join('');
   return /[\u4e00-\u9fff]/.test(s);
@@ -187,8 +196,12 @@ export function needsRetranslate(sourceText, mode, glossary = {}, existing = nul
 
 // ───────────────────────────────────────────── 引擎
 
-async function translateBatchOpenAI({ texts, locale, target }, provider = {}) {
+async function translateBatchOpenAI({ texts, locale, target }, provider = {}, { task = 'translate' } = {}) {
   const url = `${String(provider.baseUrl).replace(/\/+$/, '')}/chat/completions`;
+  // 「把半成品翻完」是一次**任务不同**的调用：输入不是中文原文，而是上一次那份
+  // 「中英/中韩混排」的输出。这一点很关键 —— 温度是 0，只要输入与提示词都不变，
+  // 模型就会把同一份坏译文再给一遍（踩过：6 条 ko-KR 连续三次原样返回）。
+  const finishing = task === 'finish';
   const body = {
     model: provider.model || args.model || 'gpt-4o-mini',
     temperature: 0,
@@ -196,7 +209,9 @@ async function translateBatchOpenAI({ texts, locale, target }, provider = {}) {
       {
         role: 'system',
         content: [
-          `You translate UI strings for a desktop app into ${target} (${locale}).`,
+          finishing
+            ? `These UI strings were supposed to be in ${target} (${locale}) but are still partly in the source language. Rewrite each one completely in ${target}.`
+            : `You translate UI strings for a desktop app into ${target} (${locale}).`,
           'Output JSON only: {"t":["...","..."]} with exactly ' + texts.length + ' items, same order. Keep it short like a UI label.',
           'Never translate ⟦n⟧ placeholders — copy them exactly.',
           // 专有名词政策（使用者指定）：维持原文优先；只有约定俗成的本地叫法才替换。
@@ -204,6 +219,12 @@ async function translateBatchOpenAI({ texts, locale, target }, provider = {}) {
           'PROPER NOUNS: keep person names, group names, brand names, product names and service names in their original form.',
           'Only replace a proper noun when the target language has a widely established local name for it (e.g. YouTube→유튜브 in Korean, Telegram→Телеграм in Russian, hololive→ホロライブ in Japanese).',
           'If unsure, keep the original — never invent a transliteration.',
+          ...(finishing
+            ? [
+                'Translate every single word. Chinese characters in the output are a hard failure, unless they are part of a proper noun you are told to keep.',
+                'Do not just copy the input: it is a rejected draft.',
+              ]
+            : []),
         ].join(' '),
       },
       { role: 'user', content: JSON.stringify({ t: texts }) },
@@ -228,15 +249,18 @@ async function translateBatchMock({ texts, locale }) {
   // 假引擎：确定性「翻译」，只为验证管线（真的翻译要接 --engine openai）
   const marker = { 'ja-JP': '【JA】', 'ko-KR': '【KO】', 'de-DE': '【DE】' }[locale] ?? `【${locale}】`;
   await new Promise((r) => setTimeout(r, 5));
-  return texts.map((s) => marker + s);
+  // --mock-mode echo：模拟「模型原样回原文」的坏行为，用来端到端验证「补译 → 仍不合格 → 不写入」。
+  if (args.mockMode === 'echo') return texts.map((s) => String(s));
+  // 正常假引擎把汉字去掉：假翻译也该「看起来翻好了」，否则 25 种语言的巡检会被自己的假数据卡住
+  return texts.map((s) => marker + String(s).replace(/[\u4e00-\u9fff]/g, '~'));
 }
 
-async function translateBatch({ texts, locale, target }) {
+async function translateBatch({ texts, locale, target }, opts = {}) {
   if (args.engine === 'mock') return translateBatchMock({ texts, locale });
   if (args.engine === 'app' || args.engine === 'openai') {
     const p = args.engine === 'app' ? providerFromApp() : { baseUrl: args.url, apiKey: args.key, model: args.model };
     if (!p?.baseUrl || !p?.apiKey) throw new Error('没有可用的模型档位（界面里配好，或显式给 --url/--key）');
-    return translateBatchOpenAI({ texts, locale, target }, p);
+    return translateBatchOpenAI({ texts, locale, target }, p, opts);
   }
   throw new Error(`未知引擎: ${args.engine}`);
 }
@@ -272,15 +296,11 @@ function providerFromApp() {
 /** 该语言「人工已经写好」的键（机器层不得覆盖） */
 export function humanKeys(locale) {
   const keys = new Set();
-  for (const layer of [HAND_COMMON[locale], HAND[locale]]) {
-    if (layer) for (const k of Object.keys(layer)) keys.add(k);
-  }
-  // 同语言的上级（es-MX 继承 es-419/es-ES 之类）也算人工
-  const base = String(locale).split('-')[0];
-  for (const loc of LOCALES) {
-    if (loc.code === locale) continue;
-    if (String(loc.code).split('-')[0] !== base) continue;
-    for (const layer of [HAND_COMMON[loc.code], HAND[loc.code]]) {
+  // 自己 + **同语言祖先**（es-MX 继承 es-419/es-ES、zh-TW 继承 zh-Hant/zh-Hans）。
+  // 兄弟地区不算：pt-PT 的 chain 不含 pt-BR，运行时继承不到，把 pt-BR 的词条当
+  // 「人工已有」只会让 pt-PT 永远拿不到机翻（缺口被工具报成 100% 覆盖）。
+  for (const c of [locale, ...inheritableAncestors(locale)]) {
+    for (const layer of [HAND_COMMON[c], HAND[c]]) {
       if (layer) for (const k of Object.keys(layer)) keys.add(k);
     }
   }
@@ -297,12 +317,43 @@ function readMachine() {
   return {};
 }
 
+/**
+ * 写盘前剪枝：机器层里**永远不会被显示**的条目清掉。
+ *
+ * 哪两种：① 人工层已经写过的键（人工压过机器，机器那条是死的）；
+ * ② 简中原文与英文逐字相同的键（各语言都用同一个字符串，不需要译文）。
+ * 不剪会怎样：machine.json 里堆着一批看不见的旧译文，其中带汉字的还会被
+ * 「疑似未翻译」统计抓出来 —— 变成让人去修一条界面上根本不存在的坏译文。
+ */
+export function pruneMachine(machine, { zh, en } = {}) {
+  const removed = [];
+  for (const [code, dict] of Object.entries(machine)) {
+    if (!dict || typeof dict !== 'object') continue;
+    const shadowed = humanKeys(code);
+    for (const key of Object.keys(dict)) {
+      const neutral = zh && en ? isLanguageNeutral(zh.get(key), en.get(key)) : false;
+      if (!neutral && !shadowed.has(key)) continue;
+      removed.push(`${code}.${key}`);
+      delete dict[key];
+    }
+  }
+  return removed;
+}
+
 function writeMachine(all) {
   fs.writeFileSync(args.out || OUT_FILE_DEFAULT, JSON.stringify(all, null, 2) + '\n', 'utf8');
 }
 
+/**
+ * 这条根本不用翻：简中原文与英文**逐字相同**（品牌名与缩写，如 LLM / API Key）。
+ * 判据来自源码本身（zh 值 === en 值），不另立豁免清单 —— 清单会漂移。
+ */
+export function isLanguageNeutral(zhValue, enValue) {
+  return !!zhValue && zhValue === enValue;
+}
+
 async function main() {
-  const { zh } = readDicts();
+  const { zh, en } = readDicts();
   const used = usedKeys();
   const glossary = loadGlossary();
 
@@ -339,6 +390,7 @@ async function main() {
     const cache = loadCache(locale);
     const todo = [];
     let skippedHuman = 0;
+    let skippedNeutral = 0;
     for (const key of used) {
       if (human.has(key)) {
         skippedHuman++;
@@ -346,6 +398,10 @@ async function main() {
       }
       const value = zh.get(key);
       if (!value) continue;
+      if (isLanguageNeutral(value, en.get(key))) {
+        skippedNeutral++;
+        continue;
+      }
       const ck = cacheKey(value, locale);
       const existing = cache[ck];
       if (existing && !needsRetranslate(value, args.bust, glossary, existing, locale)) {
@@ -358,7 +414,7 @@ async function main() {
     }
     const batchSize = Math.max(1, args.batch);
     const queue = args.limit > 0 ? todo.slice(0, args.limit) : todo;
-    log(`\n${locale}（${loc.name}）: 人工已有 ${human.size} 条（跳过 ${skippedHuman}）· 待译 ${todo.length} · 本次处理 ${queue.length} · 缓存命中 ${grand.cached}`);
+    log(`\n${locale}（${loc.name}）: 人工已有 ${human.size} 条（跳过 ${skippedHuman}）· 原文=英文不用翻 ${skippedNeutral} 条 · 待译 ${todo.length} · 本次处理 ${queue.length} · 缓存命中 ${grand.cached}`);
 
     if (args.dryRun) {
       for (const t of queue.slice(0, 10)) log(`  [dry-run] ${t.key} = ${t.value.slice(0, 40)}`);
@@ -390,17 +446,60 @@ async function main() {
           }
         }
         if (!out) continue;
-        for (let i = 0; i < b.length; i++) {
+
+        // 第一遍结果：还原并校验占位符
+        const draft = b.map((_, i) => {
           const restored = restore(out[i], prepared[i].tokens);
-          if (!restored.ok) {
+          return restored.ok ? { ok: true, text: restored.text } : { ok: false, missing: restored.missing };
+        });
+
+        // 第二遍（只对「看起来没翻完」的条目）：把这些半成品当输入再要一次。
+        // 为什么不重发原文：温度 0，输入与提示词都不变 → 模型原样再给一遍坏译文。
+        const leftover = draft.map((d, i) => (d.ok && looksUntranslated(d.text, locale, glossary) ? i : -1)).filter((i) => i >= 0);
+        if (leftover.length) {
+          const again = leftover.map((i) => protect(draft[i].text, glossary, locale));
+          let out2 = null;
+          try {
+            out2 = await translateBatch({ texts: again.map((p) => p.text), locale, target: loc.name }, { task: 'finish' });
+          } catch (e) {
+            log(`  ⚠ 补译批次失败（${leftover.length} 条）: ${e.message}`);
+          }
+          if (out2) {
+            leftover.forEach((slot, k) => {
+              const r = restore(out2[k], again[k].tokens);
+              if (r.ok) draft[slot] = { ok: true, text: r.text, refinished: true };
+            });
+          }
+        }
+
+        for (let i = 0; i < b.length; i++) {
+          const d = draft[i];
+          if (!d.ok) {
             // 哨兵丢了 → 这一条不写（宁缺勿坏），并记账等下次
             failed++;
-            log(`  ✕ ${b[i].key}: 占位符缺失 ${restored.missing.join(',')}，已丢弃`);
+            log(`  ✕ ${b[i].key}: 占位符缺失 ${d.missing.join(',')}，已丢弃`);
             continue;
           }
-          cache[b[i].ck] = restored.text;
+          if (looksUntranslated(d.text, locale, glossary)) {
+            // 补译之后**仍然**没翻完 → 不写进机器层。
+            // 写了会是什么后果：韩语界面上出现一整句中文（真实发生过），而且因为是「有值」，
+            // 覆盖度还会显示 100%。不写则回落英文 —— 英文没翻译至少不冒犯任何人。
+            failed++;
+            const prev = machine[locale]?.[b[i].key];
+            if (looksUntranslated(prev, locale, glossary)) {
+              // 旧值同样是坏的 → 一并清掉，否则「宁缺勿坏」只是句口号：
+              // 坏值留在 machine.json 里，界面还是那句中文。
+              // （旧值是好的话绝不动它 —— 不能因为模型今天状态差就把译文删了。）
+              delete machine[locale][b[i].key];
+              log(`  ✕ ${b[i].key}: 补译后仍含原文，已从机器层移除（界面回落英文，下次再试）`);
+            } else {
+              log(`  ✕ ${b[i].key}: 补译后仍含原文，未写入（保留原有译文，界面回落英文，下次再试）`);
+            }
+            continue;
+          }
+          cache[b[i].ck] = d.text;
           machine[locale] ??= {};
-          machine[locale][b[i].key] = restored.text;
+          machine[locale][b[i].key] = d.text;
           translated++;
         }
       }
@@ -417,8 +516,10 @@ async function main() {
   }
 
   if (!args.dryRun) {
+    const pruned = pruneMachine(machine, { zh, en });
     writeMachine(machine);
     log(`\n写入 ${path.relative(ROOT, args.out || OUT_FILE_DEFAULT)}`);
+    if (pruned.length) log(`剪掉 ${pruned.length} 条永远不会显示的机器词条（人工层已有 / 原文即英文）`);
     log(`机器层是**最低优先级**（人工词条永远压过它），改完跑 npm run i18n:coverage 看效果。`);
   }
   log(`\n合计: 新译 ${grand.translated} · 缓存命中 ${grand.cached} · 失败 ${grand.failed}`);

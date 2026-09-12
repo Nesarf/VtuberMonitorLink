@@ -8,7 +8,9 @@
 //    16 个语言的成本从「16 × 600 条」降到「2 套完整 + 14 套差异」。
 //
 // 2. **回落链必须显式写出来**，不能靠猜：zh-HK → zh-Hant → zh-Hans；
-//    en-AU/GB/CA/NZ → en-US；es-MX/AR → es-419 → es-ES；pt-BR → pt-BR → pt-PT。
+//    en-AU/GB/CA/NZ → en-US；es-MX/AR → es-419 → es-ES；pt-BR → pt-PT。
+//    注意方向是不对称的：pt-BR 继承 pt-PT，pt-PT **不**继承 pt-BR（工具侧
+//    tools/lib/locale-chain.mjs 与这里语义必须一致，别再各写一份）。
 //    注意 uk/sr/pl 是**独立语言**，把 ru 放进它们的 chain 只是「缺键时兜底」，
 //    不是「它们是俄语的方言」—— 这一点在界面上不能搞错。
 //

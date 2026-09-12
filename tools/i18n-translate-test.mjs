@@ -8,7 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { cacheKey, humanKeys, needsRetranslate, protect, restore } from './i18n-translate.mjs';
+import { cacheKey, humanKeys, isLanguageNeutral, looksUntranslated, needsRetranslate, protect, restore } from './i18n-translate.mjs';
+import { readDicts, usedKeys } from './lib/i18n-source.mjs';
+import { inheritableAncestors } from './lib/locale-chain.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0;
@@ -100,6 +102,80 @@ t('同语言的地区继承也算人工（es-MX 复用 es-ES 的人工词条）'
   assert.ok(mx.has('save'), 'es-ES 的 save 应当也算 es-MX 的人工层');
 });
 
+t('兄弟地区**不算**人工：pt-PT 不能靠 pt-BR 的人工词条挡掉机翻', () => {
+  // 这条是踩过的坑：humanKeys 原先按「同 base 的所有地区」算人工，
+  // 于是 pt-BR 写过的词条让 pt-PT 永远不翻译 —— 可是 pt-PT 的 chain 是
+  // ['pt-PT','en-US']，运行时继承不到 pt-BR，那 4 条就一直是英文兜底，
+  // 而覆盖度表格显示 100%（缺口被统计口径吃掉了）。
+  const ptbr = humanKeys('pt-BR');
+  const ptpt = humanKeys('pt-PT');
+  assert.ok(ptbr.has('probe'), 'pt-BR 自己应当有 probe（说明它确实是人工写的）');
+  assert.ok(!ptpt.has('probe'), 'pt-PT 不该把 pt-BR 的 probe 当人工已有（否则永远不翻）');
+  assert.ok(ptbr.has('probe'), 'pt-BR 自己的仍然算人工');
+  // 继承链本身：真正的祖先要继承，兄弟不要（这里直接断言链，不依赖哪些语言写了人工层）。
+  // 顺序是「基础 → 具体」——前端就是按这个顺序正向合并，后写的（更具体）压前面的。
+  assert.deepEqual(inheritableAncestors('zh-TW'), ['zh', 'zh-Hans', 'zh-Hant']);
+  assert.deepEqual(inheritableAncestors('pt-BR'), ['pt-PT']);
+  assert.deepEqual(inheritableAncestors('pt-PT'), [], 'pt-PT 不继承 pt-BR');
+  assert.deepEqual(inheritableAncestors('uk-UA'), [], 'uk 不继承 ru（跨语言回落是英文，不是把俄语当乌克兰语）');
+  assert.deepEqual(inheritableAncestors('es-MX'), ['es-ES', 'es-419']);
+});
+
+process.stdout.write('\ni18n-translate: 词条解析（源码里的四种写法都要认）\n');
+t('双引号、跨行 + 拼接、嵌套对象都能正确解析', () => {
+  const sample = [
+    'const STRINGS = {',
+    '  zh: {',
+    '    appTitle: "Vtuber\'s Monitor Link",',
+    '    loginHint:',
+    "      '第一段。' +",
+    "      '第二段。' +",
+    "      '第三段。',",
+    "    nested: {",
+    "      inner: '不该被算成外层值',",
+    '    },',
+    "    after: '后面的词条不能被吃掉',",
+    '  },',
+    '};',
+  ].join('\n');
+  const { zh } = readDicts(sample);
+  assert.equal(zh.get('appTitle'), "Vtuber's Monitor Link", '双引号的值必须读出来');
+  assert.equal(zh.get('loginHint'), '第一段。第二段。第三段。', '跨行拼接的值必须拼起来');
+  assert.equal(zh.get('nested'), '', '嵌套对象不是文案');
+  assert.equal(zh.get('after'), '后面的词条不能被吃掉', '嵌套对象不能吃掉后面的行');
+});
+
+t('注释里的引号不会被当成值（并会在导入后清理）', () => {
+  const sample = ['const STRINGS = {', '  zh: {', "    key: '值', // 备注里写 'x' 不算", '  },', '};'].join('\n');
+  const { zh } = readDicts(sample);
+  assert.equal(zh.get('key'), '值');
+});
+
+t('语言中立的词条（简中原文 = 英文）不浪费一次翻译调用', () => {
+  assert.equal(isLanguageNeutral('LLM', 'LLM'), true);
+  assert.equal(isLanguageNeutral('API Key', 'API Key'), true);
+  assert.equal(isLanguageNeutral('保存', 'Save'), false);
+  assert.equal(isLanguageNeutral('', ''), false, '空值不算「中立」，那是没解析出来');
+  // 真实字典里确实存在这种词条（否则这条规则就是空转）
+  const { zh, en } = readDicts();
+  const neutral = [...usedKeys()].filter((k) => isLanguageNeutral(zh.get(k), en.get(k)));
+  assert.ok(neutral.length >= 3, '真实字典里应当至少有 3 条语言中立词条，实际 ' + neutral.length);
+});
+
+t('保留原文的词条要「先剔长后剔短」', () => {
+  // 术语表里同时有「嘉然」与「嘉然今天吃什么」：先剔短词会把长词切成「今天吃什么」，
+  // 于是合法保留的专有名词被报成漏译（真实踩过：37 条里有 24 条是这么来的假警报）
+  const glossary = { 嘉然: { default: '嘉然' }, 嘉然今天吃什么: { default: '嘉然今天吃什么' } };
+  assert.equal(
+    looksUntranslated('Séparés par des virgules, ex. : 嘉然今天吃什么, Jia Ran', 'fr-FR', glossary),
+    false,
+    '长词被正确剔除后不该判为未翻译',
+  );
+  // 但真漏译仍要抓住
+  assert.equal(looksUntranslated('同一件事被各소스分别报道的原文', 'ko-KR', glossary), true);
+  assert.equal(looksUntranslated('日本語の漢字は正常', 'ja-JP', glossary), false, '日语例外');
+});
+
 process.stdout.write('\ni18n-translate: 端到端（假引擎）\n');
 t('假引擎跑通：只翻缺失的键、人工层不被覆盖、缓存能复用', () => {
   // 沙箱：缓存与产物都指到临时目录 —— 否则真实翻译填满缓存之后，
@@ -121,8 +197,30 @@ t('假引擎跑通：只翻缺失的键、人工层不被覆盖、缓存能复�
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('--bust terms 的判据：含专有名词才重译（纯逻辑，按单元测而不是跑命令行）', () => {
-  const glossary = { Telegram: { default: 'Telegram' } };
+t('模型原样回原文 → 补译一次，仍不合格就**不写入**（宁可回落英文）', () => {
+  // 这条对应真实事故：韩语界面里出现整句中文（ko-KR 的 6 条），而且因为「有值」，
+  // 覆盖度照样显示 100%。现在：补译（任务不同，所以模型不会原样再给一遍）
+  // 之后仍含汉字 → 丢弃并记账，界面回落英文。
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-echo-'));
+  const outFile = path.join(sandbox, 'machine.json');
+  const out = execFileSync(
+    process.execPath,
+    [
+      path.join(ROOT, 'tools/i18n-translate.mjs'),
+      '--engine', 'mock', '--mock-mode', 'echo',
+      '--locales', 'ko-KR', '--limit', '4',
+      '--cache-dir', sandbox, '--out', outFile,
+    ],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  assert.ok(/补译后仍含原文/.test(out), '应当报告「补译后仍含原文」: ' + out.slice(-300));
+  const machine = JSON.parse(fs.readFileSync(outFile, 'utf8'))['ko-KR'] ?? {};
+  const han = Object.values(machine).filter((v) => /[\u4e00-\u9fff]/.test(String(v)));
+  assert.equal(han.length, 0, '不合格的条目不该进机器层，实际 ' + JSON.stringify(han.slice(0, 3)));
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+t('--bust terms 的判据：含专有名词才重译（纯逻辑，按单元测而不是跑命令行）', () => {  const glossary = { Telegram: { default: 'Telegram' } };
   // none：永远走缓存
   assert.equal(needsRetranslate('Telegram 推送失败', 'none', glossary), false);
   // all：全部重译

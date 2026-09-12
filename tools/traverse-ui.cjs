@@ -234,6 +234,36 @@ async function main() {
     await page.waitForTimeout(400);
     const plTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
     check('波兰语界面用波兰语且没有混入俄语', plTabs.includes('Informacje') && !/Сводка|Настройки/.test(plTabs), plTabs);
+
+    // 韩语界面里不能出现中文。防的是真实事故：6 条词条是「中韩混排」
+    // （「已加入모니터링」「开播是最有时效性的정보 —— …」），韩语使用者看到的是一整句中文，
+    // 而因为「有值」，覆盖度照样显示 100% —— 只有真的把页面读出来才看得见。
+    await langSel.selectOption('ko-KR');
+    await page.waitForTimeout(400);
+    const koTabs = await page.locator('nav.tabs button').allInnerTexts();
+    check('韩语界面用韩语', koTabs.includes('정보'), koTabs.join(' | '));
+    const koLive = page.locator('nav.tabs button', { hasText: '라이브' }).first();
+    if (await koLive.count()) {
+      await koLive.click();
+      await page.waitForTimeout(800);
+      // 只扫**界面自己的文案**（标题 / 说明 / 标签页），不扫数据区 ——
+      // 直播页里的房间标题、分区名是 B 站来的外部数据（「轮播」「生活娱乐」…），
+      // 还有来源名是使用者自己起的（「嘉然动态」），它们当然不该被翻译。
+      const koChrome = [
+        ...(await page.locator('main h2').allInnerTexts()),
+        ...(await page.locator('main .hint').allInnerTexts()),
+        ...(await page.locator('nav.tabs button').allInnerTexts()),
+      ].join('\n');
+      // 政策上要保留原文的专有名词先剔掉（先长后短，否则长词会被短词切碎）
+      const keep = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
+        .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
+        .map(([k]) => k)
+        .sort((a, b) => b.length - a.length);
+      let rest = koChrome;
+      for (const term of keep) rest = rest.split(term).join('');
+      const leftover = [...new Set(rest.match(/[\u4e00-\u9fff]/g) || [])];
+      check('韩语直播页里没有残留中文', leftover.length === 0, leftover.length ? '残留汉字: ' + leftover.join('') : '0 个汉字残留');
+    }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
@@ -253,7 +283,7 @@ async function main() {
     await page.waitForTimeout(700);
     let main = await mainText();
     for (const section of ['浏览器', '网络代理', '定时', '界面']) {
-      check('Settings has the ' + section + ' section', main.indexOf(section) !== -1);
+      check('Settings has the ' + section + ' section', main.indexOf(section) !== -1, main.slice(0, 160).replace(/\n/g, ' '));
     }
     // a11y：任务行里的控件必须有无障碍名（BUGS #6 —— 以前只有表头，读屏读不出这一格是什么）
     if ((await page.locator('section.tasks tbody tr').count()) === 0) {

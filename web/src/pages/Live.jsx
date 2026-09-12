@@ -177,7 +177,15 @@ export default function Live() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    // 故意**不在挂载时**读登录态。两个原因：
+    // ① 读它要同步解 DPAPI（实测 3~4 秒），而这期间整个 Node 事件循环是停的 ——
+    //    打开直播页会让**别的页面**一起卡在「加载中」（实测：点完直播页再点设置，设置页 4 秒白屏）；
+    // ② 它读的是浏览器的 cookie 库。使用者还没打算发弹幕时，本来就不该去碰它（隐私闸门）。
+    // 需要时点「检查登录态」即可，服务端那边也加了 60 秒缓存。
+    api
+      .getDanmakuAudit()
+      .then((r) => setAudit(r.entries ?? []))
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -421,10 +429,12 @@ export default function Live() {
             </select>
             <div className="row" style={{ gap: 6, marginTop: 4 }}>
               <button className="ghost tiny" onClick={loadAccounts} disabled={busy}>
-                {t('danmakuRefresh')}
+                {accounts === null ? t('checkLogin') : t('danmakuRefresh')}
               </button>
               {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}
             </div>
+            {/* 还没主动去读登录态时，把「要去读浏览器 cookie 库」这件事说清楚（复用人写过的文案，不新增词条） */}
+            {accounts === null ? <div className="hint" style={{ margin: '4px 0 0' }}>{t('loginHint')}</div> : null}
           </div>
           <div className="field" style={{ flex: '0 0 140px' }}>
             <label>{t('danmakuRoom')}</label>

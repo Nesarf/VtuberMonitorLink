@@ -45,7 +45,63 @@ export function dictBlock(src, which) {
   return after.slice(0, end ? end.index : after.length);
 }
 
-/** 字典自身一层的「键 → 值」（值可能是多行字符串） */
+/** 抹掉 `//` 行注释（引号内的 `//` 不算注释） */
+export function stripComments(s) {
+  let out = '';
+  let q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      out += c;
+      if (c === '\\') {
+        out += s[i + 1] ?? '';
+        i++;
+      } else if (c === q) q = null;
+    } else if (c === "'" || c === '"' || c === '`') {
+      q = c;
+      out += c;
+    } else if (c === '/' && s[i + 1] === '/') {
+      break; // 行注释：后面都不是代码（也不是文案）
+    } else out += c;
+  }
+  return out;
+}
+
+/** 「抹字符串 + 抹注释」的组合，用于判断结构（逗号、花括号） */
+export function noComment(s) {
+  return String(s)
+    .split(/\r?\n/)
+    .map((l) => stripStrings(stripComments(l)))
+    .join('\n');
+}
+
+/** 从一段源码里取出所有字符串字面量并拼起来（跨行 `'a' + 'b'` 就是同一个值） */
+export function literalValue(src) {
+  const out = [];
+  const cleaned = String(src)
+    .split(/\r?\n/)
+    .map((l) => stripComments(l))
+    .join('\n');
+  const re = /'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"/g;
+  for (const m of cleaned.matchAll(re)) {
+    const body = m[1] ?? m[2] ?? '';
+    out.push(body.replace(/\\(['"\\])/g, '$1').replace(/\\n/g, '\n'));
+  }
+  return out.join('');
+}
+
+/**
+ * 字典自身一层的「键 → 值」。
+ *
+ * 值的形态有四种，全都要认（早期版本只认「同一行的单引号字符串」，于是
+ * `appTitle: "Vtuber's Monitor Link"`（双引号）与
+ * `loginHint:` 换行后 `'甲' + '乙' + '丙'`（跨行拼接）被读成空串 ——
+ * 空串在管线里等于「这条不用翻」，于是这两种词条在**所有语言**里都静默缺译）。
+ *   · 同一行 '值' / "值"
+ *   · 冒号后换行，值在下一行
+ *   · 值跨多行用 + 拼起来（长句的常见形态）
+ *   · 值是对象/数组（嵌套）→ 记空串，且**不吃掉后面的行**
+ */
 export function dictEntries(block) {
   const entries = new Map();
   const lines = block.split(/\r?\n/);
@@ -54,20 +110,28 @@ export function dictEntries(block) {
     const raw = lines[i];
     const stripped = stripStrings(raw);
     if (depth === 1) {
-      const m = /^\s*(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$/.exec(stripped);
+      const m = /^\s*(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))\s*:/.exec(stripped);
       if (m) {
         const key = m[1] ?? m[2];
-        // 值：优先同一行的字符串；否则取下一行（长句的常见形态）
-        const inline = /:\s*'([\s\S]*)',?\s*$/.exec(raw);
-        if (inline) entries.set(key, inline[1]);
-        else {
-          const next = lines[i + 1] ?? '';
-          const m2 = /^\s*'([\s\S]*)',?\s*$/.exec(next);
-          entries.set(key, m2 ? m2[1] : '');
+        const tail = raw.slice(m[0].length);
+        const tailStripped = noComment(tail);
+        if (/[{[]/.test(tailStripped)) {
+          entries.set(key, ''); // 嵌套对象/数组：不是文案
+        } else {
+          let acc = tail;
+          let j = i;
+          // 值一直读到「收尾的逗号」为止（最多 40 行，防止畸形源码把整个字典吃光）
+          while (!/[,;]/.test(noComment(acc)) && j < lines.length - 1 && j - i < 40) {
+            j++;
+            acc += '\n' + lines[j];
+          }
+          entries.set(key, literalValue(acc));
+          i = j;
         }
       }
     }
-    for (const ch of stripped) {
+    // 深度：必须用**改写过 i 之后**的那一行来数（跨行值里的 {} 都在引号内，会被抹掉）
+    for (const ch of noComment(lines[i])) {
       if (ch === '{' || ch === '[') depth++;
       else if (ch === '}' || ch === ']') depth--;
     }

@@ -16,58 +16,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LOCALES, byCode } from '../web/src/locales/index.js';
 import { HAND, HAND_COMMON } from '../web/src/locales/overlays.js';
+import { usableChain } from './lib/locale-chain.mjs';
+import { readDicts } from './lib/i18n-source.mjs';
+import { looksUntranslated, humanKeys } from './i18n-translate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const I18N = path.join(ROOT, 'web/src/i18n.jsx');
 const BASELINE = path.join(ROOT, 'web/src/locales/coverage.json');
 
-/** 字符串字面量内容抹掉（同 integrity-check：数花括号不能被值里的 { 骗到）*/
-function stripStrings(s) {
-  let out = '';
-  let q = null;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (q) {
-      if (c === '\\') {
-        out += '  ';
-        i++;
-      } else if (c === q) {
-        q = null;
-        out += c;
-      } else out += ' ';
-    } else if (c === "'" || c === '"' || c === '`') {
-      q = c;
-      out += c;
-    } else out += c;
-  }
-  return out;
-}
-
-function blockFor(src, which) {
-  const startIdx = src.indexOf(`  ${which}: {`);
-  if (startIdx < 0) return '';
-  const after = src.slice(startIdx);
-  const end = /\n  \},\n/.exec(after);
-  return after.slice(0, end ? end.index : after.length);
-}
-
-function topLevelKeys(block) {
-  const keys = new Set();
-  let depth = 0;
-  for (const raw of stripStrings(block).split(/\r?\n/)) {
-    const m = depth === 1 && /^\s*(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))\s*:/.exec(raw);
-    if (m) keys.add(m[1] ?? m[2]);
-    for (const ch of raw) {
-      if (ch === '{' || ch === '[') depth++;
-      else if (ch === '}' || ch === ']') depth--;
-    }
-  }
-  return keys;
-}
-
-const src = fs.readFileSync(I18N, 'utf8');
-const zhKeys = topLevelKeys(blockFor(src, 'zh'));
-const enKeys = topLevelKeys(blockFor(src, 'en'));
+/**
+ * 词条解析统一走 tools/lib/i18n-source.mjs（唯一实现）。
+ * 这里原先自己写了一份 stripStrings/blockFor/topLevelKeys/zhValueLengths ——
+ * 于是「管线认得的词条」和「覆盖度统计的词条」可以不一样，正是漏译藏身的地方。
+ */
+const dicts = readDicts(fs.readFileSync(I18N, 'utf8'));
+const zhKeys = new Set(dicts.zh.keys());
+const enKeys = new Set(dicts.en.keys());
 
 // 界面真正用到的 key（只统计这些才有意义：词条里的死键不算）
 const CODE = ['.js', '.jsx'];
@@ -88,17 +52,25 @@ for (const f of files) {
 const dynamicPrefixes = ['tab_', 'calKind_', 'llmFeat_', 'taskMode_', 'on_', 'freq_', 'field_', 'mode_', 'sort_'];
 for (const k of enKeys) if (dynamicPrefixes.some((p) => k.startsWith(p))) used.add(k);
 
-/** 复刻 i18n.jsx 的递归回落链 */
-function resolveChain(code, seen = new Set()) {
-  if (seen.has(code)) return [];
-  seen.add(code);
-  const loc = byCode(code);
-  const parents = (loc?.chain ?? [code]).filter((c) => c !== code);
-  const out = [];
-  for (const p of parents) out.push(...resolveChain(p, seen));
-  out.push(code);
-  return out;
-}
+/**
+ * 「本来就不用翻」的键：简中原文与英文**逐字相同**（品牌名与缩写，如 LLM / API Key）。
+ * 它们在每种语言里都显示同一个字符串，算进分母只会制造永远补不齐的缺口
+ * （每个语言都显示 563/565，看起来像漏了 2 条，其实是这 2 条不需要翻译）。
+ * 判据取自源码本身，不另立一份「豁免清单」——清单会漂移，源码不会。
+ */
+const LANG_NEUTRAL = new Set(
+  [...used].filter((k) => {
+    const v = dicts.zh.get(k);
+    return !!v && v === dicts.en.get(k);
+  }),
+);
+const localizable = [...used].filter((k) => !LANG_NEUTRAL.has(k));
+const langNeutral = [...LANG_NEUTRAL].sort();
+
+/**
+ * 回落链由 tools/lib/locale-chain.mjs 提供（唯一实现，翻译管线也用同一份）。
+ * 这里原先自己「复刻」了一遍 i18n.jsx 的逻辑，于是和 humanKeys 漂移成了两套语义。
+ */
 
 let GENERATED = {};
 try {
@@ -117,22 +89,12 @@ try {
   MACHINE = {};
 }
 
-// 术语表里「有意保留原文」的词（它们出现在译文里不算漏译）
-let GLOSSAARY_KEEP = {};
+// 术语表：既给「有意保留原文」当豁免依据，也交给管线的判据函数
+let GLOSSARY = {};
 try {
-  const g = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8'));
-  for (const [k, v] of Object.entries(g)) {
-    if (k.startsWith('_')) continue;
-    if (v?.default === k) GLOSSAARY_KEEP[k] = true;
-  }
+  GLOSSARY = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8'));
 } catch {
-  GLOSSAARY_KEEP = {};
-}
-
-/** 真正可用的回落链：只在**同一语言内**继承地区差异，跨语言不继承（见 i18n.jsx 注释） */
-function usableChain(code) {
-  const base = String(code).split('-')[0];
-  return resolveChain(code).filter((c) => String(c).split('-')[0] === base);
+  GLOSSARY = {};
 }
 
 /** 这个语言**自己**提供的键（不含最终回落到英文的那部分） */
@@ -157,22 +119,21 @@ function ownKeys(code) {
   return keys;
 }
 
-const total = used.size;
+const total = localizable.length;
 const rows = [];
 for (const loc of LOCALES) {
   const own = ownKeys(loc.code);
-  const covered = [...used].filter((k) => own.has(k)).length;
+  const covered = localizable.filter((k) => own.has(k)).length;
   // 「有值」不等于「翻好了」：机翻漏译会留下汉字原文。日语例外（汉字是正常书写）。
-  // 只统计存在机器层的部分 —— 人工词条是人写的，不该由这个指标背锅。
+  // 判据直接用管线里的那一个函数 —— 这里原先复制了一份，连「先剔长词还是短词」都不一样。
+  // 被人图层压住的机器词条不算：它**不会显示**，报出来只会让人去修一条看不见的东西。
   const mach = MACHINE[loc.code] ?? (loc.code.split('-')[0] === 'en' ? {} : null);
+  const shadowed = humanKeys(loc.code);
   let suspicious = 0;
-  if (mach && !String(loc.code).startsWith('ja')) {
-    const keep = Object.keys(GLOSSAARY_KEEP);
-    for (const v of Object.values(mach)) {
-      if (!v) continue;
-      let s = String(v);
-      for (const t of keep) s = s.split(t).join('');
-      if (/[\u4e00-\u9fff]/.test(s)) suspicious++;
+  if (mach) {
+    for (const [k, v] of Object.entries(mach)) {
+      if (shadowed.has(k)) continue;
+      if (looksUntranslated(v, loc.code, GLOSSARY)) suspicious++;
     }
   }
   rows.push({ code: loc.code, name: loc.name, covered, total, pct: total ? covered / total : 0, suspicious });
@@ -184,7 +145,8 @@ const bar = (p) => {
   return '█'.repeat(n) + '░'.repeat(20 - n);
 };
 
-process.stdout.write(`\n界面用到的词条: ${total} 个\n\n`);
+process.stdout.write(`\n界面用到的词条: ${used.size} 个（其中 ${langNeutral.length} 条简中原文与英文逐字相同，各语言都不需要翻译：${langNeutral.join(' / ')}）\n`);
+process.stdout.write(`需要本地化的词条: ${total} 个\n\n`);
 for (const r of rows) {
   const warn = r.suspicious ? `   ⚠ 疑似未翻译 ${r.suspicious}` : '';
   process.stdout.write(`  ${r.code.padEnd(9)} ${bar(r.pct)} ${String(Math.round(r.pct * 100)).padStart(3)}%  ${r.covered}/${r.total}  ${r.name}${warn}\n`);
@@ -199,45 +161,15 @@ const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 
 const update = process.argv.includes('--update');
 
 /**
- * 简体词条的「键 → 值长度」。
+ * 简体词条的「键 → 值长度」，直接用解析结果，不再自己写正则。
  * 分类要按**值**的长度，不是键名的长度 —— 按钮/字段是短值（翻译便宜、可见度最高），
  * 提示句是长值（成本高得多）。第一版按键名分，于是 516 条全被算成「短键」（其实里面
  * 有大量长句），等于没分类。
  */
-function zhValueLengths() {
-  const block = blockFor(src, 'zh');
-  const out = new Map();
-  const lines = block.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^\s+(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$/.exec(lines[i]);
-    if (!m) continue;
-    const key = m[1] ?? m[2];
-    let rest = m[3].trim();
-    if (!rest) {
-      // 值写在下一行（长句常见形态）
-      const next = (lines[i + 1] ?? '').trim();
-      rest = next;
-    }
-    const str = /^'([\s\S]*)',?$/.exec(rest);
-    out.set(key, str ? str[1].length : 400);
-  }
-  return out;
-}
-const valueLen = zhValueLengths();
+const valueLen = new Map([...dicts.zh].map(([k, v]) => [k, (v ?? '').length || 400]));
 
 /** 取简体词条的值（列缺失清单时一并显示，方便判断怎么翻） */
-function zhValueOf(key) {
-  const block = blockFor(src, 'zh');
-  const re = new RegExp(`^\\s+(?:'${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}'|${key})\\s*:\\s*(.*)$`, 'm');
-  const m = re.exec(block);
-  if (!m) return '';
-  const inline = /^'([\s\S]*?)',?\s*$/.exec(m[1].trim());
-  if (inline) return inline[1];
-  // 值在下一行
-  const after = block.slice(m.index + m[0].length);
-  const next = /^\s*'([\s\S]*?)',?\s*$/m.exec(after);
-  return next ? next[1] : '';
-}
+const zhValueOf = (key) => dicts.zh.get(key) ?? '';
 
 // --missing <code>：列出该语言**还没本地化**的界面词条（用来挑下一批要翻译的键，
 // 而不是凭印象猜哪些缺）。短值优先 —— 那是使用者一打开就看到的按钮与字段。
@@ -250,7 +182,7 @@ if (missingIdx >= 0) {
     process.exit(1);
   }
   const own = ownKeys(code);
-  const missing = [...used].filter((k) => !own.has(k));
+  const missing = localizable.filter((k) => !own.has(k));
   const short = missing.filter((k) => (valueLen.get(k) ?? 99) <= 12).sort();
   const mid = missing.filter((k) => (valueLen.get(k) ?? 99) > 12 && (valueLen.get(k) ?? 99) <= 40).sort();
   const long = missing.filter((k) => (valueLen.get(k) ?? 99) > 40).sort();

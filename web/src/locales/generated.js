@@ -1,7 +1,7 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-11T23:53:13.424Z
+// 生成时间：2026-09-12T00:00:12.967Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
@@ -13,6 +13,10 @@ export const GENERATED = {
     "tab_settings": "設置",
     "tab_reports": "報告",
     "tab_calendar": "日曆",
+    "language": "語言",
+    "name": "名稱",
+    "date": "日期",
+    "detecting": "探測中…",
     "calHint": "生日、出道日、3D披露、週年倒計時。「今天」按下面標出的時區計算（可在設置裏改成對方的時區，例如盯日箱就用 Asia/Tokyo）；2 月 29 日的生日在平年會順延到 3 月 1 日並標出來，不會悄悄算錯。",
     "calEmpty": "還沒有紀念日。展開下面的「添加」或「從情報裏找線索」開始。",
     "calToday": "今天",
@@ -517,6 +521,10 @@ export const GENERATED = {
     "tab_settings": "設置",
     "tab_reports": "報告",
     "tab_calendar": "日曆",
+    "language": "語言",
+    "name": "名稱",
+    "date": "日期",
+    "detecting": "探測中…",
     "calHint": "生日、出道日、3D披露、週年倒計時。「今天」按下面標出的時區計算（可在設置裏改成對方的時區，例如盯日箱就用 Asia/Tokyo）；2 月 29 日的生日在平年會順延到 3 月 1 日並標出來，不會悄悄算錯。",
     "calEmpty": "還沒有紀念日。展開下面的「添加」或「從情報裏找線索」開始。",
     "calToday": "今天",
@@ -1021,6 +1029,10 @@ export const GENERATED = {
     "tab_settings": "設定",
     "tab_reports": "報告",
     "tab_calendar": "日曆",
+    "language": "語言",
+    "name": "名稱",
+    "date": "日期",
+    "detecting": "探測中…",
     "calHint": "生日、出道日、3D披露、週年倒計時。「今天」按下面標出的時區計算（可在設定裡改成對方的時區，例如盯日箱就用 Asia/Tokyo）；2 月 29 日的生日在平年會順延到 3 月 1 日並標出來，不會悄悄算錯。",
     "calEmpty": "還沒有紀念日。展開下面的「新增」或「從情報裡找線索」開始。",
     "calToday": "今天",

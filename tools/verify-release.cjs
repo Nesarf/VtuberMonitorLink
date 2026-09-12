@@ -126,6 +126,7 @@ function parseArgs(argv) {
   const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), verbose: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dir') out.dir = path.resolve(argv[++i]);
+    else if (argv[i] === '--scan-only') out.scanOnly = true;
     else if (argv[i] === '--verbose') out.verbose = true;
   }
   return out;
@@ -189,6 +190,12 @@ function main() {
   process.stdout.write('\nproofreading: ' + args.dir + '\n\n');
 
   // ---------------------------------------------------------------- 1. layout
+  //
+  // --scan-only：只做「文本扫描」（编码 / ASCII 规则 / 密钥 / 个人路径），
+  // 不要求发行版目录结构。对外发布脚本要拿它去扫**源码副本**——源码树里当然
+  // 没有 exe、没有 app/server/node_modules，那些 MISS 全是误判。
+  // 与其在调用方过滤输出（那等于把校验器的嘴捂住），不如给它一个正经的模式。
+  if (!args.scanOnly) {
   const required = [
     [name + EXE, 'launcher executable'],
     ['package.json', 'version source'],
@@ -224,6 +231,7 @@ function main() {
   } else {
     problems.push('no executable to check');
   }
+  } // ← /--scan-only 跳过第 1、2 节
 
   // ------------------------------------------------------------ 3. file pass
   process.stdout.write('\n3. text files: encoding, ASCII rules, secrets, personal paths\n');

@@ -274,7 +274,7 @@ export default function People() {
         <h2>
           {t('groupViewTitle')}
           <span className="muted small" style={{ marginLeft: 12 }}>
-            {t('groupWindow')}: {gv?.days ?? 30} {t('groupDays')}
+            {t('groupWindow')}: {tn('groupDays', gv?.days ?? 30)}
           </span>
         </h2>
         <div className="hint">{t('groupViewHint')}</div>

@@ -193,7 +193,7 @@ export default function Sources() {
         <div className="board">
           <div className="summary">
             <span>
-              {health?.probed ?? 0}/{health?.total ?? 0} {t('items')}
+              {health?.probed ?? 0}/{tn('items', health?.total ?? 0)}
             </span>
             <button className="ghost tiny" onClick={probeAll} disabled={!!busy}>
               {busy === 'probe:all' ? t('probing') : t('probeAll')}
@@ -265,7 +265,7 @@ export default function Sources() {
           {/* When observation mode is on, spell out the "rounds" and the sampling ratio as well -- otherwise the "last observed" column has no context */}
           {data.observation?.enabled ? (
             <span className="muted small" style={{ marginLeft: 12 }}>
-              {t('obsSampling')} · {Math.round((data.observation.ratio ?? 0.5) * 100)}% · {t('groupWindow')} {data.observation.rounds ?? 0} {t('groupDays')}
+              {t('obsSampling')} · {Math.round((data.observation.ratio ?? 0.5) * 100)}% · {t('groupWindow')} {tn('groupDays', data.observation.rounds ?? 0)}
             </span>
           ) : null}
           <label className="inline-check" style={{ marginLeft: 16 }}>

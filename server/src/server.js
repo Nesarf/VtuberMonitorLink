@@ -44,6 +44,17 @@ import {
   suggestFromPeople,
 } from './people.js';
 import { dedupe, loadWeightHistory, makeWeighter, runClustering } from './cluster.js';
+import {
+  archivePath,
+  archiveRun,
+  healthSeries,
+  keywordSeries,
+  openArchive,
+  peopleSeries,
+  queryItems,
+  series,
+  stats as archiveStats,
+} from './archive.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
 import { listAccounts } from './accounts.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
@@ -1087,6 +1098,85 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     egressClear(cfg);
     res.json({ ok: true });
+  });
+
+  // ── SQLite 增量归档与图表数据 / incremental archive & charts ─────
+  // 归档层在 archive.js，自检 tools/archive-test.mjs（幂等 / 参数化 / 迁移 / 性能）。
+  // 每次运行都会增量写入；这里只负责查询与手动补录。
+  app.get('/api/archive/stats', (_req, res) => {
+    const cfg = getConfig();
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      res.json({ ok: true, ...archiveStats(db), file: path.basename(archivePath(cfg)) });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  app.get('/api/archive/series', (req, res) => {
+    const cfg = getConfig();
+    const days = Math.max(1, Math.min(365, Number(req.query.days ?? 30)));
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      res.json({
+        ok: true,
+        daily: series(db, { days }),
+        bySource: series(db, { days, groupBy: 'source' }),
+        people: peopleSeries(db, { days }),
+        keywords: keywordSeries(db, { days, limit: Number(req.query.keywords ?? 12) }),
+        health: healthSeries(db, { days }),
+      });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  app.get('/api/archive/items', (req, res) => {
+    const cfg = getConfig();
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      const items = queryItems(db, {
+        day: req.query.day ?? null,
+        sourceId: req.query.source ?? null,
+        personId: req.query.person ?? null,
+        q: req.query.q ?? null,
+        limit: Number(req.query.limit ?? 100),
+        offset: Number(req.query.offset ?? 0),
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // 把最近一次情报补录进归档（升级后补历史、或归档被删掉时重建）
+  app.post('/api/archive/ingest', (req, res) => {
+    const cfg = getConfig();
+    const limit = Number(req.body?.limit ?? 500);
+    const data = latestIntel(cfg, limit);
+    const r = archiveRun(cfg, { date: data.date ?? new Date().toISOString().slice(0, 10), items: data.items ?? [] });
+    res.json({ ok: r.ok, ...r });
   });
 
   // ── 多源同事件合并 / 相似度去重 / 来源权重 ───────────────────────

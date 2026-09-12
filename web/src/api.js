@@ -98,6 +98,13 @@ export const api = {
 
   // 报告
   getReports: () => j('/api/reports'),
+
+  // SQLite 归档与图表
+  archiveStats: () => j('/api/archive/stats'),
+  archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),
+  archiveItems: (q = {}) =>
+    j(`/api/archive/items?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''))}`),
+  archiveIngest: (limit) => post('/api/archive/ingest', { limit }),
   getEvents: ({ limit, per } = {}) => j(`/api/events?limit=${limit ?? 500}&per=${per ?? 60}`),
   dedupeEvents: (limit) => j(`/api/events/dedupe?limit=${limit ?? 500}`),
   flushNotify: () => post('/api/notify/flush', { force: true }),

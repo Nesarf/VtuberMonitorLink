@@ -14,6 +14,7 @@ import { notify } from './notify.js';
 import { flushQueue } from './notify.js';
 import { feedByPerson } from './people.js';
 import { runClustering } from './cluster.js';
+import { archiveRun } from './archive.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
@@ -300,6 +301,23 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
 
     const file = saveReport(cfg, { markdown, mode, date });
     log.info(`报告已保存 / report saved: ${file}`);
+
+    // 归档：增量写入 SQLite（按条目 id 幂等，重跑/补跑不会让图表数字变大）。
+    // 失败绝不影响本次运行 —— 归档是「后来想看趋势」用的，不是运行的必要条件。
+    try {
+      const ar = archiveRun(cfg, {
+        date,
+        items,
+        runId: runState.lastResult?.runId ?? null,
+        summary: runState.lastResult ?? {},
+        health: results.map((r) => ({ sourceId: r.source?.id, ok: !!r.ok, ms: r.ms ?? null, error: r.error ?? null })),
+      });
+      runState.archive = ar;
+      if (ar?.ok) log.info(`归档 / archived: +${ar.inserted} 条（跳过重复 ${ar.skipped}）`);
+      else if (ar?.error) log.warn(`归档失败（不影响运行）/ archive failed: ${ar.error}`);
+    } catch (e) {
+      log.warn(`归档异常（不影响运行）/ archive error: ${e.message}`);
+    }
 
     const okCount = results.filter((r) => r.ok).length;
     const failedSources = results.filter((r) => !r.ok).map((r) => r.source?.id);

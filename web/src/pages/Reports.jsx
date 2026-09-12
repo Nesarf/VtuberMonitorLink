@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import Markdown from '../markdown.jsx';
+import Charts from './Charts.jsx';
 
 export default function Reports() {
   const { t } = useI18n();
@@ -76,6 +77,7 @@ export default function Reports() {
 
   return (
     <>
+      <Charts />
       <section className="panel">
         <h2>{t('reportsTitle')}</h2>
         <div className="hint">{t('reportsHint')}</div>

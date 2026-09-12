@@ -801,6 +801,32 @@ async function main() {
     check('合并视图渲染出来了', mergeText.indexOf('已合并事件') !== -1, mergeText.slice(0, 60).replace(/\n/g, ' '));
     check('合并视图标出了多源确认', mergeText.indexOf('多源确认') !== -1 || mergeText.indexOf('来源') !== -1);
 
+    // ------------------------------------------------------------- archive
+    process.stdout.write('\n9e. SQLite archive and charts\n');
+    const arch0 = await (await fetch(base + '/api/archive/stats')).json();
+    check('归档接口可用', arch0.ok === true, JSON.stringify(arch0).slice(0, 80));
+    check('运行结束后归档里已经有点东西（运行时自动增量写入）', (arch0.items ?? 0) > 0, `${arch0.items} 条 / ${arch0.days} 天`);
+    const ing = await (
+      await fetch(base + '/api/archive/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limit: 500 }) })
+    ).json();
+    check('手动补录可用且幂等（重复补录不会新增）', ing.ok === true && ing.inserted === 0, JSON.stringify(ing).slice(0, 80));
+    const ser = await (await fetch(base + '/api/archive/series?days=30')).json();
+    check('序列接口返回五组图表数据', ser.ok === true && !!ser.daily && !!ser.bySource && !!ser.people && !!ser.keywords && !!ser.health, Object.keys(ser).join(','));
+    check('按天序列补齐了 30 天（没跑的日子是 0，不是缺席）', (ser.daily.days ?? []).length === 30, `${ser.daily?.days?.length} 天`);
+    check('来源合计与条目数一致', (ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0) === arch0.items, `合计 ${(ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0)} vs ${arch0.items}`);
+    const archItems = await (await fetch(base + '/api/archive/items?limit=5')).json();
+    check('归档条目可查询', archItems.ok === true && archItems.items.length > 0, `${archItems.count} 条`);
+    const evilQ = await (await fetch(base + '/api/archive/items?q=' + encodeURIComponent("%' OR '1'='1"))).json();
+    check('查询串是按参数处理的（注入无效）', evilQ.ok === true && evilQ.items.length === 0, `${evilQ.items.length} 条`);
+
+    await tab('报告').click();
+    await page.waitForTimeout(1200);
+    const chartText = await mainText();
+    check('报告页出现趋势图表区块', chartText.indexOf('趋势图表') !== -1);
+    check('图表显示了归档条数', /归档[:：]?\s*\d+/.test(chartText.replace(/\n/g, ' ')) || chartText.indexOf('每天条目数') !== -1, chartText.slice(0, 70).replace(/\n/g, ' '));
+    const svgCount = await page.locator('main svg.chart-svg').count();
+    check('图表真的画出来了（内联 SVG，无图表库）', svgCount > 0, svgCount + ' 个图');
+
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');
     const xlsx = await fetch(base + '/api/intel/export?format=xlsx');

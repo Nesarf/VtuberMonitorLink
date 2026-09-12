@@ -200,6 +200,7 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 | **Sources** | Tick any of 30 built-in adapters, or add your own visually |
 | **Watch** | Watch targets, alarm rules, change history and diffs |
 | **Settings** | Browser, LLM profiles, proxy, schedule, theme (dark by default; light or follow-system on request) and desktop notifications |
+| **Observation mode** | Watch a whole group without leaving a "someone swept the whole roster" footprint: each round samples a random subset (rotation fills coverage in), gaps are jittered, Tor is used only for entries whose logs the other side owns, and sources that need a login are skipped. See `docs/OBSERVE.md`. |
 | **Reports** | Rendered / raw Markdown, full-text search, HTML/JSON export |
 
 ### Watch targets (borrowed from Moegirlpedia's watch technology)

@@ -10,6 +10,7 @@
 //   - applyProxy()      全局默认（undici 的 global dispatcher）
 //   - netFetch()        显式指定 direct / proxy 的抓取
 //   - playwrightProxy() 浏览器侧代理（支持按来源关闭）
+import crypto from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
 import { socksAgent, socksForPlaywright } from './socks.js';
 import { decision as autoDecision } from './egress.js';
@@ -31,6 +32,27 @@ export function currentMode() {
 /** 配置里 Tor 的 SOCKS 地址 / the Tor SOCKS endpoint from config */
 export function torSocksUrl(cfg) {
   return String(cfg?.proxy?.torSocks ?? '').trim() || 'socks5://127.0.0.1:9150';
+}
+
+/**
+ * Tor 出口地址，可选**每次换一条链路**。
+ *
+ * 原理：Tor 的 IsolateSOCKSAuth（默认开）按 SOCKS 用户名隔离电路 ——
+ * 用户名不同 → 电路不同 → 出口 IP 不同。实测（2026-09-12）：
+ *   obs1:x → 192.42.116.48   obs2:x → 193.189.100.201   obs3:x → 45.84.107.174
+ * 而不带用户名的重复请求三次都落在同一个出口（199.195.253.124）——
+ * 也就是说**默认情况下整轮巡检都是同一张脸**，轮换才有意义。
+ *
+ * 注意：换出口不会改变「请求内容」这个更重要的信号，它只让「一次观察」不再
+ * 全部挂在同一个出口上（配合取样，单次观察就不再指向「有人在盯整箱」）。
+ */
+export function torEgressUrl(cfg, { rotate = null, tag = null } = {}) {
+  const base = torSocksUrl(cfg);
+  const on = rotate ?? cfg?.observation?.rotateExit ?? false;
+  if (!on) return base;
+  const name = tag || `obs-${crypto.randomBytes(4).toString('hex')}`;
+  // 用户名塞进 URL：socksConnector 会走用户名/密码认证那一步（Tor 只拿它做隔离）
+  return base.replace(/^socks5:\/\//, `socks5://${name}:x@`);
 }
 
 function httpProxyUrl(cfg) {
@@ -104,8 +126,13 @@ function isLoopback(url) {
 }
 
 /** 按出口模式取 dispatcher / dispatcher for an egress mode */
-export function dispatcherFor(cfg, mode) {
-  if (mode === 'tor') return socksAgent(torSocksUrl(cfg));
+export function dispatcherFor(cfg, mode, subject = null) {
+  if (mode === 'tor') {
+    // 观测模式下每次取用不同的 SOCKS 用户名 → 不同链路 → 不同出口。
+    // 给 playwright 的 socksForPlaywright 也是同一条 URL，所以浏览器抓取同样受益。
+    const rotate = !!cfg?.observation?.enabled && cfg?.observation?.rotateExit !== false;
+    return socksAgent(torEgressUrl(cfg, { rotate, tag: subject ? `obs-${String(subject.id ?? subject.uid ?? 'x')}` : null }));
+  }
   if (mode === 'proxy') {
     const want = httpProxyUrl(cfg);
     if (!want) throw new Error('该来源要求走代理，但代理未启用 / proxy required but not enabled');
@@ -127,7 +154,9 @@ export function dispatcherFor(cfg, mode) {
  */
 export async function netFetch(url, opts = {}, sel = {}) {
   const mode = isLoopback(url) ? 'direct' : sel.mode ?? resolveProxyMode(sel.cfg, sel.subject);
-  return undiciFetch(url, { ...opts, dispatcher: dispatcherFor(sel.cfg, mode) });
+  // subject 传下去是为了观测模式下的出口轮换（同一个来源固定同一条链路，
+  // 不同来源分散到不同出口 —— 既不是「一个出口打全部」，也不是每次都换导致重连开销）
+  return undiciFetch(url, { ...opts, dispatcher: dispatcherFor(sel.cfg, mode, sel.subject) });
 }
 
 /** 供需要自建 Agent 的场景（例如逐端口探测）使用 */

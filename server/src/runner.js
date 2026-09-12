@@ -19,6 +19,7 @@ import { tagItems, visionReady } from './vision.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
+import { loadObservationState, observationPlan, recordPicked, saveObservationState } from './observe.js';
 
 /** 日报里的纪念日区块（没有就把整块省掉，不留空标题） */
 function calendarSection(cal) {
@@ -47,6 +48,7 @@ export const runState = {
   sourcesDone: 0,
   watchTotal: 0,
   watchDone: 0,
+  sampling: null,
   itemCount: 0,
   alerts: 0,
   advice: [],
@@ -106,6 +108,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     sourcesDone: 0,
     watchTotal: 0,
     watchDone: 0,
+    sampling: null,
     itemCount: 0,
     alerts: 0,
     features: null,
@@ -132,22 +135,44 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     }
     log.info(`LLM 就绪 / ready: ${pre.provider?.name ?? '?'} · ${pre.provider?.model ?? '?'}`);
 
-    // 2) 抓取
+    // 2) 抓取 —— 观测模式下先算「这一轮取谁、走哪个出口、间隔多少」
     runState.step = 'fetching';
-    const sources = mode === 'watch' ? [] : selectSources(cfg, mode);
+    const obsState = loadObservationState(cfg);
+    const allSources = mode === 'watch' ? [] : selectSources(cfg, mode);
+    const allWatch = (cfg?.watch?.targets ?? []).filter((t) => t.enabled !== false);
+    const plan = observationPlan({ cfg, sources: allSources, watchTargets: allWatch, history: obsState });
+    if (plan.enabled) {
+      log.info(
+        `观测模式：来源取样 ${plan.sampling.sources.k}/${plan.sampling.sources.n}` +
+          `、监视对象取样 ${plan.sampling.watch.k}/${plan.sampling.watch.n}` +
+          `（未取到的会在后续轮次轮到）`,
+      );
+      if (plan.sampling.tor.length) log.info(`走 Tor 的来源（日志在对方手上）：${plan.sampling.tor.join(', ')}`);
+      const skipIds = plan.skippedLogin.map((x) => x.id);
+      if (skipIds.length) log.info(`观测模式跳过需要登录态的来源：${skipIds.join(', ')}（避免身份与观测绑定）`);
+    }
+    const sources = plan.enabled ? plan.sources : allSources;
     runState.sourcesTotal = sources.length;
+    runState.sampling = plan.enabled
+      ? {
+          ...plan.sampling,
+          at: new Date().toISOString(),
+          note: '本轮是取样：未取到的对象会在后续轮次轮到（本地是增量归档，画像仍会补齐）',
+        }
+      : null;
     log.info(`抓取 ${sources.length} 条来源 / fetching ${sources.length} sources`);
     const results = await fetchAll(sources, { cfg, log });
     runState.sourcesDone = results.length;
+    if (plan.enabled) saveObservationState(cfg, recordPicked(obsState, [...plan.sampling.sources.picked, ...plan.sampling.watch.picked]));
 
-    // 3) 监视对象
+    // 3) 监视对象（观测模式下只检查本轮取到的那几个）
     let watchResults = [];
     if (cfg?.watch?.enabled !== false && (cfg?.run?.watchWithRun !== false || mode === 'watch')) {
-      const targets = (cfg.watch?.targets ?? []).filter((t) => t.enabled !== false);
-      runState.watchTotal = targets.length;
+      const targets = allWatch;
+      runState.watchTotal = plan.enabled ? plan.watchTargets.length : targets.length;
       runState.step = 'watching';
-      if (targets.length) log.info(`检查 ${targets.length} 个监视对象 / checking ${targets.length} watch targets`);
-      watchResults = await checkAll(cfg, log);
+      if (runState.watchTotal) log.info(`检查 ${runState.watchTotal} 个监视对象 / checking ${runState.watchTotal} watch targets`);
+      watchResults = await checkAll(cfg, log, plan.enabled ? { targets: plan.watchTargets } : {});
       runState.watchDone = watchResults.length;
     }
 
@@ -245,6 +270,19 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // 纪念日倒计时直接写进日报：这东西的价值就在于「你翻报告时正好看见」，
     // 而不是要专门去点一个页面。放在报告最前面 —— 倒计时越近越该先看到。
     let markdown = a.markdown;
+    // 观测模式下，报告开头必须写明「这一轮是取样」——否则使用者会把
+    // 「这一轮没取到某个对象」读成「那个人没动静」（两者完全不同）。
+    if (runState.sampling) {
+      const sp = runState.sampling;
+      const lines = [
+        '> **本轮是取样（观测模式）**',
+        `> 来源 ${sp.sources.k}/${sp.sources.n}、监视对象 ${sp.watch.k}/${sp.watch.n}；未取到的会在后续轮次轮到`,
+        `> 本地归档是增量的，覆盖会补齐；「本轮没出现」不等于「没有动静」`,
+      ];
+      if (sp.tor?.length) lines.push(`> 走 Tor（日志在对方手上）：${sp.tor.join(', ')}`);
+      if (sp.skippedLogin?.length) lines.push(`> 本轮跳过需要登录态的来源：${sp.skippedLogin.join(', ')}（避免身份与观测绑定）`);
+      markdown = lines.join('\n') + '\n\n' + markdown;
+    }
     let calendarBlock = '';
     try {
       const cal = upcoming(cfg, { days: Number(cfg?.calendar?.reportDays ?? 30) });
@@ -359,6 +397,9 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       chars: a.markdown.length,
       task: task?.id ?? null,
       catchUp,
+      // 取样覆盖：UI 与报告都要如实说「这一轮只看了这些」，
+      // 否则使用者会把「这轮没取到样」误读成「那个人没动静」（这两件事完全不同）
+      sampling: runState.sampling ?? null,
     };
 
     // 7) 自检放在**最后**：先抓完、先出报告，最后才只对出异常的来源做诊断

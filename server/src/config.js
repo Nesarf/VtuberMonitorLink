@@ -74,6 +74,27 @@ export const DEFAULT_CONFIG = {
     controlUrl: '',
     controlSecret: '',
   },
+
+  // ── 观测模式 / observation mode ────────────────────────────────────
+  // 目的：既能看出一整个箱的状态，又不留下「有人在盯整箱」的痕迹。
+  // 四件事：取样（每轮只取一部分、轮转补齐）、抖动（间隔与起始随机）、
+  // 按「日志在谁手上」分配出口（只有箱自托管的站点走 Tor）、不跑需要登录态的来源。
+  // 详细判据与实测依据见 server/src/observe.js 顶部注释。
+  observation: {
+    enabled: false,
+    // 每轮取多少（比例）；配合轮转，几轮下来覆盖是完整的
+    sampleRatio: 0.5,
+    minSources: 2,
+    minWatch: 1,
+    // 请求间隔抖动区间（秒）：观察模式下取代固定的 defaultGapSeconds
+    jitterSeconds: [3, 12],
+    // 箱自托管的站点走 Tor（那是唯一「日志在对方手上」的一类入口）
+    torForAgency: true,
+    // 需要登录态的来源在这一模式下不跑（避免把实名身份与观测行为绑在一起）
+    skipLoginSources: true,
+    // 每次选取换一条 Tor 链路（SOCKS 用户名隔离 → 出口 IP 不同），避免整轮都从同一个出口出去
+    rotateExit: true,
+  },
   live: {
     // 开播监测（功能来源见 docs/REVIEW-live.md；上游 dd-center/bilibili-dd-monitor 为 MIT）
     enabled: true,

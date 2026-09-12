@@ -4,6 +4,7 @@ import { fetchMediaWiki } from './mediawiki.js';
 import { fetchBrowser } from './browser.js';
 import { fetchSearchOnly } from './search.js';
 import { fetchBilibiliOpus, fetchBilibiliDynamic } from './bilibili.js';
+import { gapWithJitter } from '../observe.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const TABLE = {
@@ -46,7 +47,10 @@ export async function fetchAll(sources, ctx) {
   let first = true;
   for (const s of sources) {
     const gapSeconds = s.rateLimit?.gapSeconds ?? ctx.cfg?.run?.defaultGapSeconds ?? 2;
-    if (!first && gapSeconds > 0) await sleep(gapSeconds * 1000);
+    // 观测模式下间隔随机化：固定节奏（每次都精确 2 秒）本身就是机器特征。
+    // base=0 时不抖（显式的「不要等」优先，诊断路径靠它）。
+    const gap = gapWithJitter(gapSeconds, ctx.cfg?.observation?.enabled ? ctx.cfg?.observation?.jitterSeconds : null);
+    if (!first && gap > 0) await sleep(gap * 1000);
     first = false;
 
     const fn = TABLE[s.fetch];

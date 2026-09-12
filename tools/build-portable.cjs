@@ -199,10 +199,33 @@ function main() {
   // ------------------------------------------------------------------ 1. web
   log('[1/7] web UI build');
   const distIndex = path.join(ROOT, 'web', 'dist', 'index.html');
-  if (!fs.existsSync(distIndex)) {
+  // 「复用旧产物」是个陷阱：改了界面却忘了先 npm run build，打包出来的还是旧包，
+  // 而构建日志看起来一切正常（这类「改了但产物没变」这个项目踩过一次，见 BUGS #27）。
+  // 所以复用之前先比时间戳：源码比产物新就重建。
+  function newestMtime(dir, acc = 0) {
+    let newest = acc;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (['node_modules', 'dist'].includes(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) newest = newestMtime(p, newest);
+      else newest = Math.max(newest, fs.statSync(p).mtimeMs);
+    }
+    return newest;
+  }
+  const srcNewest = Math.max(
+    newestMtime(path.join(ROOT, 'web', 'src')),
+    fs.statSync(path.join(ROOT, 'web', 'index.html')).mtimeMs,
+    fs.statSync(path.join(ROOT, 'web', 'vite.config.js')).mtimeMs,
+  );
+  const distMtime = fs.existsSync(distIndex) ? fs.statSync(distIndex).mtimeMs : 0;
+  const stale = !fs.existsSync(distIndex) || srcNewest > distMtime;
+  if (stale) {
+    if (fs.existsSync(distIndex)) {
+      log('  web/src 比 web/dist 新 -> rebuilding（否则打出来的还是旧界面）');
+    }
     run(process.execPath, [path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', 'web/vite.config.js']);
   } else {
-    log('  reusing existing web/dist (delete it to force a rebuild)');
+    log('  reusing existing web/dist (up to date; delete it to force a rebuild)');
   }
 
   // ------------------------------------------------------------------ 2. SEA

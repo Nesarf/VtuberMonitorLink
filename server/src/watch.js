@@ -17,6 +17,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveDir } from './config.js';
 import { netFetch, resolveProxyMode } from './net.js';
+import { gapWithJitter } from './observe.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -547,10 +549,26 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
   }
 }
 
-/** 检查全部启用的监视对象 / check every enabled target */
-export async function checkAll(cfg, log) {
-  const targets = (cfg?.watch?.targets ?? []).filter((t) => t.enabled !== false);
+/**
+ * 检查监视对象。
+ * @param {object} cfg
+ * @param {object} log
+ * @param {{targets?:object[]}} opts 观测模式下只传本轮取到的那几个（见 observe.js）
+ */
+export async function checkAll(cfg, log, opts = {}) {
+  const targets = Array.isArray(opts.targets)
+    ? opts.targets
+    : (cfg?.watch?.targets ?? []).filter((t) => t.enabled !== false);
   const results = [];
-  for (const t of targets) results.push(await checkTarget(t, { cfg, rules: cfg?.watch?.rules, log }));
+  let first = true;
+  for (const t of targets) {
+    // 观测模式下检查之间也抖动 —— 连着几个对象精确等距地检查，本身就是机器特征
+    if (!first && cfg?.observation?.enabled) {
+      const gap = gapWithJitter(2, cfg?.observation?.jitterSeconds);
+      if (gap > 0) await sleep(gap * 1000);
+    }
+    first = false;
+    results.push(await checkTarget(t, { cfg, rules: cfg?.watch?.rules, log }));
+  }
   return results;
 }

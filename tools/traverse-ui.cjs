@@ -376,6 +376,14 @@ async function main() {
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
 
+    // 观测模式：这是「痕迹本身也是信息」那一套的控制面，必须有；开关与说明缺一不可
+    // （只有开关没有说明 = 使用者不知道开的是什么，那比没有更糟）
+    check(
+      '观测模式的设置区在（开关 + 说明都在）',
+      main.indexOf('观测模式') !== -1 && main.indexOf('取样比例') !== -1 && main.indexOf('间隔抖动') !== -1,
+      main.indexOf('观测模式') !== -1 ? '开关在' : '没找到观测模式区块',
+    );
+
     // 主题选择器要真的生效，并且记住选择（记住是为了刷新时不白闪 —— index.html 里那段
     // 同步脚本会先按记忆上色，服务端配置到了再覆盖）。
     const themeRow = page.locator('main .field', { hasText: '主题' }).first();

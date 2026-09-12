@@ -46,6 +46,22 @@ export default function Run() {
             {t('runWatchOnly')}
           </button>
         </div>
+        {/* 观测模式：把「这一轮只看了这些」当场说清楚 ——
+            取样的意义就在于不留下「整箱被同时扫一遍」的模式，但也必须让人知道
+            「没出现」≠「没动静」，否则看报告的人会读错。 */}
+        {state.sampling && (
+          <div className="hint" style={{ marginTop: 10 }}>
+            <b>{t('obsSampling')}</b>
+            {' · '}
+            {t('sources')} {state.sampling.sources?.k}/{state.sampling.sources?.n} · {t('watchTargets')}{' '}
+            {state.sampling.watch?.k}/{state.sampling.watch?.n}
+            {state.sampling.tor?.length ? ` · Tor: ${state.sampling.tor.join(', ')}` : ''}
+            {state.sampling.skippedLogin?.length ? ` · ${t('obsSkippedLogin')}: ${state.sampling.skippedLogin.join(', ')}` : ''}
+            <div className="muted small" style={{ marginTop: 4 }}>
+              {t('obsSamplingNote')}
+            </div>
+          </div>
+        )}
         <p className="muted" style={{ marginTop: 12 }}>
           {t('step')}: <b>{state.step}</b> · {t('sources')}: {state.sourcesDone}/{state.sourcesTotal}
           {(state.watchTotal ?? 0) > 0 && (

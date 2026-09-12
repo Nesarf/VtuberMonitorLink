@@ -613,6 +613,74 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
+      {/* ── 观测模式 / Observation mode ── */}
+      <section className="panel">
+        <h2>{t('obsTitle')}</h2>
+        <div className="hint">{t('obsHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('obsEnabled')}</label>
+            <select value={String(cfg.observation?.enabled === true)} onChange={(e) => patch('observation.enabled', e.target.value === 'true')}>
+              <option value="false">{t('disable')}</option>
+              <option value="true">{t('enable')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('obsRatio')}</label>
+            <select value={String(cfg.observation?.sampleRatio ?? 0.5)} onChange={(e) => patch('observation.sampleRatio', Number(e.target.value))}>
+              {[0.25, 0.34, 0.5, 0.67, 1].map((v) => (
+                <option key={v} value={String(v)}>
+                  {Math.round(v * 100)}%
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 220px' }}>
+            <label>{t('obsJitter')}</label>
+            <select
+              value={JSON.stringify(cfg.observation?.jitterSeconds ?? [3, 12])}
+              onChange={(e) => patch('observation.jitterSeconds', JSON.parse(e.target.value))}
+            >
+              <option value="[0,0]">{t('obsJitterNone')}</option>
+              <option value="[3,12]">3–12s</option>
+              <option value="[10,60]">10–60s</option>
+              <option value="[60,300]">1–5min</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 220px' }}>
+            <label>{t('obsTorAgency')}</label>
+            <select
+              value={String(cfg.observation?.torForAgency !== false)}
+              onChange={(e) => patch('observation.torForAgency', e.target.value === 'true')}
+            >
+              <option value="true">{t('enable')}</option>
+              <option value="false">{t('disable')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 220px' }}>
+            <label>{t('obsSkipLogin')}</label>
+            <select
+              value={String(cfg.observation?.skipLoginSources !== false)}
+              onChange={(e) => patch('observation.skipLoginSources', e.target.value === 'true')}
+            >
+              <option value="true">{t('enable')}</option>
+              <option value="false">{t('disable')}</option>
+            </select>
+          </div>
+          <div className="field" style={{ flex: '0 0 220px' }}>
+            <label>{t('obsRotateExit')}</label>
+            <select
+              value={String(cfg.observation?.rotateExit !== false)}
+              onChange={(e) => patch('observation.rotateExit', e.target.value === 'true')}
+            >
+              <option value="true">{t('enable')}</option>
+              <option value="false">{t('disable')}</option>
+            </select>
+          </div>
+        </div>
+        <div className="hint" style={{ marginBottom: 0 }}>{t('obsRotationHint')}</div>
+      </section>
+
       {/* ── 界面 / Appearance ── */}
       <section className="panel">
         <h2>{t('uiTitle')}</h2>

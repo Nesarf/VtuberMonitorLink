@@ -293,6 +293,22 @@ export const STRINGS = {
     // 界面
     uiTitle: '界面',
     uiHint: '主题跟随系统，也可以固定。运行结束后可以弹桌面通知。',
+    // 观测模式 / observation mode
+    obsTitle: '观测模式',
+    obsHint:
+      '看整箱状态时，痕迹本身就是信息：一次把全箱扫一遍、每天固定时刻、间隔精确相等 —— 这些模式与你是从哪个 IP 来的无关。开启后每轮只随机取一部分对象（轮换补齐），间隔随机，并且只让「日志留在对方服务器上」的入口走 Tor。',
+    obsEnabled: '启用观测模式',
+    obsRatio: '每轮取样比例',
+    obsJitter: '间隔抖动',
+    obsJitterNone: '不抖动（固定间隔）',
+    obsTorAgency: '箱自托管站点走 Tor',
+    obsSkipLogin: '跳过需要登录态的来源',
+    obsRotateExit: '每次换 Tor 出口',
+    obsRotationHint:
+      '「箱自托管站点」是指官方站点这类日志留在对方服务器上的入口。bilibili / Reddit / Fandom 这些平台源不走 Tor：箱看不到那些日志，而实测经 Tor 慢约 8 倍、部分接口还会被限流。换出口用的是 Tor 的 SOCKS 用户名隔离，实测不同用户名会落到不同的出口 IP。',
+    obsSampling: '本轮为取样',
+    obsSamplingNote: '未取到的对象会在后续轮次轮到；本地归档是增量的，覆盖会补齐。「本轮没出现」不等于「没有动静」。',
+    obsSkippedLogin: '本轮跳过（需登录态）',
     theme: '主题',
     themeAuto: '跟随系统',
     themeLight: '浅色',
@@ -954,6 +970,23 @@ export const STRINGS = {
 
     uiTitle: 'Appearance',
     uiHint: 'Follow the system theme, or pin one. You can also get a desktop notification when a run finishes.',
+    // observation mode
+    obsTitle: 'Observation mode',
+    obsHint:
+      'When you watch a whole group, the footprint is information too: sweeping every member at once, at the same hour daily, at exactly equal gaps — none of that depends on which IP you come from. With this on, each round samples a random subset (rotation fills the coverage in), gaps are jittered, and only sources whose logs the other side owns go through Tor.',
+    obsEnabled: 'Enable observation mode',
+    obsRatio: 'Sample per round',
+    obsJitter: 'Gap jitter',
+    obsJitterNone: 'No jitter (fixed gaps)',
+    obsTorAgency: 'Tor for their own sites',
+    obsSkipLogin: 'Skip sources that need a login',
+    obsRotateExit: 'Rotate the Tor exit',
+    obsRotationHint:
+      'Their own sites means entries whose logs stay on their servers (official sites). Platform sources such as bilibili / Reddit / Fandom do not use Tor: the group cannot see those logs, and measurements show Tor is about 8x slower there and some endpoints rate-limit it. Exit rotation uses Tor SOCKS username isolation — different usernames really do land on different exit IPs.',
+    obsSampling: 'This round is a sample',
+    obsSamplingNote:
+      'Objects not picked this round come up in later rounds; the local archive is incremental, so coverage fills in. Not seen this round is not the same as nothing happened.',
+    obsSkippedLogin: 'Skipped (needs login)',
     theme: 'Theme',
     themeAuto: 'Follow system',
     themeLight: 'Light',

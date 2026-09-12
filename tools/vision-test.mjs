@@ -16,6 +16,7 @@ import {
   IMAGE_KINDS,
   applyVisionTags,
   imageKey,
+  isTransportError,
   loadVisionCache,
   parseTags,
   tagItems,
@@ -127,6 +128,32 @@ t('没有 API Key 时拒绝（不会拿空 key 去调）', () => {
   assert.ok(r.reason.includes('API Key'), r.reason);
 });
 
+process.stdout.write('\nvision: 传输层错误 vs 业务错误（决定要不要重试）\n');
+t('传输层错误认得出来（连接被掐断、socket 死掉…）', () => {
+  for (const msg of [
+    'fetch failed(ECONNRESET)',
+    'socket hang up',
+    'other side closed',
+    'fetch failed',
+    'ECONNREFUSED',
+    'UND_ERR_SOCKET',
+  ]) {
+    assert.equal(isTransportError(msg), true, msg);
+  }
+});
+t('业务错误不当成传输层错误（重试也不会有不同结果）', () => {
+  for (const msg of [
+    'HTTP 401: {"error":"invalid api key"}',
+    'HTTP 500: {"error":"mock flaky failure"}',
+    '回复里没有可解析的 JSON',
+    '空回复',
+    '',
+    null,
+  ]) {
+    assert.equal(isTransportError(msg), false, String(msg));
+  }
+});
+
 process.stdout.write('\nvision: 端到端（本地假视觉模型）\n');
 const PORT = 43291;
 const mock = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-vision.cjs'), '--port', String(PORT)], { stdio: 'ignore' });
@@ -226,6 +253,47 @@ await ta('flaky 模式：失败的不会被缓存成成功', async () => {
   // 第一次请求是 500 → 应当 failed
   assert.equal(r.tagged, 0, JSON.stringify(r));
   assert.equal(r.failed, 1);
+});
+
+// 传输层失败（连接被掐断）→ 重试一次；HTTP 500 属于另一类，不重试。
+// 这条是拿真实 socket 掐断跑的，不是打桩：mock 的 `drop` 模式第一次请求直接 destroy。
+await ta('drop 模式：传输层失败会重试一次，并如实记下 retried', async () => {
+  const m = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-vision.cjs'), '--port', String(43295), '--mode', 'drop'], { stdio: 'ignore' });
+  await sleep(900);
+  try {
+    const r = await tagItems(cfgFor(43295), { items: [{ id: 'd', title: 't', images: ['https://example.com/drop-1.jpg'] }] });
+    assert.equal(r.tagged, 1, '掐断后重试应当成功：' + JSON.stringify(r));
+    assert.equal(r.retried, 1, '要如实记下发生过一次重试：' + JSON.stringify(r));
+    assert.equal(r.failed, 0);
+  } finally {
+    m.kill();
+  }
+});
+
+await ta('HTTP 失败不重试（重试也不会有不同结果）', async () => {
+  const m = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-vision.cjs'), '--port', String(43296), '--mode', 'flaky'], { stdio: 'ignore' });
+  await sleep(900);
+  try {
+    const r = await tagItems(cfgFor(43296), { items: [{ id: 'f', title: 't', images: ['https://example.com/500-1.jpg'] }] });
+    assert.equal(r.failed, 1, JSON.stringify(r));
+    assert.equal(r.retried, 0, '500 不该被当成传输层错误重试：' + JSON.stringify(r));
+  } finally {
+    m.kill();
+  }
+});
+
+await ta('失败会带上原因（不是只有一个数字）', async () => {
+  const m = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-vision.cjs'), '--port', String(43297), '--mode', 'bad'], { stdio: 'ignore' });
+  await sleep(900);
+  try {
+    const r = await tagItems(cfgFor(43297), { items: [{ id: 'e', title: 't', images: ['https://example.com/reason-1.jpg'] }] });
+    assert.equal(r.failed, 1, JSON.stringify(r));
+    assert.ok(Array.isArray(r.errors) && r.errors.length === 1, '要带出失败原因：' + JSON.stringify(r));
+    assert.equal(r.errors[0].url, 'https://example.com/reason-1.jpg');
+    assert.ok(r.errors[0].error, '原因不能是空串');
+  } finally {
+    m.kill();
+  }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

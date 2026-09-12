@@ -17,6 +17,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
@@ -109,7 +110,8 @@ async function main() {
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
   // 运行数据一律先清空：不这样做的话，上一次巡检留下的报告/情报会让
   // 「还没有情报」这类断言随机失败（真的踩到过），而且目录也就不可发布了。
-  const RUNDATA = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
+  // vdb 也在这里：它是 VDB 花名册的运行期缓存（第三方数据），巡检不该把它留在包里
+  const RUNDATA = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice', 'vdb'];
   for (const d of RUNDATA) fs.rmSync(path.join(appDir, d), { recursive: true, force: true });
   const createdDirs = RUNDATA;
 
@@ -125,6 +127,10 @@ async function main() {
   const appLog = path.join(appDir, 'logs', 'traverse-app.txt');
   fs.mkdirSync(path.dirname(appLog), { recursive: true });
   const appOut = fs.createWriteStream(appLog, { flags: 'w' });
+  // 起 app 之前先确认端口是空的：上一个进程（或使用者自己开着的窗口）还占着的话，
+  // 我们起的这个会绑不上，而请求会被**别人的实例**接走 —— 症状会漂到完全不相关的地方。
+  const free = await waitPortFree(args.port, { onWait: (m) => process.stdout.write('  ' + m + '\n') });
+  if (!free.free) process.stdout.write('  (warn) 端口 ' + args.port + ' 似乎一直被占用，接下来可能对不上\n');
   const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(appOut);
   child.stderr.pipe(appOut);
@@ -161,6 +167,9 @@ async function main() {
       throw new Error('server never became ready');
     }
     check('server is up', true, base);
+    // 关键：确认答话的是**我们刚起的那个**实例。上一个进程没退干净时，
+    // 端口被别人接着答，后面所有断言都会对着错误的实例说话（这种错最难查）
+    check('the app we spawned is the one answering', child.exitCode === null, child.exitCode === null ? 'alive' : 'our child already exited with ' + child.exitCode);
 
     const br = await (await fetch(base + '/api/browsers')).json();
     const detected = (br.detected || [])[0];
@@ -902,6 +911,28 @@ async function main() {
       (await page.locator('.heat-cells i').count()) + ' 个格子',
     );
 
+    // VDB 花名册（多平台社团名册）：状态接口必须离线可用——它只读缓存，不联网
+    const vdbStatus = await (await fetch(base + '/api/vdb/status')).json();
+    check(
+      '花名册状态接口离线可用（含许可与来源署名）',
+      vdbStatus.ok === true && typeof vdbStatus.count === 'number' && !!vdbStatus.license && !!vdbStatus.source,
+      `${vdbStatus.count} 条 · ${vdbStatus.source} · ${vdbStatus.license}`,
+    );
+    check('状态接口说明「有没有缓存」', 'cached' in vdbStatus, String(vdbStatus.cached));
+    const vdbGroups = await (await fetch(base + '/api/vdb/groups')).json();
+    check('可以按社团列花名册', vdbGroups.ok === true && typeof vdbGroups.groups === 'object', `${Object.keys(vdbGroups.groups ?? {}).length} 个社团`);
+    // 没选条目就导入 → 必须被拒（走的是和手工新增同一条净化路径，不搞后门）
+    const vdbNoKeys = await fetch(base + '/api/vdb/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keys: [] }),
+    });
+    check('空选择导入被拒绝', vdbNoKeys.status === 400, String(vdbNoKeys.status));
+    const vdbEmptyQ = await (await fetch(base + '/api/vdb/search?q=')).json();
+    check('空关键词搜索直接返回空（不联网）', vdbEmptyQ.ok === true && (vdbEmptyQ.results ?? []).length === 0);
+    check('关注页渲染出花名册区块', peopleText.indexOf('从 VDB 导入') !== -1 && peopleText.indexOf('同步花名册') !== -1, peopleText.indexOf('从 VDB 导入') !== -1 ? '区块在' : '没找到 VDB 区块');
+    check('花名册区块带上游署名', peopleText.indexOf('dd-center/vdb') !== -1 || peopleText.indexOf('CC BY-NC-SA') !== -1);
+
     await fetch(base + '/api/people/ui-follow', { method: 'DELETE' });
     const afterDel = await (await fetch(base + '/api/people')).json();
     check('可以删除关注对象（且清理干净）', (afterDel.people ?? []).length === 0);
@@ -1154,6 +1185,9 @@ async function main() {
           /* ignore */
         }
       }
+      // 等它真的退干净再收工：端口没放开就往下走的话，下一次跑会对着残留实例说话
+      const gone = await waitChildExit(child);
+      if (!gone) process.stdout.write('  (warn) app 进程没在 8 秒内退出，端口可能还没放开\n');
     }
     try {
       mock.kill();

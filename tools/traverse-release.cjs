@@ -14,6 +14,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
@@ -86,6 +87,14 @@ async function main() {
   const logFile = path.join(appDir, 'logs', 'traverse-stdout.txt');
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const out = fs.createWriteStream(logFile, { flags: 'w' });
+
+  // 起 app 之前先确认端口是空的：上一个巡检（或使用者自己开着的窗口）还占着的话，
+  // 我们起的这个会绑不上，而请求会被**别人的实例**接走 —— 症状会漂到完全不相关的地方
+  const free = await waitPortFree(args.port, { onWait: (m) => process.stdout.write('  ' + m + '\n') });
+  if (!free.free) {
+    process.stdout.write('  [FAIL] 端口 ' + args.port + ' 一直被占用，无法起一个干净的实例\n');
+    process.exit(1);
+  }
 
   const child = spawn(exe, ['--no-open', '--port', String(args.port)], {
     cwd: args.dir,
@@ -325,6 +334,39 @@ async function main() {
     const delSrc = await api('DELETE', '/api/sources/custom/traverse-feed');
     check('DELETE removes it again', delSrc.status === 200 && delSrc.json.removed === 1);
 
+    // ------------------------------------------------------- 8b. VDB roster
+    // 第三方数据（CC BY-NC-SA 4.0）：这里刻意**不触发下载**（不调 /sync），
+    // 只验证「离线能答、许可有署名、没有把整库塞进响应」。
+    process.stdout.write('\n8b. roster (VDB, multi-platform)\n');
+    const vdbSt = await api('GET', '/api/vdb/status');
+    check(
+      'GET /api/vdb/status answers offline',
+      vdbSt.status === 200 && vdbSt.json.ok === true && typeof vdbSt.json.count === 'number' && typeof vdbSt.json.cached === 'boolean',
+      'cached=' + vdbSt.json.cached + ' count=' + vdbSt.json.count,
+    );
+    check(
+      'the roster status carries upstream attribution and licence',
+      !!vdbSt.json.source && !!vdbSt.json.license,
+      String(vdbSt.json.source) + ' / ' + String(vdbSt.json.license),
+    );
+    check(
+      'the status response does not ship the whole roster',
+      !('records' in vdbSt.json) && JSON.stringify(vdbSt.json).length < 20000,
+      JSON.stringify(vdbSt.json).length + ' bytes',
+    );
+    const vdbGrp = await api('GET', '/api/vdb/groups');
+    check('GET /api/vdb/groups answers with a group map', vdbGrp.status === 200 && vdbGrp.json.ok === true && typeof vdbGrp.json.groups === 'object', Object.keys(vdbGrp.json.groups ?? {}).length + ' groups');
+    const vdbBlank = await api('GET', '/api/vdb/search?q=');
+    check('an empty roster search answers empty without hitting the network', vdbBlank.status === 200 && (vdbBlank.json.results ?? []).length === 0, 'status ' + vdbBlank.status);
+    const vdbNoKeys = await api('POST', '/api/vdb/import', { keys: [] });
+    check('importing nothing is refused', vdbNoKeys.status === 400 && !!vdbNoKeys.json.error, 'status ' + vdbNoKeys.status + ' ' + String(vdbNoKeys.json.error).slice(0, 40));
+    const vdbGhost = await api('POST', '/api/vdb/import', { keys: ['no-such-record@nowhere'] });
+    check(
+      'importing a key that is not in the roster is refused with a reason',
+      vdbGhost.status === 400 && !!vdbGhost.json.error,
+      'status ' + vdbGhost.status + ' ' + String(vdbGhost.json.error).slice(0, 40),
+    );
+
     // ---------------------------------------------------------- 9. preflight
     process.stdout.write('\n9. preflight & run\n');
     const pre = await api('POST', '/api/preflight');
@@ -396,6 +438,10 @@ async function main() {
           /* ignore */
         }
       }
+      // **等它真的退干净**再收工：后面 traverse-ui 起在同一个端口上，
+      // 上一个进程还没放开端口就往下走的话，症状会漂到它那边（踩过）
+      const gone = await waitChildExit(child);
+      if (!gone) process.stdout.write('  (warn) app 进程没在 8 秒内退出，端口可能还没放开\n');
     }
 
     // Restore the release folder so it stays shippable.

@@ -137,7 +137,14 @@ export function parseTags(text) {
   };
 }
 
-/** 给一张图打标（不缓存、不重试 —— 那些在上层） */
+/** 传输层错误（连接被对端关掉、复用到的 socket 刚好死掉…）—— 只有这类才值得原样重试一次 */
+export function isTransportError(error) {
+  return /ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET|UND_ERR_CONNECT|socket hang up|other side closed|terminated|fetch failed|ECONNABORTED|ETIMEDOUT/i.test(
+    String(error ?? '')
+  );
+}
+
+/** 给一张图打标（不缓存；传输层错误重试一次，HTTP/解析错误不重试） */
 export async function tagOneImage(cfg, { url, provider, context = '', prompt = null, log = null }) {
   const model = provider?.model ?? '';
   const messages = [
@@ -155,27 +162,39 @@ export async function tagOneImage(cfg, { url, provider, context = '', prompt = n
     max_tokens: Number(cfg?.vision?.maxTokens ?? 300),
     temperature: 0,
   });
-  try {
-    const res = await netFetch(
-      req.url,
-      { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: AbortSignal.timeout(Number(cfg?.vision?.timeoutMs ?? 60000)) },
-      { cfg }
-    );
-    const text = await res.text();
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 120)}` };
-    let content = '';
+  const attempt = async () => {
     try {
-      content = JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
-    } catch {
-      return { ok: false, error: '响应不是 JSON（接口地址对吗？）' };
+      const res = await netFetch(
+        req.url,
+        { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal: AbortSignal.timeout(Number(cfg?.vision?.timeoutMs ?? 60000)) },
+        { cfg }
+      );
+      const text = await res.text();
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 120)}` };
+      let content = '';
+      try {
+        content = JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
+      } catch {
+        return { ok: false, error: '响应不是 JSON（接口地址对吗？）' };
+      }
+      const parsed = parseTags(content);
+      if (!parsed.ok) return { ok: false, error: parsed.error, raw: String(content).slice(0, 200) };
+      return { ok: true, ...parsed, model };
+    } catch (e) {
+      const cause = e?.cause?.code ?? e?.cause?.message ?? '';
+      return { ok: false, error: cause ? `${e.message}(${cause})` : e.message };
     }
-    const parsed = parseTags(content);
-    if (!parsed.ok) return { ok: false, error: parsed.error, raw: String(content).slice(0, 200) };
-    return { ok: true, ...parsed, model };
-  } catch (e) {
-    const cause = e?.cause?.code ?? e?.cause?.message ?? '';
-    return { ok: false, error: cause ? `${e.message}(${cause})` : e.message };
+  };
+  let out = await attempt();
+  // 只在**传输层**失败时重试一次，且把重试记在返回值里（`retried: 1`），
+  // 这样「偶尔要重试」这件事在报告与自检里看得见，而不是被悄悄抹平。
+  // HTTP 错误（401/429/500…）与解析失败**不**重试：那些重试也不会有不同结果。
+  if (!out.ok && isTransportError(out.error)) {
+    if (log) log(`vision: 传输层失败，重试一次（${out.error}）`);
+    const again = await attempt();
+    out = { ...again, retried: 1, firstError: out.error };
   }
+  return out;
 }
 
 /** 简单并发池：一次运行几十张图不能同时打出去 */
@@ -237,8 +256,11 @@ export async function tagItems(cfg, { items = [], limit = 40, force = false, con
 
   let tagged = 0;
   let failed = 0;
+  let retried = 0;
+  const errors = [];
   for (const row of results) {
     if (!row) continue;
+    if (row.result?.retried) retried++;
     if (row.result?.ok) {
       cache[row.key] = {
         ok: true,
@@ -255,11 +277,15 @@ export async function tagItems(cfg, { items = [], limit = 40, force = false, con
     } else {
       failed++;
       // 失败也记一笔（但标记 ok:false，下次仍会重试）—— 免得每轮都对同一张坏图反复花钱
-      cache[row.key] = { ok: false, url: row.url, error: row.result?.error ?? 'unknown', at: new Date().toISOString() };
+      const err = row.result?.error ?? 'unknown';
+      cache[row.key] = { ok: false, url: row.url, error: err, at: new Date().toISOString() };
+      // 把**为什么**失败带出来（最多 5 条）：只报一个数字的话，
+      // 端到端自检挂掉时只能看到 `failed:1`，根本不知道是网络、鉴权还是解析（踩过）
+      if (errors.length < 5) errors.push({ url: row.url, error: err });
     }
   }
   if (tagged || failed) saveVisionCache(cfg, cache);
-  return { ok: true, tagged, failed, cached: cachedHits, total: jobs.length, provider: ready.provider?.name ?? ready.provider?.id ?? null };
+  return { ok: true, tagged, failed, cached: cachedHits, total: jobs.length, retried, errors, provider: ready.provider?.name ?? ready.provider?.id ?? null };
 }
 
 /**

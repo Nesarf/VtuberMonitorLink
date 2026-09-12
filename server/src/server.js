@@ -66,6 +66,7 @@ import { detectSilence, silenceSummary } from './silence.js';
 import { groupView } from './groups.js';
 import { budgetStatus, costSummary, loadUsage, summarizeUsage } from './cost.js';
 import { loadObservationState } from './observe.js';
+import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } from './vdb.js';
 import {
   appendAudit,
   buildBundle,
@@ -1347,6 +1348,94 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         /* ignore */
       }
     }
+  });
+
+  // ── VDB 花名册 / VDB roster（多平台）───────────────────────────────
+  // 数据来源 github.com/dd-center/vdb（vtbs.moe 的上游），许可是 CC BY-NC-SA 4.0：
+  //   · 只运行时拉取、缓存在 app/vdb/，**绝不进发行包**（见 tools/make-zip.mjs 的排除清单）
+  //   · 界面与文档都要署名
+  // 它给的是我们缺的那一维：**社团（箱）** + 多语言名字 + 各平台账号。
+  app.get('/api/vdb/status', (_req, res) => {
+    const cfg = getConfig();
+    const index = loadCachedIndex(cfg);
+    res.json({
+      ok: true,
+      cached: !!index,
+      summary: indexSummary(index),
+      count: index?.count ?? 0,
+      groups: index?.groups ?? {},
+      platforms: index?.platforms ?? {},
+      generatedAt: index?.generatedAt ?? null,
+      source: index?.source ?? 'dd-center/vdb',
+      license: index?.license ?? 'CC BY-NC-SA 4.0',
+    });
+  });
+
+  // 显式同步（会真的去下载，~0.5MB，一条请求）
+  app.post('/api/vdb/sync', async (_req, res) => {
+    const cfg = getConfig();
+    try {
+      const index = await ensureIndex(cfg, { force: true, log });
+      res.json({ ok: true, count: index.count, groups: Object.keys(index.groups ?? {}).length, summary: indexSummary(index) });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  // 搜索：名字（任意语言/别名）与**任意平台**的账号 id、链接形态都能命中
+  app.get('/api/vdb/search', async (req, res) => {
+    const cfg = getConfig();
+    const q = String(req.query.q ?? '').trim();
+    if (!q) return res.json({ ok: true, results: [], summary: indexSummary(loadCachedIndex(cfg)) });
+    try {
+      // 第一次用就自动拉一次：0.5MB 一条请求，比让使用者先猜「要先同步」友好
+      let index = loadCachedIndex(cfg);
+      if (!index) index = await ensureIndex(cfg, { log });
+      const results = searchIndex(index, q, { limit: Number(req.query.limit ?? 20), group: req.query.group || null });
+      res.json({ ok: true, results, summary: indexSummary(index), license: index.license, source: index.source });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message, results: [] });
+    }
+  });
+
+  app.get('/api/vdb/groups', (_req, res) => {
+    const index = loadCachedIndex(getConfig());
+    res.json({ ok: true, groups: index?.groups ?? {}, summary: indexSummary(index) });
+  });
+
+  // 导入：把选中的 VDB 记录变成「关注对象」（名字/别名/社团/各平台链接）
+  app.post('/api/vdb/import', (req, res) => {
+    const cfg = getConfig();
+    const keys = Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [];
+    if (!keys.length) return res.status(400).json({ ok: false, error: '没有选中任何条目 / nothing selected' });
+    const index = loadCachedIndex(cfg);
+    if (!index) return res.status(400).json({ ok: false, error: '还没有花名册，先点「同步花名册」/ sync the roster first' });
+    const want = new Set(keys);
+    const picked = (index.records ?? []).filter((r) => want.has(r.key));
+    if (!picked.length) return res.status(400).json({ ok: false, error: '选中的条目在花名册里找不到' });
+    const list = [...(cfg.people ?? [])];
+    const existing = new Set(list.map((p) => p.id));
+    const added = [];
+    const skipped = [];
+    for (const r of picked) {
+      // 走和手工新增同一条净化路径：VDB 的数据也要过校验，不搞后门
+      const { person, error } = sanitizePerson(toPerson(r), list.length + added.length);
+      if (error) {
+        skipped.push({ key: r.key, reason: error });
+        continue;
+      }
+      if (existing.has(person.id)) {
+        skipped.push({ key: r.key, id: person.id, reason: '已经有同 id 的关注对象' });
+        continue;
+      }
+      added.push(person);
+      existing.add(person.id);
+    }
+    if (added.length) {
+      patchConfig(cfg, { people: [...list, ...added] });
+      log?.info?.(`从 VDB 导入 ${added.length} 位关注对象（${list.length} → ${list.length + added.length}）`);
+    }
+    res.json({ ok: true, added: added.length, skipped, people: (getConfig().people ?? []).length });
   });
 
   // ── LLM 用量与预算 / cost ─────────────────────────────────────────

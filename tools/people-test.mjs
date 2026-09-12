@@ -228,6 +228,32 @@ t('links 只保留认识的键', () => {
   assert.deepEqual(Object.keys(person.links), ['bilibili']);
 });
 
+t('**不限于 bilibili**：twitch / acfun / niconico / weibo 等平台账号都要留下来', () => {
+  const { person } = sanitizePerson({
+    name: 'Y',
+    links: { twitch: 'someone_tv', acfun: '123456', niconico: '999', weibo: '7595006312', youtube: 'UCabc', 乱七八糟: 'z' },
+  });
+  assert.deepEqual(Object.keys(person.links).sort(), ['acfun', 'niconico', 'twitch', 'weibo', 'youtube']);
+});
+
+t('别名从**任意平台**链接生成（不是只认 bilibili）', () => {
+  const p = { id: 'p1', name: '甲', links: { twitch: 'someone_tv', youtube: 'UCabc', twitter: 'SomeOne', bilibili: '672328094' } };
+  const vals = aliasesOf(p).map((a) => a.value);
+  assert.ok(vals.includes('someone_tv'), 'twitch 名本身');
+  assert.ok(vals.includes('twitch.tv/someone_tv'), 'twitch 链接形态');
+  assert.ok(vals.includes('youtube.com/channel/UCabc'), 'youtube 频道链接');
+  assert.ok(vals.includes('@SomeOne'), 'twitter handle 的 @ 形态');
+  assert.ok(vals.includes('space.bilibili.com/672328094'), 'bilibili 链接（原有行为不能丢）');
+});
+
+t('别名来源标注平台（界面要能说「凭什么说这条是他的」）', () => {
+  const p = { id: 'p2', name: '乙', links: { twitch: 'abc_tv' } };
+  const hit = aliasesOf(p).find((a) => a.value === 'abc_tv');
+  assert.equal(hit.source, 'twitch-id');
+  const url = aliasesOf(p).find((a) => a.value === 'twitch.tv/abc_tv');
+  assert.equal(url.source, 'twitch-url');
+});
+
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);
 if (fail) {
   process.stdout.write('  ' + fail + ' FAILED\n');

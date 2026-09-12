@@ -16,6 +16,8 @@
 //     这是人名匹配最常见的假阳性
 //   · 命中要**带证据**（命中了哪个别名、在哪个字段），界面上要能解释「凭什么说这条是他的」
 
+import { PLATFORM_URLS } from './vdb.js';
+
 /** 别名里是否含 CJK（汉字/假名/韩文）→ 决定用子串还是词边界匹配 */
 function hasCJK(s) {
   return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/.test(s);
@@ -25,7 +27,17 @@ export function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** 从人身上提取所有可用于匹配的别名（名字、别名、账号、uid） */
+/**
+ * 从人身上提取所有可用于匹配的别名（名字、别名、任意平台账号）。
+ *
+ * **平台无关**：这里不硬编码 bilibili。`links` 里有什么平台就按那个平台的形状生成别名 ——
+ *   · 原始 id/handle 本身（`someone_tv`）
+ *   · `@handle` 形态（twitter / tiktok / instagram 常见）
+ *   · 规范化链接（`twitch.tv/someone_tv`、`space.bilibili.com/672328094`…）
+ * 理由：使用者关注的人可能只在 twitch / youtube / twitter 上活动，
+ * 而我们的来源（新闻站、wiki、RSS）提到他们时用的往往是 handle 或链接 ——
+ * 只认 bilibili 的话，那些条目永远归属不到人。
+ */
 export function aliasesOf(person) {
   const out = new Set();
   const add = (v, source) => {
@@ -36,17 +48,25 @@ export function aliasesOf(person) {
   add(person?.enName, 'enName');
   for (const a of person?.aliases ?? []) add(a, 'alias');
   for (const t of person?.tags ?? []) add(t, 'tag');
+
   const links = person?.links ?? {};
-  if (links.bilibili) {
-    add(String(links.bilibili), 'uid');
-    add(`space.bilibili.com/${String(links.bilibili).trim()}`, 'uid-url');
+  for (const [platform, rawId] of Object.entries(links)) {
+    const id = String(rawId ?? '').trim();
+    if (!id || !PLATFORM_URLS[platform]) continue;
+    add(id, `${platform}-id`);
+    // 链接形态：twitch.tv/xxx、space.bilibili.com/123、youtube.com/channel/UCxx…
+    // 带不带 www 两种都加：来源里两种写法都会出现（有 www 的模板来自 VDB 的链接表）
+    const url = PLATFORM_URLS[platform].replace('{id}', id);
+    const bare = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    add(bare, `${platform}-url`);
+    if (bare.startsWith('www.')) add(bare.slice(4), `${platform}-url`);
+    // 像 handle 的平台再补一个 @ 形态
+    if (['twitter', 'tiktok', 'instagram', 'telegram', 'afdian'].includes(platform)) {
+      const h = id.replace(/^@/, '');
+      add(h, `${platform}-handle`);
+      add('@' + h, `${platform}-handle`);
+    }
   }
-  for (const k of ['twitter', 'x']) if (links[k]) {
-    const h = String(links[k]).replace(/^@/, '').trim();
-    add(h, 'handle');
-    add('@' + h, 'handle');
-  }
-  for (const k of ['youtube', 'twitch', 'tiktok', 'weibo', 'bilibiliName']) if (links[k]) add(links[k], 'handle');
   return [...out].map((s) => {
     const [value, source] = JSON.parse(s);
     return { value, source };
@@ -183,7 +203,16 @@ export function suggestFromPeople(entities, people, { minCount = 2, limit = 30 }
     .map((e) => ({ name: e.value, count: e.count, kind: e.kind ?? null, sample: e.sample ?? null }));
 }
 
-const LINK_KEYS = ['bilibili', 'twitter', 'x', 'youtube', 'twitch', 'tiktok', 'weibo'];
+/**
+ * 允许的链接平台键。
+ *
+ * 这里**必须**跟 vdb.js 的 PLATFORM_URLS 对齐（而不是手写一小串）：
+ * VDB 导入会把记录里的 accounts 原样写进 links，如果这张白名单只认识
+ * bilibili/twitter/youtube/twitch，导入时那些 twitch 之外的人（weibo、acfun、
+ * niconico、showroom、pixiv、afdian…）的账号就被**静默丢掉**了 ——
+ * 而「使用者的关注对象不一定在 bilibili 上」正是这一层要支持的事。
+ */
+const LINK_KEYS = Object.keys(PLATFORM_URLS);
 
 export function sanitizePerson(input, i = 0) {
   const id = String(input?.id ?? '')

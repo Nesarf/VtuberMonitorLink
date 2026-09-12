@@ -36,6 +36,56 @@ export default function People() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
   const [gv, setGv] = useState(null);
+  const [vdb, setVdb] = useState(null);
+  const [vdbQ, setVdbQ] = useState('');
+  const [vdbResults, setVdbResults] = useState([]);
+  const [vdbBusy, setVdbBusy] = useState('');
+  const [vdbMsg, setVdbMsg] = useState('');
+  const [vdbSearched, setVdbSearched] = useState(false);
+
+  const searchVdb = async () => {
+    if (!vdbQ.trim()) return;
+    setVdbBusy('search');
+    setVdbMsg('');
+    try {
+      const r = await api.vdbSearch(vdbQ.trim());
+      setVdbResults(r.results ?? []);
+      setVdbSearched(true);
+      setVdb((prev) => ({ ...(prev ?? {}), count: prev?.count ?? 0, source: r.source, license: r.license }));
+    } catch (e) {
+      setVdbMsg(`❌ ${e.message}`);
+    } finally {
+      setVdbBusy('');
+    }
+  };
+
+  const syncVdb = async () => {
+    setVdbBusy('sync');
+    setVdbMsg('');
+    try {
+      const r = await api.vdbSync();
+      setVdbMsg(`✅ ${r.count} · ${r.groups} ${t('vdbGroups')}`);
+      setVdb(await api.vdbStatus());
+    } catch (e) {
+      setVdbMsg(`❌ ${e.message}`);
+    } finally {
+      setVdbBusy('');
+    }
+  };
+
+  const importVdb = async (keys) => {
+    setVdbBusy('import');
+    setVdbMsg('');
+    try {
+      const r = await api.vdbImport(keys);
+      setVdbMsg(`✅ ${t('vdbImported')} ${r.added}${(r.skipped ?? []).length ? ` · ${t('vdbSkipped')} ${r.skipped.length}` : ''}`);
+      await load();
+    } catch (e) {
+      setVdbMsg(`❌ ${e.message}`);
+    } finally {
+      setVdbBusy('');
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -50,6 +100,12 @@ export default function People() {
       setGv(await api.groups(30));
     } catch (e) {
       setGv({ ok: false, groups: [], people: 0, error: e.message });
+    }
+    // VDB 花名册状态（只读缓存，不触发下载）
+    try {
+      setVdb(await api.vdbStatus());
+    } catch {
+      /* 没缓存就是没缓存，不打扰 */
     }
   }, []);
 
@@ -138,6 +194,66 @@ export default function People() {
 
   return (
     <>
+      {/* ── 从 VDB 导入 / import from VDB ──
+          VDB（vtbs.moe 的上游花名册）给的是我们缺的那一维：**社团（箱）** +
+          多语言名字 + **各平台**账号。数据只运行时拉取，不进发行包，因此这里署名。 */}
+      <section className="panel">
+        <h2>{t('vdbTitle')}</h2>
+        <div className="hint">{t('vdbHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '1 1 320px' }}>
+            <input
+              value={vdbQ}
+              placeholder={t('vdbSearchPh')}
+              onChange={(e) => setVdbQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') searchVdb();
+              }}
+            />
+          </div>
+          <button className="ghost" onClick={searchVdb} disabled={vdbBusy || !vdbQ.trim()}>
+            {vdbBusy === 'search' ? t('loading') : t('vdbSearch')}
+          </button>
+          <button className="ghost" onClick={syncVdb} disabled={vdbBusy === 'sync'}>
+            {vdbBusy === 'sync' ? t('loading') : t('vdbSync')}
+          </button>
+        </div>
+        {vdb && (
+          <div className="muted small" style={{ marginTop: 6 }}>
+            {t('vdbRoster')}: {vdb.count} · {Object.keys(vdb.groups ?? {}).length} {t('vdbGroups')}
+            {vdb.generatedAt ? ` · ${String(vdb.generatedAt).slice(0, 10)}` : ''} · {vdb.source} · {vdb.license}
+          </div>
+        )}
+        {(vdbResults ?? []).length > 0 && (
+          <table className="people-list" style={{ marginTop: 8 }}>
+            <tbody>
+              {vdbResults.map((r) => (
+                <tr key={r.key}>
+                  <td>
+                    <b>{r.names[0]}</b>
+                    {r.names.length > 1 ? <span className="muted small"> / {r.names.slice(1, 3).join(' / ')}</span> : null}
+                    {r.group ? <span className="badge none">{r.group}</span> : null}
+                    <div className="muted small">
+                      {Object.entries(r.accounts)
+                        .slice(0, 5)
+                        .map(([p, id]) => `${p}:${id}`)
+                        .join(' · ')}
+                    </div>
+                  </td>
+                  <td style={{ width: 90 }}>
+                    <button className="ghost tiny" onClick={() => importVdb([r.key])} disabled={!!vdbBusy}>
+                      {t('vdbImport')}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {(vdbResults ?? []).length === 0 && vdbSearched && <p className="muted">{t('vdbNoResult')}</p>}
+        {vdbMsg && <div className="hint" style={{ marginBottom: 0 }}>{vdbMsg}</div>}
+      </section>
+
       {err && (
         <section className="panel">
           <div className="hint warn-text">{err}</div>

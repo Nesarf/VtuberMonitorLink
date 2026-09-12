@@ -556,7 +556,18 @@
     "costBudget": "1日の予算（tokens、0 = 無制限）",
     "costUnlimited": "上限なし",
     "costOnExceed": "予算超過時",
-    "costExceedWarn": "警告のみ（デフォルト）"
+    "costExceedWarn": "警告のみ（デフォルト）",
+    "vdbImported": "インポート済み",
+    "vdbImport": "インポート",
+    "vdbNoResult": "見つかりません（別名またはプラットフォームアカウントIDをお試しください）",
+    "vdbGroups": "サークル",
+    "vdbSkipped": "スキップ",
+    "vdbTitle": "VDB からインポートフォロー対象",
+    "vdbHint": "VDB は vtbs.moe の上流名簿（コミュニティ管理、1万件以上）で、各項目に所属と各プラットフォームのアカウントが付いています —— 名前やプラットフォームのアカウントで検索すれば、人物を所属・別名・アカウントごと一度に登録できます。データは実行時にのみ取得され（約 0.5MB、1リクエスト）、本ツールには同梱されません。",
+    "vdbSearchPh": "名前 / 別名 / プラットフォームアカウント（例：twitch 名、YouTube チャンネル）",
+    "vdbSearch": "検索",
+    "vdbSync": "名簿を同期",
+    "vdbRoster": "名簿"
   },
   "ko-KR": {
     "calRemindWindow": "알림 창 안",
@@ -1115,7 +1126,18 @@
     "costExceedStop": "이번 실행 중지",
     "costRemaining": "남은 횟수",
     "costUnknown": "회 사용량 미확보",
-    "obsLastSeen": "최근 관측"
+    "obsLastSeen": "최근 관측",
+    "vdbImported": "가져옴",
+    "vdbSearch": "검색",
+    "vdbNoResult": "찾을 수 없음 (별칭 또는 플랫폼 계정 id를 시도해 보세요)",
+    "vdbGroups": "커뮤니티",
+    "vdbSkipped": "건너뛰기",
+    "vdbTitle": "VDB에서 가져오기관심 대상",
+    "vdbHint": "VDB는 vtbs.moe의 업스트림 명부(커뮤니티 유지 관리, 1만여 건)로, 각 항목에 소속과 각 플랫폼 계정이 포함되어 있습니다 — 이름이나 플랫폼 계정을 검색하면 사람과 소속, 별칭, 계정을 한 번에 등록할 수 있습니다. 데이터는 런타임에만 가져오며(약 0.5MB, 요청 1회), 이 도구와 함께 배포되지 않습니다.",
+    "vdbSearchPh": "이름 / 별칭 / 플랫폼 계정(예: twitch 이름, 유튜브 채널)",
+    "vdbSync": "명부 동기화",
+    "vdbRoster": "명부",
+    "vdbImport": "가져오기"
   },
   "es-ES": {
     "calTotal": "Total",
@@ -1674,7 +1696,18 @@
     "costBudget": "presupuesto diario (tokens, 0 = sin límite)",
     "costUnlimited": "sin límite",
     "costOnExceed": "al superar el presupuesto",
-    "costExceedWarn": "solo avisar (predeterminado)"
+    "costExceedWarn": "solo avisar (predeterminado)",
+    "vdbImported": "Importado",
+    "vdbSearch": "Cerca",
+    "vdbNoResult": "No encontrado (prueba un alias o el id de la cuenta de la plataforma)",
+    "vdbGroups": "Un círculo",
+    "vdbSkipped": "Omitir",
+    "vdbTitle": "Importar desde VDBPersonas seguidas",
+    "vdbHint": "VDB es el registro upstream de vtbs.moe (mantenido por la comunidad, más de diez mil entradas); cada una incluye el grupo y las cuentas de cada plataforma: busca un nombre o una cuenta de plataforma y podrás importar a la persona junto con su grupo, alias y cuentas de una sola vez. Los datos solo se obtienen en tiempo de ejecución (unos 0,5 MB, una sola solicitud) y no se distribuyen con esta herramienta.",
+    "vdbSearchPh": "Nombre / alias / cuenta de plataforma (p. ej. nombre de twitch, canal de YouTube)",
+    "vdbSync": "Sincronizar registro",
+    "vdbRoster": "Registro",
+    "vdbImport": "Importar"
   },
   "es-419": {
     "calDetectTitle": "Buscar pistas en Información",
@@ -2233,7 +2266,18 @@
     "costBudget": "Presupuesto diario (tokens, 0 = sin límite)",
     "costUnlimited": "Sin límite",
     "costOnExceed": "Al superar el presupuesto",
-    "costExceedWarn": "Solo advertir (predeterminado)"
+    "costExceedWarn": "Solo advertir (predeterminado)",
+    "vdbImported": "Importado",
+    "vdbSearch": "Buscar",
+    "vdbNoResult": "No encontrado (prueba un alias o el id de la cuenta de la plataforma)",
+    "vdbGroups": "comunidades",
+    "vdbSkipped": "Omitir",
+    "vdbTitle": "Importar desde VDBPersonas seguidas",
+    "vdbHint": "VDB es el registro upstream de vtbs.moe (mantenido por la comunidad, más de diez mil entradas), cada una con su agrupación y cuentas de cada plataforma: busca un nombre o una cuenta de plataforma y podrás importar a la persona junto con su agrupación, alias y cuentas de una sola vez. Los datos solo se obtienen en tiempo de ejecución (unos 0.5 MB, una sola solicitud) y no se distribuyen con esta herramienta.",
+    "vdbSearchPh": "Nombre / alias / cuenta de plataforma (p. ej. nombre de twitch, canal de YouTube)",
+    "vdbSync": "Sincronizar registro",
+    "vdbRoster": "Registro",
+    "vdbImport": "Importar"
   },
   "pt-PT": {
     "tab_intel": "Informação",
@@ -2803,7 +2847,18 @@
     "costBudget": "Orçamento diário (tokens, 0 = sem limite)",
     "costUnlimited": "Sem limite definido",
     "costOnExceed": "Ao exceder o orçamento",
-    "costExceedWarn": "Apenas avisar (predefinição)"
+    "costExceedWarn": "Apenas avisar (predefinição)",
+    "vdbImported": "Importado",
+    "vdbSearch": "Pesquisar",
+    "vdbNoResult": "Não encontrado (tente um alias ou o id da conta da plataforma)",
+    "vdbGroups": "Comunidade",
+    "vdbSkipped": "Ignorar",
+    "vdbTitle": "Importar do VDB Pessoas seguidas",
+    "vdbHint": "O VDB é o registo upstream do vtbs.moe (mantido pela comunidade, com mais de dez mil entradas), cada uma com a agência e contas em várias plataformas — basta pesquisar o nome ou a conta de uma plataforma para importar a pessoa juntamente com a agência, aliases e contas de uma só vez. Os dados são obtidos apenas em tempo de execução (cerca de 0,5 MB, um pedido) e não são distribuídos com esta ferramenta.",
+    "vdbSearchPh": "Nome / alias / conta de plataforma (ex.: nome na twitch, canal YouTube)",
+    "vdbSync": "Sincronizar registo",
+    "vdbRoster": "Registo",
+    "vdbImport": "Importar"
   },
   "pt-BR": {
     "tab_intel": "Informação",
@@ -3369,7 +3424,18 @@
     "costBudget": "Orçamento diário (tokens, 0 = ilimitado)",
     "costUnlimited": "Sem limite definido",
     "costOnExceed": "Ao ultrapassar o orçamento",
-    "costExceedWarn": "Apenas avisar (padrão)"
+    "costExceedWarn": "Apenas avisar (padrão)",
+    "vdbImported": "Importado",
+    "vdbSearch": "Pesquisar",
+    "vdbNoResult": "Não encontrado (tente um alias ou o ID da conta da plataforma)",
+    "vdbGroups": "Comunidade",
+    "vdbSkipped": "Pular",
+    "vdbTitle": "Importar do VDBPessoas seguidas",
+    "vdbHint": "O VDB é o cadastro upstream do vtbs.moe (mantido pela comunidade, mais de dez mil entradas), cada uma com grupo e contas de várias plataformas — basta buscar o nome ou a conta de uma plataforma para importar a pessoa junto com grupo, aliases e contas de uma só vez. Os dados são obtidos apenas em tempo de execução (cerca de 0,5 MB, uma requisição) e não são distribuídos com esta ferramenta.",
+    "vdbSearchPh": "Nome / alias / conta de plataforma (ex.: nome na twitch, canal no YouTube)",
+    "vdbSync": "Sincronizar lista",
+    "vdbRoster": "Lista",
+    "vdbImport": "Importar"
   },
   "fr-FR": {
     "calAdded": "Ajouté au calendrier",
@@ -3929,7 +3995,18 @@
     "costBudget": "Budget quotidien (tokens, 0 = illimité)",
     "costUnlimited": "Aucune limite",
     "costOnExceed": "En cas de dépassement",
-    "costExceedWarn": "Avertir seulement (par défaut)"
+    "costExceedWarn": "Avertir seulement (par défaut)",
+    "vdbImported": "Importé",
+    "vdbSearch": "Rechercher",
+    "vdbNoResult": "Introuvable (essayez un alias ou l'id du compte de la plateforme)",
+    "vdbGroups": "Groupes",
+    "vdbSkipped": "Ignorer",
+    "vdbTitle": "Importer depuis VDBPersonnes suivies",
+    "vdbHint": "VDB est le registre amont de vtbs.moe (maintenu par la communauté, plus de dix mille entrées), chaque entrée indiquant le groupe et les comptes sur chaque plateforme — recherchez un nom ou un compte de plateforme pour importer une personne avec son groupe, ses alias et ses comptes en une seule fois. Les données ne sont récupérées qu'à l'exécution (environ 0,5 Mo, une requête), et ne sont pas distribuées avec cet outil.",
+    "vdbSearchPh": "Nom / alias / compte de plateforme (ex. nom twitch, chaîne YouTube)",
+    "vdbSync": "Synchroniser le registre",
+    "vdbRoster": "Registre",
+    "vdbImport": "Importer"
   },
   "de-DE": {
     "calTotal": "Insgesamt",
@@ -4489,7 +4566,18 @@
     "costBudget": "Tagesbudget (Tokens, 0 = unbegrenzt)",
     "costUnlimited": "Kein Limit festgelegt",
     "costOnExceed": "Bei Überschreitung des Budgets",
-    "costExceedWarn": "Nur warnen (Standard)"
+    "costExceedWarn": "Nur warnen (Standard)",
+    "vdbImported": "Importiert",
+    "vdbSearch": "Suchen",
+    "vdbNoResult": "Nicht gefunden (versuche Alias oder Plattform-Konto-ID)",
+    "vdbGroups": "Community",
+    "vdbSkipped": "Überspringen",
+    "vdbTitle": "Aus VDB importierenBeobachtete Personen",
+    "vdbHint": "VDB ist das Upstream-Verzeichnis von vtbs.moe (community-gepflegt, über 10.000 Einträge), jeder mit Gruppe und Plattform-Konten – suche nach Name oder Plattform-Konto, um eine Person samt Gruppe, Aliasen und Konten auf einmal zu erfassen. Daten werden nur zur Laufzeit geladen (ca. 0,5 MB, eine Anfrage) und nicht mit diesem Tool verteilt.",
+    "vdbSearchPh": "Name / Alias / Plattformkonto (z. B. Twitch-Name, YouTube-Kanal)",
+    "vdbSync": "Verzeichnis synchronisieren",
+    "vdbRoster": "Verzeichnis",
+    "vdbImport": "Importieren"
   },
   "it-IT": {
     "calTotal": "Totale",
@@ -5049,7 +5137,18 @@
     "costBudget": "Budget giornaliero (token, 0 = illimitato)",
     "costUnlimited": "Nessun limite",
     "costOnExceed": "Quando si supera il budget",
-    "costExceedWarn": "Solo avviso (predefinito)"
+    "costExceedWarn": "Solo avviso (predefinito)",
+    "vdbImported": "Importato",
+    "vdbSearch": "Cerca",
+    "vdbNoResult": "Non trovato (prova un alias o l'id dell'account della piattaforma)",
+    "vdbGroups": "Circolo",
+    "vdbSkipped": "Salta",
+    "vdbTitle": "Importa da VDBPersone seguite",
+    "vdbHint": "VDB è il roster upstream di vtbs.moe (mantenuto dalla community, oltre diecimila voci), ogni voce include il gruppo e gli account sulle varie piattaforme — cerca un nome o un account di piattaforma per importare in una volta la persona insieme a gruppo, alias e account. I dati vengono scaricati solo a runtime (circa 0,5MB, una richiesta), non sono distribuiti con questo strumento.",
+    "vdbSearchPh": "Nome / alias / account di piattaforma (es. nome twitch, canale YouTube)",
+    "vdbSync": "Sincronizza registro",
+    "vdbRoster": "Registro",
+    "vdbImport": "Importa"
   },
   "ru-RU": {
     "calTotal": "Всего",
@@ -5609,7 +5708,18 @@
     "costBudget": "Дневной бюджет (токены, 0 = без ограничений)",
     "costUnlimited": "Без лимита",
     "costOnExceed": "При превышении бюджета",
-    "costExceedWarn": "Только предупреждать (по умолчанию)"
+    "costExceedWarn": "Только предупреждать (по умолчанию)",
+    "vdbImported": "Импортировано",
+    "vdbSearch": "Поиск",
+    "vdbNoResult": "Не найдено (попробуйте псевдоним или ID аккаунта платформы)",
+    "vdbGroups": "Сообщество",
+    "vdbSkipped": "Пропустить",
+    "vdbTitle": "Импорт из VDBОтслеживаемые",
+    "vdbHint": "VDB — это вышестоящий реестр vtbs.moe (поддерживается сообществом, более 10 000 записей), каждая запись содержит агентство и аккаунты на разных платформах — найдите имя или аккаунт, и человек вместе с агентством, псевдонимами и аккаунтами будет добавлен за один раз. Данные загружаются только во время работы (около 0,5 МБ, один запрос) и не распространяются вместе с этим инструментом.",
+    "vdbSearchPh": "Имя / псевдоним / аккаунт платформы (например, имя на twitch, канал YouTube)",
+    "vdbSync": "Синхронизировать реестр",
+    "vdbRoster": "Реестр",
+    "vdbImport": "Импорт"
   },
   "uk-UA": {
     "appSub": "Локальні VTuber ЗведенняМоніторинг",
@@ -6171,7 +6281,18 @@
     "costBudget": "Денний бюджет (токени, 0 = без обмежень)",
     "costUnlimited": "Без ліміту",
     "costOnExceed": "При перевищенні бюджету",
-    "costExceedWarn": "Лише попередження (за замовчуванням)"
+    "costExceedWarn": "Лише попередження (за замовчуванням)",
+    "vdbImported": "Імпортовано",
+    "vdbSearch": "Пошук",
+    "vdbNoResult": "Не знайдено (спробуйте псевдонім або ідентифікатор акаунта платформи)",
+    "vdbGroups": "Спільноти",
+    "vdbSkipped": "Пропустити",
+    "vdbTitle": "Імпорт з VDBВідстежувані",
+    "vdbHint": "VDB — це вихідний реєстр vtbs.moe (підтримується спільнотою, понад десять тисяч записів), кожен із яких містить агенцію та акаунти на різних платформах — достатньо пошукати ім'я або акаунт, щоб одразу додати людину разом з агенцією, псевдонімами й акаунтами. Дані завантажуються лише під час роботи (близько 0,5 МБ, один запит) і не розповсюджуються разом із цим інструментом.",
+    "vdbSearchPh": "Ім'я / псевдонім / акаунт платформи (напр. ім'я twitch, канал YouTube)",
+    "vdbSync": "Синхронізувати реєстр",
+    "vdbRoster": "Реєстр",
+    "vdbImport": "Імпорт"
   },
   "pl-PL": {
     "calLeap": "Dzień przestępny przesunięty na 3/1",
@@ -6733,7 +6854,18 @@
     "costBudget": "Dzienny budżet (tokeny, 0 = bez limitu)",
     "costUnlimited": "Bez limitu",
     "costOnExceed": "Po przekroczeniu budżetu",
-    "costExceedWarn": "Tylko ostrzegaj (domyślnie)"
+    "costExceedWarn": "Tylko ostrzegaj (domyślnie)",
+    "vdbImported": "Zaimportowano",
+    "vdbSearch": "Szukaj",
+    "vdbNoResult": "Nie znaleziono (spróbuj aliasu lub identyfikatora konta platformy)",
+    "vdbGroups": "społeczności",
+    "vdbSkipped": "Pomiń",
+    "vdbTitle": "Importuj z VDBObserwowani",
+    "vdbHint": "VDB to nadrzędny rejestr vtbs.moe (utrzymywany przez społeczność, ponad 10 tys. wpisów), każdy z grupą i kontami na platformach — wyszukaj nazwę lub konto, aby zaimportować osobę wraz z grupą, aliasami i kontami. Dane pobierane tylko w czasie działania (ok. 0,5 MB, jedno żądanie), nie są dołączane do tego narzędzia.",
+    "vdbSearchPh": "Imię / alias / konto platformy (np. nazwa twitch, kanał YouTube)",
+    "vdbSync": "Synchronizuj rejestr",
+    "vdbRoster": "Rejestr",
+    "vdbImport": "Importuj"
   },
   "sr-RS": {
     "tab_search": "Претрага",
@@ -7299,7 +7431,18 @@
     "costBudget": "дневни буџет (токени, 0 = неограничено)",
     "costUnlimited": "без лимита",
     "costOnExceed": "када се прекорачи буџет",
-    "costExceedWarn": "само упозори (подразумевано)"
+    "costExceedWarn": "само упозори (подразумевано)",
+    "vdbImported": "Увезено",
+    "vdbSearch": "Претрага",
+    "vdbNoResult": "Није пронађено (пробајте псеудоним или ID налога на платформи)",
+    "vdbGroups": "Заједнице",
+    "vdbSkipped": "Прескочи",
+    "vdbTitle": "Увези из VDB-а Праћени",
+    "vdbHint": "VDB је узводни именик за vtbs.moe (одржава га заједница, преко десет хиљада уноса), сваки са групом и налозима на платформама — претрагом имена или налога одједном увозите особу заједно са групом, псеудонимима и налозима. Подаци се преузимају само у току рада (око 0,5MB, један захтев) и не дистрибуирају се уз овај алат.",
+    "vdbSearchPh": "Име / псеудоним / налог на платформи (нпр. twitch име, YouTube канал)",
+    "vdbSync": "Синхронизуј именик",
+    "vdbRoster": "Именик",
+    "vdbImport": "Увези"
   },
   "ar-SA": {
     "calTotal": "إجمالي",
@@ -7859,6 +8002,17 @@
     "costBudget": "الميزانية اليومية (tokens، 0 = بلا حد)",
     "costUnlimited": "بلا حد محدد",
     "costOnExceed": "عند تجاوز الميزانية",
-    "costExceedWarn": "تحذير فقط (افتراضي)"
+    "costExceedWarn": "تحذير فقط (افتراضي)",
+    "vdbImported": "تم الاستيراد",
+    "vdbSearch": "بحث",
+    "vdbNoResult": "لم يتم العثور عليه (جرّب اسمًا مستعارًا أو معرّف حساب المنصة)",
+    "vdbGroups": "مجموعة",
+    "vdbSkipped": "تخطٍّ",
+    "vdbTitle": "استيراد من VDB المتابَعون",
+    "vdbHint": "VDB هو السجل الأساسي لـ vtbs.moe (يُصان من المجتمع، أكثر من عشرة آلاف سجل)، كل سجل يحمل الانتماء وحسابات المنصات — ابحث بالاسم أو بحساب المنصة لتسجيل الشخص مع انتمائه وأسمائه البديلة وحساباته دفعة واحدة. تُجلب البيانات وقت التشغيل فقط (نحو 0.5MB، طلب واحد)، ولا تُوزَّع مع هذه الأداة.",
+    "vdbSearchPh": "الاسم / الاسم البديل / حساب المنصة (مثل اسم twitch، قناة YouTube)",
+    "vdbSync": "مزامنة السجلّ",
+    "vdbRoster": "السجلّ",
+    "vdbImport": "استيراد"
   }
 }

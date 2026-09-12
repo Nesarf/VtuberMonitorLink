@@ -26,7 +26,7 @@
 | **情报** | 卡片流；可切「合并重复事件」视图；图片标签、命中关注对象、告警关键词都会标出来 |
 | **检索** | 纯本地匹配（关键词/标签/时间），不需要 LLM、不需要联网 |
 | **直播** | 开播状态（直播/轮播/下播）+ 多屏；频道里可以直接发弹幕（需登录，手动确认） |
-| **关注** | 关注名单：名字、别名、账号；单人情报流与单人导出；命中依据可查 |
+| **关注** | 关注名单：名字、别名、账号；单人情报流与单人导出；命中依据可查；**可从 VDB 花名册导入**（自动带上社团与各平台账号） |
 | **日历** | 生日 / 出道日 / 3D披露 / 周年倒计时 + 月历；闰日与地区时区都处理了 |
 | **运行** | 立即跑一次（常规 / 通贩 / 只检查监视对象），实时进度与日志 |
 | **来源** | 30 条内置适配器逐条勾选；单站出口、延迟/丢包、自检；也可可视化新增自定义来源 |
@@ -49,6 +49,28 @@
 | **一键分享** | 零外部引用的单文件 HTML（离线可看）；**按平台如实说明登录需求**，做不到的直接标「不支持」 |
 | **多语言与地区** | 25 个地区（含 zh-Hant/HK/TW、en-US/GB/AU/CA、es-ES/419/MX/AR、pt-PT/BR、fr-FR/CA、de/it/ja/ko/ru/uk/pl/sr/ar）；RTL；日期/数字/一周起始日按地区格式化 |
 | **自动出口** | 每个站点按「等效延迟 = 平均延迟 ×（1 + 丢包 × 4）」自动选直连或代理，带粘滞（优势不足 20% 不切换），真实抓取结果会反哺判定 |
+
+### 社团花名册（VDB，多平台）
+
+「按人关注」和「箱视角」缺的那一维是**社团**。手填 30 人就要填 30 次，所以这里接了一份公开花名册：
+`github.com/dd-center/vdb`（vtbs.moe 的上游数据库），**一文件一人** —— 多语言名字 + 各平台账号 + 社团。
+
+- **一条请求拿全库**：整库 tarball 只有 **0.54 MB / 10035 条 / 215 个社团**，一次请求一两秒；比逐个调 API 省几千次请求
+- **平台无关**：27 个平台（bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico / showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon / line / github …）。搜**任意平台**的账号 id 或链接形态都能命中，代码里不假设 bilibili
+- **导入走同一条净化路径**：选中 → 转成关注对象 → 过和手工新增同一个校验，被挡的逐条回报原因，不静默丢弃
+- **许可是 CC BY-NC-SA 4.0**：所以**只运行时获取**，缓存在运行期目录，**绝不进仓库、绝不进发行包**（巡检会拦），界面与文档都署名
+- 详见 `docs/VDB.md`
+
+### 箱视角、静默与休眠、观测模式、用量与预算
+
+「什么都没发生」也是情报。这四块专门处理**沉默、缺失和代价**：
+
+| 能力 | 要点 |
+| --- | --- |
+| **箱视角** | 按社团聚合的活跃热力图；同日活动（企划/联动长什么样）；共同静默；以及相对**每个人自己节奏**的异常。填了 Agency 的关注对象才会计入 |
+| **静默与停止活动** | 基线取「最近活跃日之间的**平均间隔**」（不是钉在最后活跃日上的窗口 —— 那样每个月只发一次的人看起来像每天都在动）；容差 `间隔×2.5` 并夹在 3~90 天；**回归**要求「最近有活动 + 之前长时间空白」，所以回来的认得出、没回来的不会误报。≥6 个月无动静的进日报**最末尾**的「停止活动 / 毕业」块，附最新内容；突然有动静会标出来 |
+| **观测模式** | 「有人把整个名册扫了一遍」这个痕迹本身就是信号。开启后每轮**随机取样**一个子集（按「最久没被抽到」排序，轮换自然补齐覆盖），间隔抖动，**只对日志归属在对方那边的站点**走 Tor，需登录的来源本轮跳过。取舍与实测都写在 `docs/OBSERVE.md` |
+| **用量与预算** | 按次、按模型的 token 用量；可选每日预算，80% 告警、超限可拦截整次运行；模型没上报用量时**单列出来**而不是猜 |
 
 ### 监视对象（参考萌娘百科的监视技术）
 
@@ -166,7 +188,7 @@ npm run mock-llm         # 监听 127.0.0.1:43197
 
 - **不打包、不上传任何账号或 cookie**；需要登录的站点一律由你自己在自己的浏览器里登录。
 - LLM Key 与（可选的）萌百 BotPassword 都只存在本机 `app/config.json`，不入仓库、不进发行包。
-- `config.json`、`reports/`、`feeds/`、`logs/`、`watch/` 都不会进版本库（见 `.gitignore`）。
+- `config.json`、`reports/`、`feeds/`、`logs/`、`watch/`、`thumbs/`、`advice/`、`vdb/` 都不会进版本库（见 `.gitignore`）。
 - 发布/提交前可运行自检：`npm run sanitize-check`。
 
 ### 发布校验
@@ -174,9 +196,22 @@ npm run mock-llm         # 监听 127.0.0.1:43197
 ```bash
 npm run verify        # 校对发行包：必需文件 / ASCII / UTF-8 / 密钥与个人路径残留 / 运行数据
 npm run traverse      # 遍历全部 HTTP 端点、SPA 兜底、错误路径
-npm run traverse:ui   # 真实浏览器里走完六个页面，并用 mock LLM 真跑一次
+npm run traverse:ui   # 真实浏览器里走完十一个页面，并用 mock LLM 真跑一次
 npm run release       # 上述全套
 ```
+
+### 第三方数据与署名
+
+本工具的代码是 MIT，但它会**在运行时**从外部取数据，那些数据有各自的许可与作者：
+
+| 来源 | 用在哪 | 许可 / 署名 |
+| --- | --- | --- |
+| **[dd-center/vdb](https://github.com/dd-center/vdb)** | 社团花名册（`docs/VDB.md`） | 数据 **CC BY-NC-SA 4.0**、代码 GPL。**只运行时获取、不打包、不二次分发**，界面与文档署名 |
+| **[api.vtbs.moe](https://vtbs.moe)** | 直播花名册辅助查询 | 上游服务，仅查询、不缓存分发 |
+| **[dd-center/bilibili-dd-monitor](https://github.com/dd-center/bilibili-dd-monitor)** | 多屏直播的**思路**参考 | MIT（Copyright (c) 2020 wdpm）；本工具为**重写**而非搬运（见 `docs/LIVE.md`） |
+| 萌娘百科 `watchlist-brief` / `recent-changes-brief` | 监视对象的设计参考 | 思路参考，未搬运代码 |
+
+抓下来的条目本身属于各自的发布者。本工具只是本地聚合，**不转载、不公开分发**任何第三方内容。
 
 ---
 
@@ -188,23 +223,63 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 
 1. **Scrape the sources you tick** (Reddit / Fandom / Moegirlpedia / Twitch / X / YouTube / official news pages / **bilibili dynamics** / merch platforms …)
 2. **Check the watch targets you pin** — one wiki page, one arbitrary URL, one bilibili UP — and report exactly what changed
-3. **Analyse everything with an LLM** into a structured Markdown report (confirmed facts vs. rumours kept separate, each item citing its source)
-4. **Show it all in the console**: an intel card stream, rendered reports, change history with diffs, full-text search, single-file HTML export
+3. **Group intel by person, not by source**: fill in names and accounts and the app attributes items locally (plain string matching, no network, no LLM), showing exactly which alias hit which field
+4. **Merge the same event across sources**: similarity dedupe + source weight (official > news > community > social), with a "confirmed by N sources" marker
+5. **Analyse everything with an LLM** (optional) into a structured report; images can be tagged by a vision model and become searchable labels
+6. **Show it all in the console**: intel cards, rendered reports, **trend charts**, **anniversary countdowns**, full-text search, **one-click single-file share**, Word/Excel export
 
-### The six pages
+### The eleven pages
 
 | Page | What it does |
 | --- | --- |
-| **Intel** | Every item from the latest run as a card; pictures inline, keyword hits flagged |
+| **Intel** | Every item from the latest run as a card; merge-duplicates view; picture tags, person hits and keyword alerts are flagged |
+| **Search** | Pure local matching (keyword / tag / time) — no LLM, no network |
+| **Live** | Live status (live / rerun / offline) + multi-screen; you can send a danmaku from the channel (login required, manual confirmation) |
+| **People** | The follow list — names, aliases, accounts; per-person feed and export; match evidence on demand; **import from the VDB roster** (brings group and per-platform accounts along) |
+| **Calendar** | Birthday / debut / 3D reveal / anniversary countdowns + a month grid; leap days and regional time zones handled |
 | **Run** | Collect now (regular / merch / watch-targets-only) with live progress and log |
-| **Sources** | Tick any of 30 built-in adapters, or add your own visually |
+| **Sources** | Tick any of 30 built-in adapters; per-source egress, latency/loss, self-test; add your own visually |
 | **Watch** | Watch targets, alarm rules, change history and diffs |
-| **Settings** | Browser, LLM profiles, proxy, schedule, theme (dark by default; light or follow-system on request) and desktop notifications |
-| **Observation mode** | Watch a whole group without leaving a "someone swept the whole roster" footprint: each round samples a random subset (rotation fills coverage in), gaps are jittered, Tor is used only for entries whose logs the other side owns, and sources that need a login are skipped. See `docs/OBSERVE.md`. |
-| **Group view** | Per-agency heatmap of who is active, same-day activity (what a project or collab looks like), joint silence, and per-person anomalies relative to each person's own cadence. Followed people need an Agency filled in. |
-| **Silence & dormant** | "Nothing happened" is intelligence too: silence detection reports who stopped (relative to their own rhythm) and when a whole group goes quiet; entities idle for 6+ months are collected at the very end of the daily report with their latest content, and flagged if they suddenly stir. |
-| **Usage & budget** | Token usage per run and model, with an optional daily budget that warns at 80% and can block a run. Calls whose usage the model did not report are counted separately instead of guessed. |
-| **Reports** | Rendered / raw Markdown, full-text search, HTML/JSON export |
+| **LLM** | Profiles (multi-provider / model / key, masked, one-click test, model list); which features need it |
+| **Settings** | Browser, egress (direct / proxy / Tor, auto-matched per site), schedule, notifications, privacy, interface |
+| **Reports** | Trend charts + one-click share + report list: rendered / raw, search, export, two-version comparison |
+
+### The ten capabilities (all with self-tests)
+
+| Capability | Highlights |
+| --- | --- |
+| **Anniversary countdowns** | 2/29 rolls to 3/1 in common years **and says so**; "today" follows your configured time zone; week start follows the region |
+| **Danmaku sending** | **WBI signing** (nav → key → 64-slot permutation → `w_rid`); six gates: explicit confirmation, named account, cookie re-read on the spot, local rate limit, audit trail, never automated |
+| **Push channels & quiet hours** | 12 channels (Bark / ServerChan / Telegram / **DingTalk signed** / WeCom / ntfy / Gotify / PushPlus / Slack / Discord / Feishu / custom); notifications inside quiet hours are **queued and re-sent, not dropped**, midnight crossing handled, bad config fails open |
+| **Follow by person** | CJK substring matching + Latin word-boundary matching (so `Rei` does not hit `Reimu`); every hit carries evidence |
+| **Image tagging** | 8 kinds + visible text; cached per image URL; **off by default** — sending images to an external service requires you to turn it on |
+| **Event merge & source weight** | IDF-weighted similarity + union-find single link + time window; weights grow from "who reported it first" |
+| **SQLite archive & charts** | Idempotent incremental writes keyed by item id; daily counts; charts are **inline SVG**, no chart library |
+| **One-click share** | A single HTML file with zero external references (readable offline); **login requirements stated honestly per platform**, unsupported ones are labelled as such |
+| **Locales & regions** | 25 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar); RTL; dates, numbers and week start formatted per region |
+| **Automatic egress** | Each site picks direct or proxy by "effective latency = mean latency × (1 + loss × 4)", with stickiness (no switch below a 20% edge); real fetch results feed the decision back |
+
+### VDB roster (multi-platform)
+
+The dimension "follow by person" and "group view" were missing is **the agency**. Filling in 30 people by hand means 30 forms, so this connects to a public roster: `github.com/dd-center/vdb` (the upstream database behind vtbs.moe), **one file per person** — multilingual names + per-platform accounts + group.
+
+- **The whole database in one request**: the tarball is only **0.54 MB / 10035 records / 215 groups**; one request, a second or two, instead of thousands of API calls
+- **Platform-agnostic**: 27 platforms (bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico / showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon / line / github …). Searching **any** platform's account id or URL form works; nothing in the code assumes bilibili
+- **Import takes the same sanitising path**: selection → person shape → the same validation as manual entry; anything rejected is reported per row with a reason, never silently dropped
+- **Licensed CC BY-NC-SA 4.0**: so it is **fetched at runtime only**, cached in a runtime directory, and **never committed or bundled** (the release checks stop it), with attribution in both the UI and the docs
+- Details: `docs/VDB.md`
+
+### Group view, silence & dormant, observation mode, usage & budget
+
+"Nothing happened" is intelligence too. These four blocks deal with **silence, absence and cost**:
+
+| Capability | Highlights |
+| --- | --- |
+| **Group view** | Per-agency activity heatmap, same-day activity (what a project or collab looks like), joint silence, and per-person anomalies relative to **each person's own cadence**. Only followed people with an Agency filled in are counted (importing from VDB fills it for you) |
+| **Silence & dormant** | The baseline is the **average spacing between recent active days** — not a window anchored on the last active day, which makes a once-a-month poster look daily. Tolerance is `gap × 2.5`, clamped to 3–90 days. **Comeback** requires recent activity *and* a long prior gap, so returnees are recognised and quiet accounts are not false-alarmed. Entities idle for 6+ months are collected in a "stopped activity / graduated" block at the very **end** of the daily report with their latest content, and a sudden stir is flagged |
+| **Observation mode** | "Someone swept the whole roster" is itself a signal. Each round samples a **random subset** (ranked by least-recently-picked, so rotation fills coverage in), gaps are jittered, Tor is used **only for sites whose logs the other side owns**, and sources that need a login are skipped for that round. Trade-offs and measurements: `docs/OBSERVE.md` |
+| **Usage & budget** | Token usage per run and per model; an optional daily budget warns at 80% and can block a whole run; when a model does not report usage those calls are **counted separately instead of guessed** |
+
 
 ### Watch targets (borrowed from Moegirlpedia's watch technology)
 
@@ -279,15 +354,28 @@ Add a custom profile in Settings → LLM with base URL `http://127.0.0.1:43197`,
 
 - **No account or cookie is ever bundled or uploaded.** Any site that needs a login is logged into by you, in your own browser.
 - The LLM key and the optional Moegirlpedia BotPassword live only in the local `app/config.json` — never committed, never shipped.
-- `config.json`, `reports/`, `feeds/`, `logs/` and `watch/` are never committed (see `.gitignore`).
+- `config.json`, `reports/`, `feeds/`, `logs/`, `watch/`, `thumbs/`, `advice/`, `vdb/` are never committed (see `.gitignore`).
 - Run `npm run sanitize-check` before publishing.
+
+### Third-party data & attribution
+
+The code here is MIT, but the tool **fetches data at runtime** that has its own licence and authors:
+
+| Source | Used for | Licence / attribution |
+| --- | --- | --- |
+| **[dd-center/vdb](https://github.com/dd-center/vdb)** | The agency roster (`docs/VDB.md`) | Data **CC BY-NC-SA 4.0**, code GPL. **Fetched at runtime, never bundled, never redistributed**, attributed in the UI and docs |
+| **[api.vtbs.moe](https://vtbs.moe)** | Roster lookups for the live page | Upstream service; queried only, never cached and redistributed |
+| **[dd-center/bilibili-dd-monitor](https://github.com/dd-center/bilibili-dd-monitor)** | The *idea* behind multi-screen live viewing | MIT (Copyright (c) 2020 wdpm); rewritten here, not copied (see `docs/LIVE.md`) |
+| Moegirlpedia's `watchlist-brief` / `recent-changes-brief` | Design reference for watch targets | Idea only, no code copied |
+
+Scraped items belong to their own publishers. This tool aggregates them locally and **republishes nothing**.
 
 ### Release checks
 
 ```bash
 npm run verify        # proofread the release: required files / ASCII / UTF-8 / leaked keys & paths / run data
 npm run traverse      # walk every HTTP endpoint, the SPA fallback and the error paths
-npm run traverse:ui   # walk all six pages in a real browser and do a real run against the mock LLM
+npm run traverse:ui   # walk all eleven pages in a real browser and do a real run against the mock LLM
 npm run release       # all of the above
 ```
 

@@ -59,7 +59,7 @@ const PERSONAL_PATTERNS = [
  * 运行期状态（**不随发布包出去**，由 make-zip.mjs 排除）。
  * 构建会刻意保留它们；secret 扫描与「已发布数据」检查都要按这个名单区分。
  */
-const RUNTIME_STATE_RELS = ['config.json', 'reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
+const RUNTIME_STATE_RELS = ['config.json', 'reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice', 'vdb'];
 
 /**
  * 找到 make-zip.mjs 生成的发布包清单（zip 同级或上级目录）。
@@ -373,7 +373,7 @@ function main() {
   } else {
     process.stdout.write('   [ok]   no app/config.json (created on first save)\n');
   }
-  for (const d of ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice']) {
+  for (const d of ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice', 'vdb']) {
     const dir = path.join(args.dir, 'app', d);
     const count = fs.existsSync(dir) ? walk(dir, []).length : 0;
     if (count) notes.push('app/' + d + '/ holds ' + count + ' file(s) of local run data (kept out of the release zip)');

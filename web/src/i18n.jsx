@@ -324,6 +324,19 @@ export const STRINGS = {
     costRemaining: '剩余',
     costUnknown: '次未拿到用量',
     obsLastSeen: '最近观测',
+    // VDB 花名册导入 / import from VDB
+    vdbTitle: '从 VDB 导入关注对象',
+    vdbHint:
+      'VDB 是 vtbs.moe 的上游花名册（社区维护，一万多条），每条带社团与各平台账号 —— 搜名字或平台账号就能一次把人连同社团、别名、账号一起录进来。数据只在运行时拉取（约 0.5MB，一条请求），不随本工具分发。',
+    vdbSearch: '搜索',
+    vdbSearchPh: '名字 / 别名 / 平台账号（如 twitch 名、YouTube 频道）',
+    vdbSync: '同步花名册',
+    vdbRoster: '花名册',
+    vdbGroups: '个社团',
+    vdbImport: '导入',
+    vdbImported: '已导入',
+    vdbSkipped: '跳过',
+    vdbNoResult: '没找到（试试别名、或平台账号 id）',
     // 箱视角 / group view
     groupViewTitle: '箱视角（按团体看）',
     groupViewHint:
@@ -1037,6 +1050,19 @@ export const STRINGS = {
     costRemaining: 'remaining',
     costUnknown: 'calls without usage data',
     obsLastSeen: 'Last observed',
+    // import from VDB
+    vdbTitle: 'Import followed people from VDB',
+    vdbHint:
+      'VDB is the roster behind vtbs.moe (community maintained, ten thousand plus entries); each entry carries a group and its accounts on every platform - search by name or by a platform account and you get the person plus group, aliases and accounts in one go. The data is fetched at runtime only (about 0.5MB, one request) and is not distributed with this tool.',
+    vdbSearch: 'Search',
+    vdbSearchPh: 'name / alias / platform account (twitch name, YouTube channel, ...)',
+    vdbSync: 'Sync roster',
+    vdbRoster: 'Roster',
+    vdbGroups: 'groups',
+    vdbImport: 'Import',
+    vdbImported: 'imported',
+    vdbSkipped: 'skipped',
+    vdbNoResult: 'Nothing found (try an alias or a platform account id)',
     // group view
     groupViewTitle: 'Group view',
     groupViewHint:

@@ -11,6 +11,8 @@
 //   prose   JSON 外面裹一段解释，还带 ``` 围栏
 //   bad     完全不是 JSON（验证解析失败能被记录成 failed 而不是崩）
 //   flaky   前一半请求 500，后一半正常（验证失败重试/记录）
+//   drop    第一次请求**直接掐断连接**（不发响应），之后正常
+//           —— 用来验证「传输层失败重试一次」这条路径真的走到了（HTTP 500 属于另一类，不重试）
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,6 +42,11 @@ const server = http.createServer((req, res) => {
   req.on('data', (d) => (buf += d));
   req.on('end', () => {
     calls++;
+    if (MODE === 'drop' && calls === 1) {
+      // 不发任何响应就把连接掐掉：客户端会看到 ECONNRESET / socket hang up
+      req.socket.destroy();
+      return;
+    }
     if (req.url.includes('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: [{ id: 'mock-vision-1' }] }));

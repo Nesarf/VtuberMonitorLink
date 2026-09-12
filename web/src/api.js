@@ -115,6 +115,12 @@ export const api = {
   groups: (days) => j(`/api/groups?days=${days ?? 30}`),
   silence: (days) => j(`/api/silence?days=${days ?? 60}`),
   cost: (days) => j(`/api/cost?days=${days ?? 14}`),
+  // VDB 花名册（多平台：社团 + 各平台账号）
+  vdbStatus: () => j('/api/vdb/status'),
+  vdbSync: () => post('/api/vdb/sync', {}),
+  vdbSearch: (q, group) => j(`/api/vdb/search?q=${encodeURIComponent(q)}${group ? `&group=${encodeURIComponent(group)}` : ''}`),
+  vdbGroups: () => j('/api/vdb/groups'),
+  vdbImport: (keys) => post('/api/vdb/import', { keys }),
   archiveItems: (q = {}) =>
     j(`/api/archive/items?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''))}`),
   archiveIngest: (limit) => post('/api/archive/ingest', { limit }),

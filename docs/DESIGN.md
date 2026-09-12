@@ -300,3 +300,34 @@ URL 型的关键词判定用的是「新增行 + 新内容前 1500 字」，只�
 成本方面：`cost.js` 按运行记账（`logs/cost.jsonl`），`/api/cost` 汇总，LLM 页有看板；
 预算默认只警告，`llm.budget.onExceed = 'stop'` 才真拦。拿不到用量的调用单独计数，不猜数字。
 
+## 14. 花名册 / roster（VDB）
+
+箱视角与「按人关注」共同缺的那一维是**社团**：手填 30 人就要填 30 次，而「这个人的其他平台账号」
+靠抓新闻也凑不齐。所以接了一份公开花名册 `dd-center/vdb`（vtbs.moe 的上游），**一文件一人**：
+多语言名字 + `accounts`（平台 → id）+ `group`。
+
+三条设计取舍：
+
+1. **一条请求拿全库**，不做增量、不逐个调 API。整库 tarball 0.54 MB / 10035 条 / 215 个社团，
+   一次 `codeload` 请求一两秒；逐个调 GitHub API 要几千次请求、吃配额、日志噪声大。
+   花名册变化极慢，TTL 7 天。
+2. **平台无关是硬要求**，不是「顺便支持 B 站以外」。`accounts` 里有什么平台就收什么平台
+   （`PLATFORM_URLS` 27 个：bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico /
+   showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon /
+   line / github …）。别名生成、搜索、导入全都按「平台 → id」的通用形状走，代码里没有
+   「if (platform === 'bilibili')」这种分支。搜索时输入**任何平台**的 id 或链接形态都能命中。
+3. **许可是数据的一部分**。VDB 数据是 **CC BY-NC-SA 4.0**、代码 GPL，而本项目是 MIT：
+   于是**只运行时获取**，缓存在 `app/vdb/`，**绝不进仓库、绝不进发行包**（`.gitignore` +
+   `make-zip` 排除清单 + `verify-release` 的运行期状态清单，三处都盯着），界面与文档都署名来源。
+
+导入不是后门：选中的记录先转成标准关注对象形状，再过**和手工新增同一个** `sanitizePerson()`
+（id 冲突、别名、链接合法性都在那里挡），被挡的逐条回报原因。
+
+上游标准里有两条和我们独立设计的规则**撞上了**：它的删档条件是「删除历史信息…且 **6 个月无活动**」，
+与我们「停止活动」判定的 6 个月一致；它的社团收录要求 **≥2 位成员**佐证，我们的箱级信号要求
+**≥3 位成员**才下结论 —— 同一种谨慎，算一次交叉验证。有社团的只占 17.6%（1770/10035），
+这不是数据缺陷而是现实，所以界面不把「没有社团」当异常。
+
+细节（数据形状、许可边界、接口、自检、没做的事）在 `docs/VDB.md`；纯逻辑在 `server/src/vdb.js`
+与 `server/src/tar.js`（零依赖 tar 读取），自检 `tools/vdb-test.mjs` 25 项。
+

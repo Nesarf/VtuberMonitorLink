@@ -14,7 +14,9 @@ const dir = path.resolve(process.argv[2] ?? 'dist/VtuberMonitorLink');
 const out = process.argv[3] ? path.resolve(process.argv[3]) : path.join(path.dirname(dir), path.basename(dir) + '.zip');
 
 // 永远不进包的运行期数据（相对包根目录）
-const RUNTIME = ['app/config.json', 'app/reports', 'app/feeds', 'app/logs', 'app/watch', 'app/thumbs', 'app/advice', 'app/tmp'];
+// app/vdb 是 VDB 花名册的本地缓存（CC BY-NC-SA 4.0 的第三方数据）：
+// 许可上不该随包分发，体积上也没必要 —— 使用者那边一次请求就能重新拉到。
+const RUNTIME = ['app/config.json', 'app/reports', 'app/feeds', 'app/logs', 'app/watch', 'app/thumbs', 'app/advice', 'app/tmp', 'app/vdb'];
 // 各类开发垃圾
 const JUNK = ['__pycache__', '.DS_Store', 'Thumbs.db', '.vite', '.cache'];
 

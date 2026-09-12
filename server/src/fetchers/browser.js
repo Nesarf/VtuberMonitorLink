@@ -1,8 +1,8 @@
-// fetchers/browser.js — 浏览器渲染抓取（Playwright）
-// 关键点（都来自实战踩坑）：
-//  1) 浏览器内核可配置：bundled（随包 Chromium）/ system（系统已装）/ custom（用户指定路径）
-//  2) 复用登录态需要 profileDir；此时**该浏览器必须处于关闭状态**，否则 profile 被锁
-//  3) SPA 页面会让 close() 卡住 —— 收尾限时 + 硬性看门狗，确保进程一定退出
+// fetchers/browser.js — browser-rendered fetching (Playwright)
+// The key points (all of them learned the hard way):
+//  1) the browser engine is configurable: bundled (the Chromium shipped with the package) / system (already installed) / custom (a user-given path)
+//  2) reusing a login needs profileDir; at that point **that browser must be closed**, otherwise the profile stays locked
+//  3) SPA pages make close() hang — a bounded teardown + a hard watchdog, so the process is guaranteed to exit
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +12,7 @@ import { playwrightProxy } from '../net.js';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
-/** 常见系统浏览器的安装路径候选 / candidate paths of common system browsers */
+/** candidate install paths of common system browsers */
 function candidates() {
   const home = os.homedir();
   const pf = process.env['ProgramFiles'] ?? 'C:\\Program Files';
@@ -44,7 +44,7 @@ function candidates() {
   ];
 }
 
-/** 探测系统已装浏览器 / detect installed system browsers */
+/** detect installed system browsers */
 export function detectBrowsers() {
   return candidates()
     .filter(([, p]) => {
@@ -57,7 +57,7 @@ export function detectBrowsers() {
     .map(([name, executablePath]) => ({ name, executablePath }));
 }
 
-/** 解析启动参数 / resolve launch options from config */
+/** resolve launch options from config */
 export function resolveLaunch(browserCfg = {}) {
   const opts = { headless: browserCfg.headless !== false, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
   if (browserCfg.mode === 'system' || browserCfg.mode === 'custom') {
@@ -73,16 +73,16 @@ export function resolveLaunch(browserCfg = {}) {
     }
     opts.executablePath = browserCfg.executablePath;
   }
-  // mode === 'bundled' 时交给 Playwright 自带的 Chromium
+  // mode === 'bundled' hands the job to the Chromium Playwright ships with
   return opts;
 }
 
-/** 渲染一个 URL，返回正文文本 / render a URL and return its text */
+/** render a URL and return its text */
 export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
   const bcfg = cfg?.browser ?? {};
   const hardMs = bcfg.hardTimeoutMs ?? 90000;
   const watchdog = setTimeout(() => {
-    log?.error(`hard timeout ${hardMs}ms — force exit / 硬性超时`);
+    log?.error(`hard timeout ${hardMs}ms — force exit`);
     process.exitCode = 3;
   }, hardMs);
 
@@ -90,10 +90,10 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
   let context = null;
   try {
     const launchOpts = resolveLaunch(bcfg);
-    // 浏览器同样需要走代理（实测：直连被阻断的环境下浏览器也访问不到目标站）
+    // the browser needs the proxy as well (measured: in an environment where direct is blocked, the browser cannot reach the target site either)
     const proxy = playwrightProxy(cfg);
     if (bcfg.profileDir) {
-      // 复用登录态：要求该浏览器已关闭
+      // reuse an existing login: requires that browser to be closed
       if (!fs.existsSync(bcfg.profileDir)) throw new Error(`profileDir 不存在 / not found: ${bcfg.profileDir}`);
       context = await chromium.launchPersistentContext(bcfg.profileDir, {
         ...launchOpts,
@@ -117,7 +117,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
         ? await page.content()
         : await page.evaluate(() => (document.body ? document.body.innerText : ''));
 
-    // 站点级错误识别（登录墙 / 反爬拦截），让上层能明确告知用户
+    // site-level error detection (login wall / anti-bot block), so the layer above can tell the user explicitly
     const blocked = /login|sign in|登录|安全验证|blocked by network security|verify you are human/i.test(
       content.slice(0, 400)
     );
@@ -127,7 +127,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
     log?.error(`render failed — ${url} :: ${err.message}`);
     return { ok: false, error: err.message, url };
   } finally {
-    // 收尾限时：SPA 页面会让 close() 卡死，绝不无限等
+    // bounded teardown: SPA pages make close() hang forever, never wait without a limit
     await Promise.race([
       (async () => {
         try {

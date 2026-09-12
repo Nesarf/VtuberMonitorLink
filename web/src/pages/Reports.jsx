@@ -1,4 +1,4 @@
-// 报告页：列表 + 渲染视图 + 全文检索 + 导出 / Reports page
+// Reports page: list + rendered view + full-text search + export
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -18,7 +18,7 @@ export default function Reports() {
   const [hits, setHits] = useState(null);
   const [cmp, setCmp] = useState(null);
   const [cmpTo, setCmpTo] = useState('');
-  // 分享范围里要能按「人」选，所以需要关注名单
+  // The share scope has to allow picking by person, so the watch list is needed
   const [people, setPeople] = useState([]);
 
   const compare = async (from, to) => {
@@ -54,8 +54,8 @@ export default function Reports() {
     setContent(t('loading'));
     try {
       const raw = await api.getReport(name);
-      // .json 源文件里存着 markdown 原文，取出来用站内渲染器显示；
-      // .html 报告直接用 iframe 预览（和 VSCode 里打开是同一个文件）。
+      // .json source files hold the markdown source, so pull it out and show it with the in-app renderer;
+      // .html reports are previewed directly in an iframe (the same file you would open in VSCode).
       if (/\.json$/i.test(name)) {
         try {
           const j = JSON.parse(raw);
@@ -207,8 +207,8 @@ export default function Reports() {
             </button>
           </h2>
           {/\.html$/i.test(cur) ? (
-            // 每日情报默认就是这种自带样式的 .html：渲染视图直接原样预览，
-            // 「原始」切到源码，两条路都能看。
+            // The daily intelligence report is by default such a self-styled .html: the rendered view
+            // previews it as-is, and the raw toggle switches to the source, so both routes work.
             raw ? (
               <pre className="report">{content}</pre>
             ) : (

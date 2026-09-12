@@ -1,11 +1,12 @@
-// make-zip.mjs — 生成发布用的 zip（纯 Node，复用 office.js 里自己写的 zip 写入器）
+// make-zip.mjs - build the release zip (pure Node, reusing the zip writer written in office.js)
 //
-// 为什么不能直接整目录压缩：app/config.json 里有 **API Key**，app/reports 等是你的历史。
-// 现在构建会保留运行期数据（见 build-portable.cjs 的暂存逻辑），所以
-// 「把 dist/VtuberMonitorLink 整个压进去」就等于把 Key 打进发行包。
-// 这里按白/黑名单挑文件，并在结尾把排除了什么明确打出来。
+// Why the whole directory cannot simply be zipped: app/config.json holds an **API Key**, and
+// app/reports and friends are your history. The build now keeps runtime data (see the staging
+// logic in build-portable.cjs), so "zip up all of dist/VtuberMonitorLink" means shipping the key
+// inside the release package. This picks files by allow/deny list and prints exactly what was
+// excluded at the end.
 //
-// 用法：node tools/make-zip.mjs [dist/VtuberMonitorLink] [输出.zip]
+// usage: node tools/make-zip.mjs [dist/VtuberMonitorLink] [out.zip]
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeZip } from '../server/src/office.js';
@@ -13,11 +14,12 @@ import { makeZip } from '../server/src/office.js';
 const dir = path.resolve(process.argv[2] ?? 'dist/VtuberMonitorLink');
 const out = process.argv[3] ? path.resolve(process.argv[3]) : path.join(path.dirname(dir), path.basename(dir) + '.zip');
 
-// 永远不进包的运行期数据（相对包根目录）
-// app/vdb 是 VDB 花名册的本地缓存（CC BY-NC-SA 4.0 的第三方数据）：
-// 许可上不该随包分发，体积上也没必要 —— 使用者那边一次请求就能重新拉到。
+// Runtime data that never enters the package (relative to the package root)
+// app/vdb is the local cache of the VDB roster (third-party data under CC BY-NC-SA 4.0): its
+// license should not be redistributed with the package, and there is no size reason either -
+// one request on the user's side pulls it again.
 const RUNTIME = ['app/config.json', 'app/reports', 'app/feeds', 'app/logs', 'app/watch', 'app/thumbs', 'app/advice', 'app/tmp', 'app/vdb'];
-// 各类开发垃圾
+// Assorted development junk
 const JUNK = ['__pycache__', '.DS_Store', 'Thumbs.db', '.vite', '.cache'];
 
 const excluded = [];
@@ -48,23 +50,24 @@ function walk(base, rel = '') {
 }
 
 if (!fs.existsSync(dir)) {
-  process.stderr.write('make-zip: 目录不存在 ' + dir + '\n');
+  process.stderr.write('make-zip: directory does not exist ' + dir + '\n');
   process.exit(1);
 }
 walk(dir);
 
-// 硬保险：包里出现任何 config.json 都要么是模板，要么是泄漏
+// Hard safety net: any config.json in the package is either the template or a leak
 const leaky = files.filter((f) => /(^|\/)config\.json$/.test(f.name) && !f.name.endsWith('config.example.json'));
 if (leaky.length) {
-  process.stderr.write('make-zip: 拒绝打包 —— zip 里出现了 config.json（可能含 API Key）：' + leaky.map((f) => f.name).join(', ') + '\n');
+  process.stderr.write('make-zip: refusing to package - config.json showed up in the zip (it may hold an API Key): ' + leaky.map((f) => f.name).join(', ') + '\n');
   process.exit(2);
 }
 
 const buf = makeZip(files);
 fs.writeFileSync(out, buf);
 
-// 清单：verify-release 直接读它，不用解压就能断言「包里没有运行期数据」。
-// （纯 Node 没有 zip 读取器，清单比让校验脚本去解析 zip 可靠得多。）
+// Manifest: verify-release reads it directly, so it can assert "no runtime data in the package"
+// without unpacking. (Pure Node has no zip reader, and a manifest is far more reliable than
+// making the verification script parse the zip.)
 fs.writeFileSync(
   out + '.manifest.json',
   JSON.stringify(

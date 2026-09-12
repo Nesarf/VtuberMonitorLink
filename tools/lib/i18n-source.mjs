@@ -1,12 +1,15 @@
-// i18n-source.mjs — 词条源码解析 / parse the shipped dictionaries out of i18n.jsx
+// i18n-source.mjs - parse the shipped dictionaries out of i18n.jsx
 //
-// 为什么单独抽出来：覆盖度统计与翻译管线都要「读出简体词条」和「列出界面用到的键」，
-// 各写一份必然会漂移（一处按 4 空格缩进匹配、另一处按任意缩进，结果两边数字对不上）。
-// 所以这里做**唯一一份**解析实现。
+// Why it is factored out: both the coverage report and the translation pipeline need to "read
+// the zh entries" and "list the keys the UI uses". Two separate copies inevitably drift (one
+// matching a 4-space indent, the other any indent, and the two counts stop agreeing), so this is
+// the **single** parsing implementation.
 //
-// 注意两个已经踩过的坑，都在这里处理了：
-//   · 数花括号前必须**抹掉字符串内容**（词的正文里会出现 `{ title, body }` 这种）
-//   · 只取字典**自身一层**的键（缩进分不出来：词条拆行后是 6 空格，嵌套对象的键也是 6 空格）
+// Two traps already hit in practice, both handled here:
+//   - before counting braces you must **blank out string contents** (entry text itself can
+//     contain things like `{ title, body }`)
+//   - take only the keys of the dictionary's **own level** (indentation cannot tell them apart:
+//     a wrapped entry value sits at 6 spaces, and a nested object's keys sit at 6 spaces too)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const I18N_PATH = path.join(ROOT, 'web/src/i18n.jsx');
 
-/** 把字符串字面量内容抹掉（保留引号位置） */
+/** Blank out string literal contents (quoting positions are kept) */
 export function stripStrings(s) {
   let out = '';
   let q = null;
@@ -36,7 +39,7 @@ export function stripStrings(s) {
   return out;
 }
 
-/** 取出某一本字典的文本范围（以「2 空格缩进的收尾 `},`」为边界） */
+/** Extract the text span of one dictionary (bounded by the 2-space-indented closing `},`) */
 export function dictBlock(src, which) {
   const startIdx = src.indexOf(`  ${which}: {`);
   if (startIdx < 0) return '';
@@ -45,7 +48,7 @@ export function dictBlock(src, which) {
   return after.slice(0, end ? end.index : after.length);
 }
 
-/** 抹掉 `//` 行注释（引号内的 `//` 不算注释） */
+/** Blank out `//` line comments (a `//` inside quotes is not a comment) */
 export function stripComments(s) {
   let out = '';
   let q = null;
@@ -61,13 +64,13 @@ export function stripComments(s) {
       q = c;
       out += c;
     } else if (c === '/' && s[i + 1] === '/') {
-      break; // 行注释：后面都不是代码（也不是文案）
+      break; // line comment: nothing after it is code (nor entry text)
     } else out += c;
   }
   return out;
 }
 
-/** 「抹字符串 + 抹注释」的组合，用于判断结构（逗号、花括号） */
+/** The "strip strings + strip comments" combination, used to judge structure (commas, braces) */
 export function noComment(s) {
   return String(s)
     .split(/\r?\n/)
@@ -75,7 +78,7 @@ export function noComment(s) {
     .join('\n');
 }
 
-/** 从一段源码里取出所有字符串字面量并拼起来（跨行 `'a' + 'b'` 就是同一个值） */
+/** Pull every string literal out of a source fragment and join them (across lines `'a' + 'b'` is one value) */
 export function literalValue(src) {
   const out = [];
   const cleaned = String(src)
@@ -91,16 +94,18 @@ export function literalValue(src) {
 }
 
 /**
- * 字典自身一层的「键 → 值」。
+ * The "key -> value" map of one dictionary level.
  *
- * 值的形态有四种，全都要认（早期版本只认「同一行的单引号字符串」，于是
- * `appTitle: "Vtuber's Monitor Link"`（双引号）与
- * `loginHint:` 换行后 `'甲' + '乙' + '丙'`（跨行拼接）被读成空串 ——
- * 空串在管线里等于「这条不用翻」，于是这两种词条在**所有语言**里都静默缺译）。
- *   · 同一行 '值' / "值"
- *   · 冒号后换行，值在下一行
- *   · 值跨多行用 + 拼起来（长句的常见形态）
- *   · 值是对象/数组（嵌套）→ 记空串，且**不吃掉后面的行**
+ * Values come in four shapes and all of them must be recognized (an early version only
+ * recognized "a single-quoted string on the same line", so `appTitle: "Vtuber's Monitor Link"`
+ * (double quotes) and `loginHint:` followed by a newline and a `'a' + 'b' + 'c'` concatenation
+ * were read as empty strings - and in this pipeline an empty string means "no translation
+ * needed", so both kinds of entry were silently untranslated in **every language**).
+ *   - a 'value' / "value" on the same line
+ *   - a newline after the colon, with the value on the next line
+ *   - a value joined across several lines with + (the usual shape for long sentences)
+ *   - a value that is an object/array (nested) -> recorded as an empty string, and it must
+ *     **not swallow the lines after it**
  */
 export function dictEntries(block) {
   const entries = new Map();
@@ -116,11 +121,12 @@ export function dictEntries(block) {
         const tail = raw.slice(m[0].length);
         const tailStripped = noComment(tail);
         if (/[{[]/.test(tailStripped)) {
-          entries.set(key, ''); // 嵌套对象/数组：不是文案
+          entries.set(key, ''); // nested object/array: not entry text
         } else {
           let acc = tail;
           let j = i;
-          // 值一直读到「收尾的逗号」为止（最多 40 行，防止畸形源码把整个字典吃光）
+          // Read the value up to the trailing comma (at most 40 lines, so malformed source
+          // cannot swallow the whole dictionary)
           while (!/[,;]/.test(noComment(acc)) && j < lines.length - 1 && j - i < 40) {
             j++;
             acc += '\n' + lines[j];
@@ -130,7 +136,8 @@ export function dictEntries(block) {
         }
       }
     }
-    // 深度：必须用**改写过 i 之后**的那一行来数（跨行值里的 {} 都在引号内，会被抹掉）
+    // Depth: must be counted on the line **after i was rewritten** (braces inside a multi-line
+    // value are always quoted, so they get blanked out)
     for (const ch of noComment(lines[i])) {
       if (ch === '{' || ch === '[') depth++;
       else if (ch === '}' || ch === ']') depth--;
@@ -139,7 +146,7 @@ export function dictEntries(block) {
   return entries;
 }
 
-/** 读源码里的 zh / en 两本字典 */
+/** Read the zh / en dictionaries out of the source */
 export function readDicts(src = fs.readFileSync(I18N_PATH, 'utf8')) {
   return {
     zh: dictEntries(dictBlock(src, 'zh')),
@@ -147,7 +154,7 @@ export function readDicts(src = fs.readFileSync(I18N_PATH, 'utf8')) {
   };
 }
 
-/** 界面真正用到的键：`t('key')` + 动态前缀（tab_/calKind_/…） */
+/** The keys the UI actually uses: `t('key')` plus dynamic prefixes (tab_/calKind_/...) */
 export function usedKeys(extraDynPrefixes = []) {
   const files = [];
   const CODE = ['.js', '.jsx'];
@@ -161,7 +168,10 @@ export function usedKeys(extraDynPrefixes = []) {
   })(path.join(ROOT, 'web/src'));
   const used = new Set();
   for (const f of files) {
-    for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bt\(\s*'([^']+)'\s*\)/g)) used.add(m[1]);
+    // `t('key')` and the number-aware `tn('key', n)` both reference a dictionary key, so both
+    // have to be counted — otherwise migrating a label to tn() would silently drop the key from
+    // coverage / proofreading (see web/src/plural.js, BUGS #54).
+    for (const m of fs.readFileSync(f, 'utf8').matchAll(/\btn?\(\s*'([^']+)'\s*[,)]/g)) used.add(m[1]);
   }
   const { en } = readDicts();
   const dyn = ['tab_', 'calKind_', 'llmFeat_', 'taskMode_', 'on_', 'freq_', 'field_', 'mode_', 'sort_', ...extraDynPrefixes];

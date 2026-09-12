@@ -1,17 +1,18 @@
-// hint-md-test.mjs — 回归守卫：**带 markdown 记号的文案必须在会渲染 markdown 的地方出现**
+// hint-md-test.mjs — regression guard: **copy carrying markdown markers must appear where markdown is rendered**
 //
-// 由来（BUGS #52，以及 #61 的复发）：提示语里写 `**粗体**`、而渲染处是纯文本 `{t('key')}`，
-// 用户看到的就是字面上的两个星号。不报错、不白屏、巡检也照过 —— 典型的「有值但不好看」。
-// #52 当时把出问题的六处改成了 <Inline>；#61 我又在新写的 `vdbHint` 里踩了同一个坑，
-// 是校对工具拿占位符/记号平权（zh 有 `**`、en 没有）当**硬失败**抓出来的。
+// Origin (BUGS #52, and its recurrence as #61): a hint was written with `**bold**` while the render site was the plain-text
+// `{t('key')}`, so what the user saw was two literal asterisks. Nothing errors, nothing goes blank, and the inspection run
+// still passes — the classic "the value is there but it looks wrong".
+// For #52 the six offending sites were switched to <Inline>; in #61 I stepped into the same hole again with a freshly written
+// `vdbHint`, and the proofreading tool caught it by treating placeholder/marker parity (zh has `**`, en does not) as a **hard failure**.
 //
-// 所以这里把它变成一条可自动跑的规则，而不是靠记性：
-//   1. 从 i18n 源码里取出**值本身带 markdown 记号**（`**` / 反引号 / `[文字](链接)`）的键；
-//   2. 找出界面里所有 `t('那个键')` 的调用点；
-//   3. 每个调用点所在行必须同时出现 `<Inline`（或该文件里存在 `<Inline text={t('该键')}` 这种写法），
-//      否则判失败。
+// So this turns that into a rule that can be run automatically instead of relying on memory:
+//   1. pull the keys whose **value itself carries markdown markers** (`**` / backticks / `[text](link)`) out of the i18n source;
+//   2. find every `t('that key')` call site in the UI;
+//   3. the line of each call site must also contain `<Inline` (or the file must contain a form like `<Inline text={t('that key')}`),
+//      otherwise it fails.
 //
-// 这是**离线**断言：只读 web/src 的源码文本，不起服务、不联网。
+// This is an **offline** assertion: it only reads the source text under web/src; no server, no network.
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, readDicts } from './lib/i18n-source.mjs';
@@ -29,7 +30,7 @@ function check(name, ok, detail = '') {
   }
 }
 
-// ── 收集界面源码 ─────────────────────────────────────────────────
+// ── collect the UI source ─────────────────────────────────────────────────
 const files = [];
 (function walk(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -47,18 +48,18 @@ const MARKDOWN = /\*\*|`|\[[^\]\n]+\]\([^)\n]*\)/;
 const { zh, en } = readDicts();
 const marked = [...zh.entries()].filter(([, v]) => v && MARKDOWN.test(v));
 check(
-  '取到「值里带 markdown 记号」的键（数量不为 0 才算真的扫到了）',
+  'keys whose value carries markdown markers were found (only a non-zero count means the scan really ran)',
   marked.length > 0,
-  `${marked.length} 个：${marked.map(([k]) => k).join(', ')}`,
+  `${marked.length} keys: ${marked.map(([k]) => k).join(', ')}`,
 );
 
-// 记号必须成对：一个孤零零的 `**` 一定是写错了
+// Markers must come in pairs: a lone `**` is definitely a typo
 for (const [key, value] of marked) {
   const stars = (value.match(/\*\*/g) ?? []).length;
-  if (stars % 2 !== 0) check(`${key} 的 ** 是成对的`, false, `${stars} 个`);
+  if (stars % 2 !== 0) check(`the ** markers in ${key} are paired up`, false, `${stars} of them`);
 }
 
-// ── 每个调用点都要在 Inline 里 ────────────────────────────────────
+// ── every call site has to sit inside Inline ──────────────────────────────
 let sites = 0;
 const offenders = [];
 for (const [key, value] of marked) {
@@ -69,19 +70,19 @@ for (const [key, value] of marked) {
     lines.forEach((line, i) => {
       if (!needle.test(line)) return;
       sites++;
-      if (line.includes('Inline')) return; // 同行就有 <Inline text={t('key')} />
+      if (line.includes('Inline')) return; // the same line already has <Inline text={t('key')} />
       offenders.push(`${rel}:${i + 1} ${key} → ${line.trim().slice(0, 70)}`);
     });
   }
 }
-check('真的扫到了调用点（否则这条断言等于没跑）', sites > 0, `${sites} 处`);
+check('call sites were really found (otherwise this assertion never runs)', sites > 0, `${sites} site(s)`);
 check(
-  '带 markdown 记号的文案全部在 <Inline> 里渲染',
+  'all copy carrying markdown markers is rendered inside <Inline>',
   offenders.length === 0,
-  offenders.length ? `裸露 ${offenders.length} 处：\n         ` + offenders.join('\n         ') : `${sites} 处都在 Inline 里`,
+  offenders.length ? `bare in ${offenders.length} place(s):\n         ` + offenders.join('\n         ') : `all ${sites} are inside Inline`,
 );
 
-// ── 反向：渲染成纯文本的地方不该出现记号（把 #61 那种情况正面挡住）─────
+// ── the reverse direction: markers must not appear where the text renders as plain text (blocks the #61 shape head-on) ─────
 const plainSites = [];
 for (const f of files) {
   const rel = path.relative(ROOT, f).replace(/\\/g, '/');
@@ -94,28 +95,28 @@ for (const f of files) {
   });
 }
 check(
-  '渲染成纯文本的 t() 调用点里没有带记号的文案',
+  'no marked-up copy among the t() call sites that render as plain text',
   plainSites.length === 0,
-  plainSites.length ? plainSites.join(', ') : '干净',
+  plainSites.length ? plainSites.join(', ') : 'clean',
 );
 
-// ── 相邻一致性：en 记号和 zh 记号要一致（校对工具按占位符判，这里按 markdown 判）──
+// ── neighbor consistency: en markers must match zh markers (the proofreading tool judges by placeholders, this judges by markdown) ──
 const mismatched = [];
 for (const [key, value] of marked) {
   const e = en.get(key);
-  if (e === undefined) continue; // 缺译由覆盖度工具管
+  if (e === undefined) continue; // a missing translation is the coverage tool's business
   const zHas = MARKDOWN.test(value);
   const eHas = MARKDOWN.test(e);
   if (zHas !== eHas) mismatched.push(key);
 }
 check(
-  'zh 与 en 的 markdown 记号一致（#61 就是这里不平权）',
+  'zh and en markdown markers match (this is exactly where #61 was unbalanced)',
   mismatched.length === 0,
-  mismatched.length ? mismatched.join(', ') : '一致',
+  mismatched.length ? mismatched.join(', ') : 'consistent',
 );
 
 process.stdout.write(`\n${pass}/${pass + failures.length} checks passed\n`);
 if (failures.length) {
-  process.stdout.write(`失败 / failed:\n  - ${failures.join('\n  - ')}\n`);
+  process.stdout.write(`failed:\n  - ${failures.join('\n  - ')}\n`);
   process.exit(1);
 }

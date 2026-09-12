@@ -1,5 +1,5 @@
-// fetchers/rss.js — RSS / Atom 抓取（含主动间隔与重试）
-// 经验：Reddit 这类站点按 IP 限流，主动拉开请求间隔比「连击 + 重试」有效得多。
+// fetchers/rss.js — RSS / Atom fetching (with proactive spacing and retries)
+// Experience: sites like Reddit rate limit per IP, and spacing requests out proactively works far better than "hammer + retry".
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const UA =

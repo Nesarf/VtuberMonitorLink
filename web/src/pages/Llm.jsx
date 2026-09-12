@@ -1,16 +1,17 @@
-// Llm.jsx — LLM 与 API Key 的独立分区 / standalone LLM + API key page
+// Llm.jsx — standalone LLM + API key page / standalone LLM + API key page
 //
-// 为什么单独拉一页：之前它埋在「设置」里，而且**档位为空时那几个输入框根本不渲染**
-// （包在 `{active && ...}` 里），结果就是「想填 Key 却找不到地方填」。
-// 现在：① 独立顶层入口，一眼能找到；② 没有档位时给一个明确的「建一个」按钮，
-// 不再是死路；③ 明确写出哪些功能需要它、哪些不需要。
+// Why it was pulled onto its own page: it used to be buried inside "Settings", and **those inputs did not render at
+// all while the profile list was empty** (they were wrapped in `{active && ...}`), with the result that "you want to
+// fill in a key and cannot find anywhere to put it".
+// Now: (1) a standalone top-level entry, findable at a glance; (2) an explicit "create one" button when there is no
+// profile, no longer a dead end; (3) it spells out which features need it and which do not.
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { SaveBar, useSaveState } from '../savebar.jsx';
 import Collapsible from '../Collapsible.jsx';
 import { api } from '../api.js';
 
-/** 哪些功能需要 LLM —— 直接回答「我必须配吗」 */
+/** Which features need the LLM -- answers "do I have to configure it" directly */
 const NEEDS = [
   ['report', true],
   ['features', true],
@@ -40,7 +41,7 @@ export default function Llm() {
       setCfg(c);
       const p = await api.getLlm();
       setPresets(p.presets ?? []);
-      // 用量是另一个数据源（读 logs/cost.jsonl），失败不影响这一页
+      // Usage comes from another data source (it reads logs/cost.jsonl); a failure does not affect this page
       setCost(await api.cost(14).catch(() => null));
     } catch (e) {
       setMsg(e.message);
@@ -68,7 +69,7 @@ export default function Llm() {
     setCfg((c) => ({ ...c, llm: { ...c.llm, ...patch } }));
   };
 
-  /** 用量预算也挂在 llm 下（llm.budget.*），走同一套保存状态 */
+  /** The usage budget also hangs under llm (llm.budget.*) and goes through the same save state */
   const patchBudget = (field, value) => patchLlm({ budget: { ...(cfg.llm?.budget ?? {}), [field]: value } });
 
   const patchProvider = (field, value) => {
@@ -100,7 +101,7 @@ export default function Llm() {
     }
   };
 
-  /** 新增档位：先保存当前编辑，再让服务端从预设派生一个 */
+  /** Add a profile: save the current edits first, then let the server derive one from a preset */
   const addProfile = async (presetId) => {
     setBusy(true);
     try {
@@ -179,7 +180,7 @@ export default function Llm() {
         <h2>{t('llmTitle')}</h2>
         <div className="hint">{t('llmHint')}</div>
 
-        {/* 没档位时给一条明确的路，而不是一片空白 */}
+        {/* With no profile, offer a clear path instead of a blank area */}
         {providers.length === 0 ? (
           <div className="problems" style={{ marginBottom: 12 }}>
             <b>⚠ {t('llmNeedKey')}</b>
@@ -231,9 +232,10 @@ export default function Llm() {
         )}
       </section>
 
-      {/* ── 用量与预算 / cost board ──
-          这个工具的钱花在 LLM 上，而在此之前界面上看不到任何用量（usage 取回来了但没人聚合）。
-          只报能看到的：拿不到用量的一次单独计数，不猜数字。 */}
+      {/* ── cost board / cost board ──
+          This tool's money is spent on the LLM, and before this the UI showed no usage at all (usage was fetched
+          but nobody aggregated it).
+          Only report what can be seen: calls whose usage is unavailable are counted separately, no guessing at numbers. */}
       <section className="panel">
         <h2>{t('costTitle')}</h2>
         <div className="hint">{t('costHint')}</div>
@@ -370,8 +372,8 @@ export default function Llm() {
         </section>
       )}
 
-      {/* 「我必须配吗」——直接列出来，省得猜。默认收起：
-          这是「查一次就够」的参考表，长期占着半屏不值当。 */}
+      {/* "do I have to configure it" -- listed outright, so nobody has to guess. Collapsed by default:
+          it is a "look once and you are done" reference table, not worth permanently taking half the screen. */}
       <section className="panel">
         <h2>{t('llmNeedsTitle')}</h2>
         <div className="hint">{t('llmNeedsHint')}</div>

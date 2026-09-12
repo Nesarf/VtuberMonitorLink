@@ -1,5 +1,5 @@
-// Watch.jsx — 监视对象管理 / watch targets
-// 参考萌娘百科的监视技术：条目修订、最近更改、监视列表、任意网页 diff、B 站动态。
+// Watch.jsx — watch targets
+// Borrows the watch techniques from Moegirlpedia: page revisions, recent changes, watchlist, diff of any web page, Bilibili feed.
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -19,7 +19,7 @@ function hsDate(iso) {
 }
 
 export default function Watch() {
-  const { t, lang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
@@ -142,7 +142,7 @@ export default function Watch() {
     try {
       const r = await api.checkWatch();
       const bad = (r.results ?? []).filter((x) => !x.ok).length;
-      setMsg(`${(r.results ?? []).length} ${t('items')}${bad ? ` · ${bad} ${t('failed')}` : ''}`);
+      setMsg(`${tn('items', (r.results ?? []).length)}${bad ? ` · ${bad} ${t('failed')}` : ''}`);
       await load();
     } catch (e) {
       setErr(e.message);

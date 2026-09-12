@@ -1,17 +1,17 @@
-// watch.js — 监视对象 / watch targets
+// watch.js — watch targets / watch targets
 //
-// 设计参考了萌娘百科的监视技术（MediaWiki 的 watchlist-brief 与
-// recent-changes-brief）：把「改了没」升级成「改了哪里、改了多少、值不值得看」。
+// The design borrows the watch techniques from Moegirlpedia (MediaWiki's watchlist-brief and
+// recent-changes-brief): upgrade "did it change" into "what changed, how much changed, is it worth reading".
 //
-// 四类监视对象：
-//   url                   任意网页/接口：取正文 → 归一化 → 哈希基线 → 行级 diff
-//   mediawiki-page        指定条目的版本修订：revid 比对 + compare 接口拿 diff
-//   mediawiki-recentchanges 最近更改流：按规则筛出值得关注的改动
-//   mediawiki-watchlist   登录后的监视列表：需要 BotPassword（只存本机配置）
-//   bili-opus             B 站动态：比对新 opus_id，并记录粉丝数增长
+// Four kinds of watch targets:
+//   url                    any web page/API: fetch body -> normalize -> hash baseline -> line-level diff
+//   mediawiki-page         revisions of a given page: revid comparison + the compare API for the diff
+//   mediawiki-recentchanges the recent-changes stream: filter out the changes worth attention by rule
+//   mediawiki-watchlist    the watchlist after logging in: requires BotPassword (stored locally only)
+//   bili-opus              bilibili dynamics: compare new opus_id and record follower growth
 //
-// 告警规则（照搬萌百那一套，阈值可配）：
-//   大编辑 / 大删除 / 新建页面 / 匿名编辑 / 未巡查 / 特定日志类型 / 可疑关键词
+// Alarm rules (copied from that Moegirlpedia set, thresholds configurable):
+//   large edit / large delete / new page / anonymous edit / unpatrolled / specific log types / suspicious keywords
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -31,7 +31,7 @@ export const TARGET_KINDS = [
   { id: 'bili-opus', zh: 'B 站动态', en: 'bilibili dynamics', login: 'none' },
 ];
 
-/** 监视对象允许出现的字段（白名单，避免前端把任意东西写进配置） */
+/** Fields a watch target may carry (an allowlist, so the front end cannot write arbitrary things into the config) */
 export const TARGET_FIELDS = [
   'id',
   'kind',
@@ -78,7 +78,7 @@ export const DEFAULT_RULES = {
   maxEvents: 40,
 };
 
-// ───────────────────────────────────────────── 存储 / storage
+// ───────────────────────────────────────────── storage / storage
 
 export function watchDir(cfg) {
   const dir = resolveDir(cfg, 'watchDir');
@@ -100,7 +100,7 @@ export function getBaseline(cfg, id) {
   try {
     if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
   } catch {
-    /* 损坏就当没有 */
+    /* corrupt file: treat as absent */
   }
   return null;
 }
@@ -150,7 +150,7 @@ export function readHistory(cfg, id, limit = 50) {
     .reverse();
 }
 
-// ───────────────────────────────────────────── 文本处理 / text
+// ───────────────────────────────────────────── text / text
 
 function stripHtml(html) {
   return String(html ?? '')
@@ -196,10 +196,10 @@ function truncate(s, max = 200_000) {
   return t.length > max ? `${t.slice(0, max)}\n…（已截断，原文 ${t.length} 字符）` : t;
 }
 
-// ───────────────────────────────────────────── 规则 / alarm rules
+// ───────────────────────────────────────────── alarm rules / alarm rules
 
 /**
- * 对一条变更应用告警规则
+ * Apply the alarm rules to one change
  * @returns {{alert:boolean, reasons:string[]}}
  */
 export function applyRules(change, rules = DEFAULT_RULES) {
@@ -222,7 +222,7 @@ export function applyRules(change, rules = DEFAULT_RULES) {
   return { alert: reasons.length > 0, reasons };
 }
 
-// ───────────────────────────────────────────── 各类型检查 / checks
+// ───────────────────────────────────────────── per-kind checks / checks
 
 function withTimeout(ms) {
   return AbortSignal.timeout(ms);
@@ -251,7 +251,7 @@ function apiOf(apiUrl) {
   return u.includes('?') ? `${u}&format=json` : `${u}?format=json`;
 }
 
-// ── 1) 任意网页
+// ── 1) Any web page
 async function checkUrl(target, ctx) {
   const r = await jget(target.url, { cfg: ctx.cfg, target });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -282,7 +282,7 @@ async function checkUrl(target, ctx) {
     text: added.slice(0, 4000),
     delta: text.length - (prev.text ?? '').length,
   };
-  // 关键词告警的判定要覆盖「新内容的整体」，只看新增行会漏掉改词不增行的情况
+  // Keyword alarms must be judged over "the whole of the new content"; looking only at added lines misses a reworded line that adds no lines
   const verdict = applyRules({ ...event, text: `${added}\n${text.slice(0, 1500)}` }, ctx.rules);
   setBaseline(ctx.cfg, target.id, { kind: 'url', hash, text, url: target.url });
   return {
@@ -293,7 +293,7 @@ async function checkUrl(target, ctx) {
   };
 }
 
-// ── 2) MediaWiki 条目
+// ── 2) MediaWiki page
 async function fetchPageRev(target, ctx) {
   const url = `${apiOf(target.apiUrl)}&action=query&prop=revisions&rvprop=ids%7Ctimestamp%7Cuser%7Ccomment%7Csize%7Cflags&rvlimit=1&titles=${encodeURIComponent(target.page)}`;
   const r = await jget(url, { cfg: ctx.cfg, target });
@@ -328,7 +328,7 @@ async function checkMediaWikiPage(target, ctx) {
       .slice(0, 400)
       .map((l) => ({ op: /^\+/.test(l) ? '+' : /^-/.test(l) ? '-' : ' ', text: l.replace(/^[-+]\s?/, ''), aLine: null, bLine: null }));
   } catch {
-    /* compare 失败就只报「变了」 */
+    /* if compare fails, only report "it changed" */
   }
 
   const delta = typeof rev.size === 'number' && typeof prev.size === 'number' ? rev.size - prev.size : undefined;
@@ -351,7 +351,7 @@ async function checkMediaWikiPage(target, ctx) {
   return { target, changed: true, events: [{ ...event, reasons: verdict.reasons }], summary: `条目已修订 revid ${prev.revid} → ${rev.revid}${delta !== undefined ? `（${delta >= 0 ? '+' : ''}${delta} 字节）` : ''}` };
 }
 
-// ── 3) MediaWiki 最近更改
+// ── 3) MediaWiki recent changes
 function rcToEvents(rows, rules) {
   const out = [];
   for (const r of rows) {
@@ -366,7 +366,7 @@ function rcToEvents(rows, rules) {
       timestamp: r.timestamp,
       anon: !!r.anon,
       bot: !!r.bot,
-      // MediaWiki 用 flags 里的 unpatrolled 标记未巡查编辑
+      // MediaWiki flags unpatrolled edits with `unpatrolled` in flags
       unpatrolled: Object.prototype.hasOwnProperty.call(r, 'unpatrolled'),
       isNew: !!r.new,
       delta: typeof r.newlen === 'number' && typeof r.oldlen === 'number' ? r.newlen - r.oldlen : undefined,
@@ -407,7 +407,7 @@ async function checkRecentChanges(target, ctx) {
   };
 }
 
-// ── 4) MediaWiki 监视列表（需要登录）
+// ── 4) MediaWiki watchlist (requires login)
 async function mwLogin(target, ctx) {
   const api = apiOf(target.apiUrl);
   const tokRes = await jget(`${api}&action=query&meta=tokens&type=login`, { cfg: ctx.cfg, target });
@@ -465,7 +465,7 @@ async function checkWatchlist(target, ctx) {
   };
 }
 
-// ── 5) B 站动态
+// ── 5) bilibili dynamics
 async function checkBiliOpus(target, ctx) {
   const { fetchBilibiliOpus, fetchFollowers } = await import('./fetchers/bilibili.js');
   const source = { ...target, id: target.id, uid: target.uid, proxy: target.proxy };
@@ -510,7 +510,7 @@ async function checkBiliOpus(target, ctx) {
   };
 }
 
-// ───────────────────────────────────────────── 对外 / public
+// ───────────────────────────────────────────── public / public
 
 const HANDLERS = {
   url: checkUrl,
@@ -520,7 +520,7 @@ const HANDLERS = {
   'bili-opus': checkBiliOpus,
 };
 
-/** 检查单个监视对象 / check one target */
+/** Check a single watch target / check one target */
 export async function checkTarget(target, { cfg, rules, log } = {}) {
   const fn = HANDLERS[target.kind];
   if (!fn) return { target, ok: false, error: `未知监视类型 / unknown kind: ${target.kind}`, events: [] };
@@ -528,7 +528,7 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
   try {
     const r = await fn(target, ctx);
     const out = { ok: true, ...r };
-    // 有变化的才落历史，避免噪声
+    // Only record history when something changed, to avoid noise
     if (out.changed && !out.first) {
       appendHistory(cfg, target.id, {
         kind: target.kind,
@@ -538,22 +538,22 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
         events: out.events.map((e) => ({ ...e, hunks: e.hunks ? e.hunks.slice(0, 200) : undefined })),
       });
     }
-    log?.info(`监视 ${target.id}: ${out.summary}`);
+    log?.info(`watch ${target.id}: ${out.summary}`);
     return out;
   } catch (err) {
-    // undici 的 "fetch failed" 本身没有信息量，把 cause 一起带上才有诊断价值
+    // undici's "fetch failed" carries no information by itself; including the cause is what makes it diagnosable
     const cause = err?.cause?.message ?? err?.cause?.code ?? '';
     const msg = cause ? `${err.message}（${cause}）` : err.message;
-    log?.error(`监视 ${target.id} 失败 / failed — ${msg}`);
+    log?.error(`watch ${target.id} failed / failed — ${msg}`);
     return { target, ok: false, changed: false, events: [], error: msg };
   }
 }
 
 /**
- * 检查监视对象。
+ * Check the watch targets.
  * @param {object} cfg
  * @param {object} log
- * @param {{targets?:object[]}} opts 观测模式下只传本轮取到的那几个（见 observe.js）
+ * @param {{targets?:object[]}} opts in observation mode only pass the ones drawn this round (see observe.js)
  */
 export async function checkAll(cfg, log, opts = {}) {
   const targets = Array.isArray(opts.targets)
@@ -562,7 +562,7 @@ export async function checkAll(cfg, log, opts = {}) {
   const results = [];
   let first = true;
   for (const t of targets) {
-    // 观测模式下检查之间也抖动 —— 连着几个对象精确等距地检查，本身就是机器特征
+    // Jitter between checks in observation mode too -- checking several targets at exactly even intervals is itself a machine signature
     if (!first && cfg?.observation?.enabled) {
       const gap = gapWithJitter(2, cfg?.observation?.jitterSeconds);
       if (gap > 0) await sleep(gap * 1000);

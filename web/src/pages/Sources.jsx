@@ -1,11 +1,11 @@
-// 来源页：站点清单 + 实时连通数据 + 单站出口 + 缩略图 + 自检 / Sources page
+// Sources page: site list + live reachability data + per-site egress + thumbnails + self-check
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 
 const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '' };
 
-/** 延迟徽标：数值 + 失败率，颜色按好坏 */
+/** Latency badge: value + failure rate, coloured by how good it is */
 function Lat({ p, label, t }) {
   if (!p) return <span className="lat stale">{label} {t('neverProbed')}</span>;
   if (p.skipped) return <span className="lat stale">{label} —</span>;
@@ -20,7 +20,7 @@ function Lat({ p, label, t }) {
 }
 
 export default function Sources() {
-  const { t, lang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const [data, setData] = useState(null);
   const [health, setHealth] = useState(null);
   const [advice, setAdvice] = useState([]);
@@ -31,7 +31,7 @@ export default function Sources() {
   const [form, setForm] = useState({ ...BLANK });
   const [customOnly, setCustomOnly] = useState(false);
   const [diag, setDiag] = useState(null);
-  // 自动出口的判定结果：s.id -> {mode, reason, confidence}
+  // Automatic egress verdicts: s.id -> {mode, reason, confidence}
   const [eg, setEg] = useState({});
 
   const load = async () => {
@@ -39,7 +39,7 @@ export default function Sources() {
       const [s, h] = await Promise.all([api.getSources(), api.getHealth().catch(() => null)]);
       setData(s);      setHealth(h);
       setAdvice((await api.listAdvice().catch(() => ({ files: [] }))).files ?? []);
-      // 自动出口判定（失败也不影响页面其它部分）
+      // Automatic egress verdict (a failure here does not affect the rest of the page)
       const e = await api.getEgress().catch(() => null);
       setEg(e?.byKey ?? {});
     } catch (e) {
@@ -51,7 +51,7 @@ export default function Sources() {
     load();
   }, []);
 
-  // 缩略图：服务端有缓存就秒回，所以这里只对启用的来源懒加载一次
+  // Thumbnails: the server answers instantly when it has a cache, so only the enabled sources are lazily loaded once here
   useEffect(() => {
     if (!data) return;
     let stop = false;
@@ -63,7 +63,7 @@ export default function Sources() {
           const r = await api.thumbMeta(s.url, s.id);
           if (!stop && r.ok) setThumbs((prev) => ({ ...prev, [s.id]: r.image }));
         } catch {
-          /* 没有就没有 */
+          /* nothing there is fine */
         }
       }
     })();
@@ -88,12 +88,12 @@ export default function Sources() {
     }
   };
 
-  /** 批量开关：不带 ids 就是全量；带 ids 只动那几条 */
+  /** Bulk toggle: no ids means everything; with ids only those few are touched */
   const bulk = async (action, ids) => {
     setBusy('bulk');
     try {
       const r = await api.bulkSources({ action, ids });
-      flash(`${action}: ${r.changed} ${t('items')}`, 4000);
+      flash(`${action}: ${tn('items', r.changed)}`, 4000);
       await load();
     } catch (e) {
       setErr(e.message);
@@ -121,7 +121,7 @@ export default function Sources() {
     flash(t('probing'), 0);
     try {
       const r = await api.probe({});
-      flash(`${t('done')}: ${r.probed} ${t('items')}`, 5000);
+      flash(`${t('done')}: ${tn('items', r.probed)}`, 5000);
       await load();
     } catch (e) {
       setErr(e.message);
@@ -130,7 +130,7 @@ export default function Sources() {
     }
   };
 
-  /** 自检：连通正常就不产出文件；异常时生成诊断文件并给出链接 */
+  /** Self-check: when reachability is fine no file is produced; an anomaly generates a diagnostic file and links to it */
   const diagnose = async (id) => {
     setBusy(`diag:${id}`);
     flash(t('diagnosing'), 0);
@@ -182,11 +182,11 @@ export default function Sources() {
   for (const s of filtered) (byCat[s.category] ??= []).push(s);
   const needsUid = form.fetch === 'bili-opus' || form.fetch === 'bili-dynamic';
   const problems = health?.problems ?? [];
-  const obs = data.observation ?? null; // 观测模式：取样比例、轮次、每条来源的最近观测时间
+  const obs = data.observation ?? null; // observation mode: sampling ratio, rounds, last observation time per source
 
   return (
     <>
-      {/* ── 站点健康看板 ── */}
+      {/* ── site health board ── */}
       <section className="panel">
         <h2>{t('health')}</h2>
         <div className="hint">{t('healthHint')}</div>
@@ -219,7 +219,7 @@ export default function Sources() {
         </div>
       </section>
 
-      {/* ── 诊断文件 ── */}
+      {/* ── diagnostic files ── */}
       <section className="panel">
         <h2>{t('adviceFiles')}（{advice.length}）</h2>
         <div className="hint">{t('adviceHint')}</div>
@@ -256,13 +256,13 @@ export default function Sources() {
         )}
       </section>
 
-      {/* ── 来源清单 ── */}
+      {/* ── source list ── */}
       <section className="panel">
         <h2>{t('sourcesTitle')}</h2>
         <div className="hint">{t('sourcesHint')}</div>
         <p className="muted">
           {data.sources.length} sources · daily <b>{data.selected.daily}</b> · merch <b>{data.selected.merch}</b>
-          {/* 观测模式开着的时候，顺带说清「轮次」与「取样比例」——否则「最近观测」这列没有上下文 */}
+          {/* When observation mode is on, spell out the "rounds" and the sampling ratio as well -- otherwise the "last observed" column has no context */}
           {data.observation?.enabled ? (
             <span className="muted small" style={{ marginLeft: 12 }}>
               {t('obsSampling')} · {Math.round((data.observation.ratio ?? 0.5) * 100)}% · {t('groupWindow')} {data.observation.rounds ?? 0} {t('groupDays')}
@@ -272,7 +272,7 @@ export default function Sources() {
             <input type="checkbox" checked={customOnly} onChange={(e) => setCustomOnly(e.target.checked)} /> {t('onlyCustom')}
           </label>
         </p>
-        {/* 批量开关：30 条来源一个个点太累（这个需求是在遍历里被「忘了关掉默认全开」逼出来的） */}
+        {/* Bulk toggle: clicking 30 sources one by one is exhausting (this request was forced by "forgot to turn the default all-on back off" during a traversal) */}
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           <span className="muted small">{t('bulkToggle')}:</span>
           <button className="ghost tiny" onClick={() => bulk('enable')} disabled={!!busy}>
@@ -336,7 +336,7 @@ export default function Sources() {
                           <option value="proxy">{t('proxyUse')}</option>
                           <option value="tor">Tor</option>
                         </select>
-                        {/* 自动模式选了什么、为什么 —— 不写出来就等于黑箱 */}
+                        {/* What automatic mode picked and why -- leaving it unwritten makes it a black box */}
                         {!s.proxy || s.proxy === 'auto' ? (
                           <div className="small muted" title={eg?.[s.id]?.reason ?? ''} style={{ maxWidth: 220, marginTop: 4 }}>
                             {eg?.[s.id]
@@ -348,8 +348,8 @@ export default function Sources() {
                             {t('egressPinned')}
                           </div>
                         )}
-                        {/* 观测模式下的「最近观测」：只有取样比例时，使用者看不出
-                            「谁多久没被看到」—— 那恰恰是判断覆盖够不够的依据。 */}
+                        {/* "Last observed" under observation mode: with only the sampling ratio, the user cannot see
+                            "who has not been seen for how long" -- and that is exactly the basis for judging whether coverage is enough. */}
                         {obs?.enabled ? (
                           <div className="small muted" style={{ marginTop: 4 }}>
                             {t('obsLastSeen')}: {s.lastObserved ? s.lastObserved.slice(0, 10) : t('groupNever')}
@@ -391,7 +391,7 @@ export default function Sources() {
         ))}
       </section>
 
-      {/* ── 自定义来源 ── */}
+      {/* ── custom sources ── */}
       <section className="panel">
         <h2>{t('customSources')}</h2>
         <div className="hint">{t('customSourcesHint')}</div>

@@ -1,15 +1,16 @@
-// cluster-test.mjs — 事件合并 / 相似度去重 / 来源权重 的自检
+// cluster-test.mjs - self-test for event merging / similarity dedupe / source weighting
 //
-// 这类算法的风险是**安静地做错事**：阈值调松了会把无关的事并成一件（信息被吞掉），
-// 调紧了等于没合并（重复照旧）。所以自检要同时钉住两个方向：
-//   · 该合并的必须合并（不同来源、不同措辞、同一天）
-//   · 不该合并的绝不能合并（不同的人、不同的事、差很多天）
-// 另外要验证：
-//   · 中文用 bigram 也能比较（没有词边界）
-//   · 来源权重能排序，且能从「谁先报」的历史里学
-//   · 去重保留的是权重最高的那条，而不是碰巧排在前面的那条
-//   · 输入顺序不影响结果（确定性）
-//   · 量大时不退化成 O(n²)（否则一次日报就能把 CPU 拉满）
+// The risk with this class of algorithm is doing the wrong thing quietly: loosen the threshold
+// and unrelated events get merged into one (information is swallowed); tighten it and nothing
+// merges at all (duplicates stay). So the self-test has to pin down both directions:
+//   - what should merge must merge (different sources, different wording, same day)
+//   - what should not merge must never merge (different people, different events, days apart)
+// It also verifies:
+//   - Chinese can be compared with bigrams too (there are no word boundaries)
+//   - source weights can be ranked, and can be learned from the history of who reported first
+//   - dedupe keeps the highest-weighted item, not whichever one happened to sit first
+//   - input order does not affect the result (determinism)
+//   - a large input does not degrade to O(n²) (or one daily report would max out the CPU)
 import assert from 'node:assert/strict';
 import {
   BASE_WEIGHT,
@@ -35,33 +36,33 @@ const t = (name, fn) => {
   }
 };
 
-const at = (s) => s; // ISO 字符串直接当时间
+const at = (s) => s; // an ISO string is used as the time directly
 
-process.stdout.write('\ncluster: 分词与相似度\n');
-t('中文切成单字 + bigram（没有词边界也能比）', () => {
+process.stdout.write('\ncluster: tokenization and similarity\n');
+t('Chinese is split into single characters + bigrams (comparable without word boundaries)', () => {
   const k = tokens('嘉然生日');
   assert.ok(k.has('嘉') && k.has('嘉然') && k.has('生日'), [...k].join(','));
 });
 
-t('停用词与 URL 不参与比较', () => {
+t('stopwords and URLs take no part in the comparison', () => {
   const k = tokens('the official news https://example.com/a');
   assert.ok(!k.has('the') && !k.has('official') && !k.has('news'));
 });
 
-t('数字/日期是强信号', () => {
+t('numbers/dates are strong signals', () => {
   assert.ok(tokens('3月15日 3D披露').has('#15'));
   assert.ok(similarity('3月15日 3D披露', '3月15日 3Dお披露目') > similarity('3月15日 3D披露', '5月20日 生日'));
 });
 
-t('同一件事的不同措辞相似度明显高', () => {
+t('different wording of the same event scores clearly higher', () => {
   const a = tokens('嘉然 3D披露 将于 3月15日 举行');
   const b = tokens('【3D披露】嘉然 3月15日 3D お披露目 直播');
   const c = tokens('某游戏版本更新公告');
-  assert.ok(similarity(a, b) > 0.5, '应该 > 0.5，实际 ' + similarity(a, b).toFixed(3));
-  assert.ok(similarity(a, c) < 0.2, '无关内容应 < 0.2');
+  assert.ok(similarity(a, b) > 0.5, 'must be > 0.5, got ' + similarity(a, b).toFixed(3));
+  assert.ok(similarity(a, c) < 0.2, 'unrelated content must be < 0.2');
 });
 
-process.stdout.write('\ncluster: 该合并的必须合并\n');
+process.stdout.write('\ncluster: what should merge must merge\n');
 const items = [
   { id: 'i1', sourceId: 'official-hololive', title: '嘉然 3D披露 将于 3月15日 举行', publishedAt: at('2026-03-01T10:00:00Z') },
   { id: 'i2', sourceId: 'news-moguravr', title: '【3D披露】嘉然 3月15日 3Dお披露目 直播预告', publishedAt: at('2026-03-01T12:00:00Z') },
@@ -69,23 +70,23 @@ const items = [
   { id: 'i4', sourceId: 'news-ann', title: '某游戏版本更新公告', publishedAt: at('2026-03-01T11:00:00Z') },
 ];
 
-t('三个来源的同一件事并成一个事件', () => {
+t('the same event from three sources merges into one event', () => {
   const cs = cluster(items, { weight: () => 1 });
   const big = cs.find((c) => c.items.length > 1);
-  assert.ok(big, '应该有合并');
+  assert.ok(big, 'a merge is expected');
   assert.equal(big.items.length, 3);
   assert.equal(big.sourceCount, 3);
-  assert.equal(big.confirmed, true, '≥2 个来源应标记为已确认');
+  assert.equal(big.confirmed, true, '>=2 sources must be marked as confirmed');
   assert.equal(big.duplicateCount, 2);
 });
 
-t('无关的事不会被并进来', () => {
+t('unrelated events are not merged in', () => {
   const cs = cluster(items, { weight: () => 1 });
   const game = cs.find((c) => c.title.includes('版本更新'));
-  assert.equal(game.items.length, 1, '游戏公告应自成一簇');
+  assert.equal(game.items.length, 1, 'the game announcement must form its own cluster');
 });
 
-t('同一个人 + 标题像 → 阈值放宽（同人联动消息常措辞差很多）', () => {
+t('same person + similar title -> relaxed threshold (collab posts for one person often differ a lot in wording)', () => {
   const a = { id: 'p1', sourceId: 'bili-opus-jaran', title: '嘉然 新动态', publishedAt: at('2026-03-01T10:00:00Z'), people: ['jaran'] };
   const b = { id: 'p2', sourceId: 'x-twitter', title: '嘉然 新动态 转推', publishedAt: at('2026-03-01T11:00:00Z'), people: ['jaran'] };
   const cs = cluster([a, b], { weight: () => 1 });
@@ -93,70 +94,71 @@ t('同一个人 + 标题像 → 阈值放宽（同人联动消息常措辞差很
   assert.deepEqual(cs[0].people, ['jaran']);
 });
 
-t('时间差太大就不算同一件事（去年的同一活动）', () => {
+t('too large a time gap means it is not the same event (last year\'s same activity)', () => {
   const a = { id: 'a', sourceId: 's1', title: '嘉然 3D披露 将于 3月15日 举行', publishedAt: at('2026-03-01T10:00:00Z') };
   const b = { id: 'b', sourceId: 's2', title: '嘉然 3D披露 将于 3月15日 举行', publishedAt: at('2027-03-01T10:00:00Z') };
   const cs = cluster([a, b], { weight: () => 1, windowHours: 72 });
-  assert.equal(cs.length, 2, '相隔一年不能合并');
+  assert.equal(cs.length, 2, 'a year apart must not merge');
 });
 
-t('不同的人不会因为措辞相似而合并', () => {
+t('different people do not merge just because the wording is similar', () => {
   const a = { id: 'a', sourceId: 's1', title: 'A 的生日直播 5月20日', publishedAt: at('2026-05-01T10:00:00Z'), people: ['a'] };
   const b = { id: 'b', sourceId: 's2', title: 'B 的生日直播 5月20日', publishedAt: at('2026-05-01T11:00:00Z'), people: ['b'] };
   const cs = cluster([a, b], { weight: () => 1 });
-  // 文本确实很像（只有一个人名不同），但这个用例要的是「不要因为放宽阈值就无脑并」
-  // —— 至少它在没有同人加成时也应该各自成簇或明确说明并列了谁
+  // The text really is similar (only the person name differs), but what this case demands is
+  // "do not merge blindly just because the threshold is relaxed" - with no same-person boost it
+  // should at least either stay in separate clusters or clearly state whom it merged
   const merged = cs.length === 1;
-  assert.ok(merged || cs.length === 2, '要么不并，要么并了也要能看到 people 里有两个不同的人');
+  assert.ok(merged || cs.length === 2, 'either do not merge, or if merged, people must still show two different people');
   if (merged) assert.equal(cs[0].people.length, 2);
 });
 
-process.stdout.write('\ncluster: 来源权重\n');
-t('基准权重：官方 > 新闻 > 社区 > 社交', () => {
+process.stdout.write('\ncluster: source weights\n');
+t('base weights: official > news > community > social', () => {
   assert.ok(BASE_WEIGHT.official > BASE_WEIGHT.news);
   assert.ok(BASE_WEIGHT.news > BASE_WEIGHT.community);
   assert.ok(BASE_WEIGHT.community > BASE_WEIGHT.social);
 });
 
-t('权重函数按分类取基准，且可用配置覆盖', () => {
+t('the weight function takes the base per category and can be overridden by config', () => {
   const w = makeWeighter({ sourceWeights: { 'news-ann': 5 } });
   assert.ok(w('official-hololive') > w('community-reddit'));
-  assert.equal(w('news-ann'), Math.min(3, 5), '覆盖值会被夹在上限内');
+  assert.equal(w('news-ann'), Math.min(3, 5), 'the override value gets clamped to the cap');
   assert.equal(w(undefined), 1);
 });
 
-t('权重会从「谁先报」的历史里长出来', () => {
+t('weights grow out of the history of who reported first', () => {
   const base = makeWeighter({});
   let h = { firstSeen: {}, totalEvents: 0 };
   for (let i = 0; i < 10; i++) h = recordFirstReporter(h, 'news-moguravr');
   const learned = makeWeighter({}, h);
-  assert.ok(learned('news-moguravr') > base('news-moguravr'), '先报得多的来源应该加分');
+  assert.ok(learned('news-moguravr') > base('news-moguravr'), 'a source that often reports first must gain weight');
   assert.equal(h.totalEvents, 10);
 });
 
-t('事件里权重最高的来源成为 lead，且最先报的被记下来', () => {
+t('the highest-weighted source in an event becomes the lead, and the first reporter is recorded', () => {
   const weigh = makeWeighter({});
   const cs = cluster(items, { weight: weigh });
   const big = cs.find((c) => c.items.length > 1);
-  assert.ok(big.leadSourceId, '要有 lead 来源');
+  assert.ok(big.leadSourceId, 'a lead source is expected');
   assert.ok(['official-hololive', 'news-moguravr', 'community-reddit'].includes(big.leadSourceId));
   assert.equal(big.items[0].id, big.items[0].id);
   assert.ok(big.firstAt <= big.lastAt);
 });
 
-process.stdout.write('\ncluster: 去重\n');
-t('去重保留权重最高的那条，并说明丢了什么', () => {
+process.stdout.write('\ncluster: dedupe\n');
+t('dedupe keeps the highest-weighted item and reports what was dropped', () => {
   const weigh = makeWeighter({});
   const r = dedupe(items, { weight: weigh });
-  assert.equal(r.kept.length, 2, '四条约成两件事');
-  // 合并簇里应该留下官方那条
+  assert.equal(r.kept.length, 2, 'four items make about two events');
+  // The merged cluster should keep the official item
   const merged = r.events.find((c) => c.items.length > 1);
-  assert.equal(merged.items[0].sourceId, 'official-hololive', '官方权重最高，应排第一');
+  assert.equal(merged.items[0].sourceId, 'official-hololive', 'official has the highest weight, so it must come first');
   assert.equal(r.dropped.length, 2);
-  for (const d of r.dropped) assert.ok(d.keptId && d.eventId, '被丢的条目要能指回保留者');
+  for (const d of r.dropped) assert.ok(d.keptId && d.eventId, 'a dropped item must point back to the one that was kept');
 });
 
-t('去重不改变时间顺序（未知时间在最后）', () => {
+t('dedupe does not change the time order (unknown times go last)', () => {
   const r = dedupe(
     [
       { id: 'x', sourceId: 's', title: 'A', publishedAt: at('2026-03-03T00:00:00Z') },
@@ -168,7 +170,7 @@ t('去重不改变时间顺序（未知时间在最后）', () => {
   assert.deepEqual(r.kept.map((i) => i.id), ['x', 'y', 'z']);
 });
 
-t('汇总统计可用', () => {
+t('summary statistics are available', () => {
   const cs = cluster(items, { weight: () => 1 });
   const s = clusterStats(cs);
   assert.equal(s.events, cs.length);
@@ -177,14 +179,14 @@ t('汇总统计可用', () => {
   assert.ok(Array.isArray(s.leadSources));
 });
 
-process.stdout.write('\ncluster: 边界与性能\n');
-t('空输入与单条不崩', () => {
+process.stdout.write('\ncluster: edge cases and performance\n');
+t('empty input and a single item do not crash', () => {
   assert.deepEqual(cluster([]), []);
   assert.equal(cluster([{ id: 'x', title: 'only' }]).length, 1);
   assert.deepEqual(dedupe([]).kept, []);
 });
 
-t('没有时间的条目：内容确实不同就不会并', () => {
+t('items without a time: genuinely different content does not merge', () => {
   const cs = cluster(
     [
       { id: 'a', sourceId: 's1', title: '某游戏版本更新公告' },
@@ -195,9 +197,10 @@ t('没有时间的条目：内容确实不同就不会并', () => {
   assert.equal(cs.length, 2);
 });
 
-t('没有时间但文本几乎相同 → 仍然算同一件事（这是对的）', () => {
-  // 「完全无关的甲/乙」只差最后两个字，字符串层面就是很像 ——
-  // 相似度函数**应该**说它们像；想区分这类，要靠 people/来源等其他信号
+t('no time but nearly identical text -> still counted as the same event (which is correct)', () => {
+  // Two "completely unrelated" items differing only in the last character are, at the string
+  // level, very similar - the similarity function *should* call them similar; telling such cases
+  // apart takes other signals such as people/source
   const cs = cluster(
     [
       { id: 'a', sourceId: 's1', title: '完全无关的甲' },
@@ -208,16 +211,16 @@ t('没有时间但文本几乎相同 → 仍然算同一件事（这是对的）
   assert.equal(cs.length, 1);
 });
 
-t('结果与输入顺序无关（确定性）', () => {
+t('the result is independent of input order (determinism)', () => {
   const reversed = [...items].reverse();
   const a = cluster(items, { weight: () => 1 }).map((c) => c.items.length).sort();
   const b = cluster(reversed, { weight: () => 1 }).map((c) => c.items.length).sort();
   assert.deepEqual(a, b);
 });
 
-t('内容完全相同的重复报道必须合并（这时没有任何「罕见词」）', () => {
-  // 20 条一模一样的内容：每个词的出现次数都 = 文档数 → 罕见词一个不剩。
-  // 只看罕见词的闸门会把真正的重复全部漏掉（实测踩过）。
+t('identical duplicate reports must merge (here nothing counts as a rare term)', () => {
+  // 20 identical items: every term's count equals the document count, so not one rare term is
+  // left. A gate that only looks at rare terms misses every real duplicate (measured in practice).
   const same = Array.from({ length: 20 }, (_, i) => ({
     id: 'same' + i,
     sourceId: 'src-' + (i % 5),
@@ -225,12 +228,12 @@ t('内容完全相同的重复报道必须合并（这时没有任何「罕见�
     publishedAt: new Date(Date.UTC(2026, 2, 1, i % 24)).toISOString(),
   }));
   const cs = cluster(same, { weight: () => 1 });
-  assert.equal(cs.length, 1, '应合成一个事件');
+  assert.equal(cs.length, 1, 'must merge into one event');
   assert.equal(cs[0].items.length, 20);
   assert.equal(cs[0].duplicateCount, 19);
 });
 
-t('不过度链：只共享套话的一批条目各成一簇', () => {
+t('no over-chaining: a batch sharing only boilerplate stays in separate clusters', () => {
   const many = Array.from({ length: 60 }, (_, i) => ({
     id: 'n' + i,
     sourceId: 'src-' + (i % 6),
@@ -238,9 +241,9 @@ t('不过度链：只共享套话的一批条目各成一簇', () => {
     publishedAt: new Date(Date.UTC(2026, 2, 1, i % 24)).toISOString(),
   }));
   const cs = cluster(many, { weight: () => 1 });
-  assert.equal(cs.length, 60, `不应合并，实际 ${cs.length}`);
+  assert.equal(cs.length, 60, `must not merge, got ${cs.length}`);
 });
-t('2000 条不退化成 O(n²)（有分桶与候选上限）', () => {
+t('2000 items do not degrade to O(n²) (bucketing plus a candidate cap)', () => {
   const many = [];
   for (let i = 0; i < 2000; i++) {
     many.push({
@@ -253,9 +256,9 @@ t('2000 条不退化成 O(n²)（有分桶与候选上限）', () => {
   const t0 = Date.now();
   const cs = cluster(many, { weight: () => 1 });
   const ms = Date.now() - t0;
-  assert.ok(ms < 3000, `2000 条用了 ${ms}ms，太慢`);
+  assert.ok(ms < 3000, `2000 items took ${ms}ms, too slow`);
   assert.ok(cs.length > 0);
-  process.stdout.write(`         （2000 条 → ${cs.length} 个事件，${ms}ms）\n`);
+  process.stdout.write(`         (2000 items -> ${cs.length} events, ${ms}ms)\n`);
 });
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);

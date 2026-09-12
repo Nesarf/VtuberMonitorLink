@@ -1,31 +1,36 @@
-// fetchplan.js — 抓取的调度决策：按出口分组并行、连续失败来源隔离、抓取方式降级阶梯
+// fetchplan.js — fetch scheduling decisions: parallel per egress, quarantine of repeatedly failing sources,
+// fetch-method fallback ladder
 //
-// 为什么单独抽出来：这三件事都是「策略」，而策略最容易写成藏在循环里的 if，
-// 于是既测不了、也说不清「现在到底是怎么调度的」。这里全是纯函数，
-// 自检（tools/fetchplan-test.mjs）拿固定时间和固定失败序列把行为钉住。
+// Why it is factored out: all three are *policy*, and policy is exactly what tends to end up as an if
+// buried inside a loop, which leaves it untestable and makes it impossible to say what the scheduling
+// actually does right now. Everything here is a pure function, and the self-check
+// (tools/fetchplan-test.mjs) pins the behavior down with fixed times and a fixed failure sequence.
 //
-// 三条策略各自的理由：
-//   1. **按出口分组并行**：抓取原本是一条条串行 + 主动间隔，24 条来源一轮要几分钟。
-//      但「串行」真正要保护的是**同一个出口的身份**（同一张脸不要连着敲），
-//      不同出口之间没有这个约束。于是按出口分组成几队，**队间并行、队内串行**：
-//      足迹不变，时间砍掉大半。
-//   2. **连续失败隔离**：抓不到的来源（Cloudflare、失效的站点）每一轮都会被重试，
-//      既是白花的时间，也是白白多出来的请求 —— 而请求本身就是足迹。
-//      连续失败 N 次就先安静 M 小时，之后自动再试一次（不是永久拉黑）。
-//   3. **降级阶梯**：失败时现在只换出口，不换抓取方式。有些失败是「这个方式不行」
-//      而不是「这个出口不行」（例如该站点只剩 RSS 可用）。阶梯只放**站得住脚**的转换，
-//      来源也可以自己声明 fallbacks。
+// Why each of the three policies exists:
+//   1. **Parallel per egress**: fetching used to be strictly serial with a deliberate delay, so 24 sources
+//      took minutes per round. But what "serial" really protects is **the identity of one egress** (do not
+//      knock with the same face back to back), and no such constraint exists between different egresses.
+//      So sources are grouped by egress into a few teams: **teams in parallel, within a team serial** --
+//      the footprint is unchanged, the wall time is cut by more than half.
+//   2. **Quarantine after repeated failures**: sources that cannot be fetched (Cloudflare, dead sites) get
+//      retried every round, which is wasted time and, worse, extra requests -- and requests are footprint.
+//      After N consecutive failures the source goes quiet for M hours, then tries itself again (not a blacklist).
+//   3. **Fallback ladder**: on failure we currently only switch egress, never the fetch method. Some failures
+//      mean "this method does not work" rather than "this egress does not work" (e.g. only RSS is left usable
+//      on that site). The ladder only carries **defensible** transitions, and a source may declare its own
+//      fallbacks.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
-/** 抓取方式之间允许的降级（保守表：只放能自圆其说的转换） */
+/** Fallbacks allowed between fetch methods (conservative table: only transitions that justify themselves) */
 export const FETCH_LADDER = {
-  // MediaWiki API 打不动（被 Cloudflare 拦、或 API 关了）→ 用浏览器把同一页面渲染出来
+  // MediaWiki API unusable (blocked by Cloudflare, or the API was turned off) -> render the same page with a browser
   'mediawiki-api': ['browser'],
-  // RSS 拿不到（feed 挂了/被拦）→ 用浏览器抓同一个地址
+  // RSS unavailable (feed dead/blocked) -> fetch the same URL with a browser
   rss: ['browser'],
-  // 免登录动态被风控 → 没有可替代的免登录方式（bili-dynamic 需要登录，不能自动升级成它）
+  // anonymous dynamics hit a risk-control wall -> there is no anonymous alternative
+  // (bili-dynamic needs a login, so we must not silently upgrade to it)
   'bili-opus': [],
   'bili-dynamic': [],
   browser: [],
@@ -33,8 +38,8 @@ export const FETCH_LADDER = {
 };
 
 /**
- * 这个来源可以按什么顺序尝试抓取方式。
- * 顺序：来源自己声明的 fallbacks（优先）→ 内置阶梯 → 去重、去掉自己。
+ * In what order this source may try fetch methods.
+ * Order: the fallbacks the source declares itself (first) -> the built-in ladder -> dedupe, drop itself.
  */
 export function fetchLadder(source) {
   const own = Array.isArray(source?.fallbacks)
@@ -51,7 +56,7 @@ export function fetchLadder(source) {
   return out;
 }
 
-// ───────────────────────────────────────────── 失败隔离
+// ───────────────────────────────────────────── failure quarantine
 
 export const QUARANTINE_DEFAULTS = { failures: 3, hours: 6 };
 
@@ -64,7 +69,7 @@ export function loadQuarantine(cfg) {
     const raw = JSON.parse(fs.readFileSync(quarantinePath(cfg), 'utf8'));
     if (raw && typeof raw === 'object' && raw.sources) return { sources: raw.sources };
   } catch {
-    /* 没有就从空开始 */
+    /* start from empty when there is none */
   }
   return { sources: {} };
 }
@@ -75,11 +80,11 @@ export function saveQuarantine(cfg, state) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify({ sources: state.sources ?? {} }, null, 2) + '\n', 'utf8');
   } catch {
-    /* 记不上不影响这一轮 */
+    /* failing to record it does not affect this round */
   }
 }
 
-/** 这条来源现在该被隔离吗（以及为什么、还有多久） */
+/** Should this source be quarantined right now (and why, and for how much longer) */
 export function quarantineOf(state, id, { now = new Date(), rules = QUARANTINE_DEFAULTS } = {}) {
   const rec = state?.sources?.[id];
   if (!rec) return null;
@@ -95,8 +100,9 @@ export function quarantineOf(state, id, { now = new Date(), rules = QUARANTINE_D
 }
 
 /**
- * 记一次抓取结果，返回新的隔离状态。
- * 成功 → 清零（隔离线自动解除）；失败 → 计数，到阈值后隔离 M 小时。
+ * Record one fetch outcome and return the new quarantine state.
+ * Success -> reset to zero (the quarantine lifts by itself); failure -> count up, and once the threshold
+ * is reached quarantine for M hours.
  */
 export function recordOutcome(state, id, { ok, error = null, now = new Date(), rules = QUARANTINE_DEFAULTS } = {}) {
   const next = { sources: { ...(state?.sources ?? {}) } };
@@ -105,7 +111,7 @@ export function recordOutcome(state, id, { ok, error = null, now = new Date(), r
     return next;
   }
   const prev = next.sources[id];
-  // 已经隔离过了：保留原截止时间（不要因为又失败一次就无限延长）
+  // Already quarantined: keep the original deadline (one more failure must not extend it forever)
   if (prev && Date.parse(prev.until ?? '') > now.getTime()) return next;
   const failures = (prev?.failures ?? 0) + 1;
   const limit = Math.max(1, Number(rules.failures) || QUARANTINE_DEFAULTS.failures);
@@ -117,14 +123,15 @@ export function recordOutcome(state, id, { ok, error = null, now = new Date(), r
   return next;
 }
 
-// ───────────────────────────────────────────── 调度计划
+// ───────────────────────────────────────────── schedule plan
 
 /**
- * 把来源分成「按出口分组」的调度计划。
+ * Split the sources into a schedule plan "grouped by egress".
  *
- * 分组内保持原有顺序（间隔由调用方按 rateLimit 决定），组之间可以并行。
+ * Order is preserved inside a group (the delay is the caller's decision, from rateLimit); groups may run
+ * in parallel.
  * @param {Array} sources
- * @param {(source:object)=>string} resolveMode 这条来源实际走哪个出口
+ * @param {(source:object)=>string} resolveMode which egress this source actually takes
  * @param {{now?:Date, rules?:object, quarantine?:object}} opts
  * @returns {{ groups: {mode:string, sources:object[]}[], skipped: object[], quarantined: object[] }}
  */
@@ -141,13 +148,13 @@ export function planFetch(sources, resolveMode, opts = {}) {
       skipped.push({ source: s, ok: false, skipped: 'quarantined', error: `连续失败 ${q.failures} 次，已隔离至 ${q.until}（${q.minutesLeft} 分钟后自动重试）` });
       continue;
     }
-    // 观测模式跳过登录态来源时已经在 observe.js 里剔除了；这里只管出口分组
+    // Observation mode already drops logged-in sources in observe.js; here we only handle egress grouping
     const mode = resolveMode(s) ?? 'direct';
     if (!byMode.has(mode)) byMode.set(mode, []);
     byMode.get(mode).push(s);
   }
 
-  // 稳定的组顺序（direct → proxy → tor），便于日志好读、测试好断言
+  // A stable group order (direct -> proxy -> tor), so logs read well and tests assert well
   const order = ['direct', 'proxy', 'tor'];
   const groups = [...byMode.entries()]
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))

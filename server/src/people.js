@@ -1,24 +1,24 @@
-// people.js — 按「人」关注 / follow people, not sources
+// people.js — follow people, not sources / follow people, not sources
 //
-// 为什么需要这一层：来源是**采集单位**，不是使用者真正关心的东西 ——
-// 使用者心里想的是「我要盯这 20 个人」。之前只能靠「把 20 个来源都打开」来近似，
-// 结果是关心的人漏了、不关心的刷了一片。
+// Why this layer is needed: a source is a **collection unit**, not what the user actually cares about --
+// what the user has in mind is "I want to watch these 20 people". Previously that could only be approximated by
+// "turning on all 20 sources", which meant missing the people you care about and flooding on the ones you do not.
 //
-// 这一层的职责正好三件：
-//   1) 把「人」和「这个人的账号在哪」绑起来（bilibili uid / X handle / YouTube 频道 / Twitch）
-//   2) 把情报条目**本地**归属到人（纯字符串匹配，不联网、不用 LLM）
-//   3) 按人聚合输出（信息流 / 导出 / 通知文案）
+// This layer has exactly three responsibilities:
+//   1) bind a "person" to where that person's accounts live (bilibili uid / X handle / YouTube channel / Twitch)
+//   2) attribute intel items to people **locally** (pure string matching, no network, no LLM)
+//   3) aggregate output per person (intel stream / export / notification text)
 //
-// 匹配规则的两个要点（都踩过坑才写成这样）：
-//   · **中日文没有词边界**，所以 CJK 别名必须用子串匹配（否则「嘉然」永远匹配不到
-//     「【嘉然】新动态」这种标题）
-//   · **拉丁字母必须要求词边界**，否则 `Mika` 会命中 `Mikado`、`Rei` 会命中 `Reimu` ——
-//     这是人名匹配最常见的假阳性
-//   · 命中要**带证据**（命中了哪个别名、在哪个字段），界面上要能解释「凭什么说这条是他的」
+// Two key points of the matching rules (both written this way only after stepping on the pitfalls):
+//   · **There is no word boundary in the CJK script**, so a CJK alias must use substring matching (otherwise a Chinese
+//     name would never match a title that wraps it in corner brackets, which is the usual shape of a post title)
+//   · **Latin text must require word boundaries**, otherwise `Mika` hits `Mikado` and `Rei` hits `Reimu` --
+//     that is the most common false positive in name matching
+//   · A hit must **carry evidence** (which alias hit, in which field), so the UI can explain "why is this one theirs"
 
 import { PLATFORM_URLS } from './vdb.js';
 
-/** 别名里是否含 CJK（汉字/假名/韩文）→ 决定用子串还是词边界匹配 */
+/** Whether an alias contains CJK (Han/kana/Hangul) -> decides substring vs word-boundary matching */
 function hasCJK(s) {
   return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/.test(s);
 }
@@ -28,21 +28,22 @@ export function escapeRe(s) {
 }
 
 /**
- * 从人身上提取所有可用于匹配的别名（名字、别名、任意平台账号）。
+ * Extract every alias usable for matching from a person (name, aliases, accounts on any platform).
  *
- * **平台无关**：这里不硬编码 bilibili。`links` 里有什么平台就按那个平台的形状生成别名 ——
- *   · 原始 id/handle 本身（`someone_tv`）
- *   · `@handle` 形态（twitter / tiktok / instagram 常见）
- *   · 规范化链接（`twitch.tv/someone_tv`、`space.bilibili.com/672328094`…）
- * 理由：使用者关注的人可能只在 twitch / youtube / twitter 上活动，
- * 而我们的来源（新闻站、wiki、RSS）提到他们时用的往往是 handle 或链接 ——
- * 只认 bilibili 的话，那些条目永远归属不到人。
+ * **Platform-agnostic**: bilibili is not hardcoded here. Whatever platform is in `links` gets aliases generated in
+ * that platform's shape --
+ *   · the raw id/handle itself (`someone_tv`)
+ *   · the `@handle` form (common on twitter / tiktok / instagram)
+ *   · the canonical link (`twitch.tv/someone_tv`, `space.bilibili.com/672328094`…)
+ * Rationale: the people a user follows may only be active on twitch / youtube / twitter,
+ * while our sources (news sites, wikis, RSS) tend to refer to them by handle or link --
+ * if only bilibili were recognized, those items would never be attributed to anyone.
  */
 export function aliasesOf(person) {
   const out = new Set();
   const add = (v, source) => {
     const s = String(v ?? '').trim();
-    if (s.length >= 2) out.add(JSON.stringify([s, source])); // 用 JSON 保序去重
+    if (s.length >= 2) out.add(JSON.stringify([s, source])); // use JSON to dedupe while preserving order
   };
   add(person?.name, 'name');
   add(person?.enName, 'enName');
@@ -54,13 +55,13 @@ export function aliasesOf(person) {
     const id = String(rawId ?? '').trim();
     if (!id || !PLATFORM_URLS[platform]) continue;
     add(id, `${platform}-id`);
-    // 链接形态：twitch.tv/xxx、space.bilibili.com/123、youtube.com/channel/UCxx…
-    // 带不带 www 两种都加：来源里两种写法都会出现（有 www 的模板来自 VDB 的链接表）
+    // Link shapes: twitch.tv/xxx, space.bilibili.com/123, youtube.com/channel/UCxx…
+    // Add both with and without www: sources use both spellings (the www templates come from VDB's link table)
     const url = PLATFORM_URLS[platform].replace('{id}', id);
     const bare = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
     add(bare, `${platform}-url`);
     if (bare.startsWith('www.')) add(bare.slice(4), `${platform}-url`);
-    // 像 handle 的平台再补一个 @ 形态
+    // Handle-like platforms also get an @ form
     if (['twitter', 'tiktok', 'instagram', 'telegram', 'afdian'].includes(platform)) {
       const h = id.replace(/^@/, '');
       add(h, `${platform}-handle`);
@@ -74,11 +75,12 @@ export function aliasesOf(person) {
 }
 
 /**
- * 条目里参与匹配的字段（标题权重最高）。
+ * The fields of an item that take part in matching (title has the highest weight).
  *
- * `sourceName` 一定要在里面：来源名字本身就常是人名（`B站动态 · 嘉然今天吃什么`），
- * 那说明「这个来源就是这个人的账号」—— 这是最强的归属信号之一，
- * 漏掉它会让一整类条目（标题里没写名字的）完全归属不到人。
+ * `sourceName` must be in there: a source name is itself often a person's name (e.g. the bilibili-dynamics source
+ * named after one person's account), which means "this source is this person's account" -- one of the strongest
+ * attribution signals there is; leaving it out makes a whole class of items (those without a name in the title)
+ * unattributable.
  */
 const FIELDS = [
   ['title', 3],
@@ -94,7 +96,7 @@ const FIELDS = [
 ];
 
 /**
- * 编译匹配器。预先把正则建好，避免逐条编译。
+ * Compile the matchers. The regexes are built up front to avoid compiling per item.
  * @returns {{person:object, alias:string, source:string, re:RegExp}[]}
  */
 export function buildMatchers(people) {
@@ -103,8 +105,8 @@ export function buildMatchers(people) {
     if (!p || p.enabled === false) continue;
     for (const { value, source } of aliasesOf(p)) {
       const re = hasCJK(value)
-        ? new RegExp(escapeRe(value), 'iu') // CJK：子串
-        : new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(value)}(?![\\p{L}\\p{N}])`, 'iu'); // 拉丁：词边界
+        ? new RegExp(escapeRe(value), 'iu') // CJK: substring
+        : new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(value)}(?![\\p{L}\\p{N}])`, 'iu'); // Latin: word boundary
       matchers.push({ person: p, alias: value, source, re });
     }
   }
@@ -112,12 +114,12 @@ export function buildMatchers(people) {
 }
 
 /**
- * 取出某个字段里**所有可匹配的字符串**。
+ * Pull **every matchable string** out of one field.
  *
- * 为什么不能直接 String(field)：条目里的 `sourceName` 是本地化对象 `{ zh, en }`，
- * `String({zh,en})` 等于 `"[object Object]"` —— 那样来源名这条最强的归属信号
- * 在生产数据上**完全失效**，而且不会报错（只有用对象当别名的荒谬情况才会命中）。
- * 所以对象要摊平成一串候选字符串。
+ * Why not simply String(field): `sourceName` in an item is a localized object `{ zh, en }`, and
+ * `String({zh,en})` equals `"[object Object]"` -- that would make the source name, the strongest attribution
+ * signal, **completely useless** on production data, without raising any error (only the absurd case of matching
+ * an object-as-alias would hit). So objects have to be flattened into a list of candidate strings.
  */
 function fieldStrings(value) {
   if (!value) return [];
@@ -129,7 +131,7 @@ function fieldStrings(value) {
 }
 
 /**
- * 一条情报属于哪些人。
+ * Which people an intel item belongs to.
  * @returns {{ids:string[], hits:{id:string,name:string,alias:string,source:string,field:string}[]}}
  */
 export function matchItem(item, matchers) {
@@ -142,13 +144,13 @@ export function matchItem(item, matchers) {
       if (!candidates.some((s) => m.re.test(s))) continue;
       ids.add(m.person.id);
       hits.push({ id: m.person.id, name: m.person.name, alias: m.alias, source: m.source, field, weight });
-      break; // 一个人在同一字段命中一次就够
+      break; // one hit per person per field is enough
     }
   }
   return { ids: [...ids], hits };
 }
 
-/** 给整批条目打上归属（就地写入 people / peopleHits） */
+/** Attribute a whole batch of items (writes people / peopleHits in place) */
 export function annotateItems(items, people) {
   const matchers = buildMatchers(people);
   let matched = 0;
@@ -161,8 +163,8 @@ export function annotateItems(items, people) {
 }
 
 /**
- * 按人聚合：每个人的条目数、最近一次、以及条目本身。
- * 排序用「最近出现」而不是条目数 —— 关注名单里最先要看的永远是「谁刚有动静」。
+ * Aggregate per person: each person's item count, most recent item, and the items themselves.
+ * Sorting uses "most recent appearance" rather than item count -- what the follow list needs to show first is always "who just moved".
  */
 export function feedByPerson(items, people, { id = null, limit = 100 } = {}) {
   const matchers = buildMatchers(people);
@@ -191,7 +193,7 @@ export function feedByPerson(items, people, { id = null, limit = 100 } = {}) {
   return rows;
 }
 
-/** 从实体聚合里推荐「值得加进关注名单的人」（本地统计，不联网） */
+/** Recommend "people worth adding to the follow list" from entity aggregates (local stats, no network) */
 export function suggestFromPeople(entities, people, { minCount = 2, limit = 30 } = {}) {
   const known = new Set();
   for (const p of people ?? []) for (const { value } of aliasesOf(p)) known.add(value.toLowerCase());
@@ -204,13 +206,13 @@ export function suggestFromPeople(entities, people, { minCount = 2, limit = 30 }
 }
 
 /**
- * 允许的链接平台键。
+ * The allowed link platform keys.
  *
- * 这里**必须**跟 vdb.js 的 PLATFORM_URLS 对齐（而不是手写一小串）：
- * VDB 导入会把记录里的 accounts 原样写进 links，如果这张白名单只认识
- * bilibili/twitter/youtube/twitch，导入时那些 twitch 之外的人（weibo、acfun、
- * niconico、showroom、pixiv、afdian…）的账号就被**静默丢掉**了 ——
- * 而「使用者的关注对象不一定在 bilibili 上」正是这一层要支持的事。
+ * This **must** stay aligned with PLATFORM_URLS in vdb.js (rather than a hand-written short list):
+ * VDB import writes the accounts from a record into links verbatim, so if this allowlist only knows
+ * bilibili/twitter/youtube/twitch, then at import time the accounts of everyone outside twitch (weibo, acfun,
+ * niconico, showroom, pixiv, afdian…) would be **silently dropped** --
+ * and "the people a user follows are not necessarily on bilibili" is exactly what this layer has to support.
  */
 const LINK_KEYS = Object.keys(PLATFORM_URLS);
 
@@ -238,13 +240,13 @@ export function sanitizePerson(input, i = 0) {
       notes: String(input?.notes ?? '').trim().slice(0, 500),
       links,
       enabled: input?.enabled !== false,
-      // 这个人的消息用什么级别推（urgent 会豁免静默时段）
+      // What level this person's messages are pushed at (urgent bypasses the quiet hours)
       notifyLevel: ['info', 'alert', 'urgent'].includes(input?.notifyLevel) ? input.notifyLevel : 'alert',
     },
   };
 }
 
-/** 单人的导出（给「把某个人的情报发给朋友」和 RSS/JSON 消费用） */
+/** Single-person export (for "send someone's intel to a friend" and for RSS/JSON consumers) */
 export function personExport(person, items, format = 'json') {
   const rows = items ?? [];
   if (format === 'json') {

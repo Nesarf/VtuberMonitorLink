@@ -1,5 +1,6 @@
-// fetchplan-test.mjs — 抓取调度策略的自检
-// 分组并行 / 失败隔离 / 降级阶梯：全是纯函数，拿固定时间与固定失败序列把行为钉住。
+// fetchplan-test.mjs — self-test for the fetch scheduling policy
+// Grouped parallelism / failure isolation / degradation ladder: all pure functions, pinned down
+// with fixed times and a fixed failure sequence.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,9 +31,9 @@ const t = (name, fn) => {
 
 const at = (mins) => new Date(Date.UTC(2026, 0, 1, 0, 0) + mins * 60000);
 
-process.stdout.write('\nfetchplan: 按出口分组\n');
+process.stdout.write('\nfetchplan: grouping by egress\n');
 
-t('按出口分组：同组保持原顺序，组之间不重叠也不丢', () => {
+t('group by egress: same group keeps the original order, groups neither overlap nor lose anything', () => {
   const sources = [
     { id: 'a', fetch: 'rss' },
     { id: 'b', fetch: 'browser' },
@@ -44,58 +45,59 @@ t('按出口分组：同组保持原顺序，组之间不重叠也不丢', () =>
   assert.deepEqual(
     plan.groups.map((g) => g.mode),
     ['direct', 'tor'],
-    '组顺序应稳定（direct 在前）',
+    'group order should be stable (direct first)',
   );
-  assert.deepEqual(plan.groups[0].sources.map((s) => s.id), ['a', 'c', 'd'], '同组内保持输入顺序');
+  assert.deepEqual(plan.groups[0].sources.map((s) => s.id), ['a', 'c', 'd'], 'input order is kept inside a group');
   assert.deepEqual(plan.groups[1].sources.map((s) => s.id), ['b']);
   const all = plan.groups.flatMap((g) => g.sources.map((s) => s.id)).sort();
-  assert.deepEqual(all, ['a', 'b', 'c', 'd'], '不能丢来源');
+  assert.deepEqual(all, ['a', 'b', 'c', 'd'], 'no source may be lost');
 });
 
-t('未指定出口时归入 direct（而不是消失）', () => {
+t('an unspecified egress falls into direct (rather than vanishing)', () => {
   const plan = planFetch([{ id: 'x', fetch: 'rss' }], () => undefined);
   assert.equal(plan.groups.length, 1);
   assert.equal(plan.groups[0].mode, 'direct');
   assert.equal(plan.groups[0].sources.length, 1);
 });
 
-process.stdout.write('\nfetchplan: 连续失败隔离\n');
+process.stdout.write('\nfetchplan: consecutive-failure isolation\n');
 
-t('连续失败到阈值才隔离，成功后清零', () => {
+t('isolation only after the threshold, and a success clears the count', () => {
   let st = { sources: {} };
   st = recordOutcome(st, 's1', { ok: false, error: 'timeout', now: at(0) });
-  assert.equal(quarantineOf(st, 's1', { now: at(1) }), null, '第 1 次失败不该隔离');
+  assert.equal(quarantineOf(st, 's1', { now: at(1) }), null, 'failure 1 should not quarantine');
   st = recordOutcome(st, 's1', { ok: false, error: 'timeout', now: at(1) });
-  assert.equal(quarantineOf(st, 's1', { now: at(2) }), null, '第 2 次失败不该隔离');
+  assert.equal(quarantineOf(st, 's1', { now: at(2) }), null, 'failure 2 should not quarantine');
   st = recordOutcome(st, 's1', { ok: false, error: 'timeout', now: at(2) });
   const q = quarantineOf(st, 's1', { now: at(3) });
-  assert.ok(q, '第 3 次失败应当隔离');
+  assert.ok(q, 'failure 3 should quarantine');
   assert.equal(q.failures, 3);
-  // 钉「隔离时长」而不是推导出来的分钟数（那是 Math.ceil 的结果，容易被自己的算术骗到）
-  assert.equal(Date.parse(q.until) - at(2).getTime(), 6 * 3600000, '默认隔离 6 小时');
+  // Pin the "quarantine duration" rather than the derived minute count (that is a Math.ceil
+  // result, and it is easy to fool yourself with your own arithmetic)
+  assert.equal(Date.parse(q.until) - at(2).getTime(), 6 * 3600000, 'default quarantine is 6 hours');
   assert.equal(q.minutesLeft, Math.ceil((Date.parse(q.until) - at(3).getTime()) / 60000));
 
-  // 成功一次就清零
+  // one success clears it
   const cleared = recordOutcome(st, 's1', { ok: true, now: at(4) });
   assert.equal(quarantineOf(cleared, 's1', { now: at(5) }), null);
 });
 
-t('隔离会自动过期（不是永久拉黑）', () => {
+t('the quarantine expires on its own (it is not a permanent blacklist)', () => {
   let st = { sources: {} };
   for (let i = 0; i < 3; i++) st = recordOutcome(st, 's2', { ok: false, now: at(i) });
-  assert.ok(quarantineOf(st, 's2', { now: at(10) }), '10 分钟内仍隔离');
-  assert.equal(quarantineOf(st, 's2', { now: at(6 * 60 + 10) }), null, '6 小时后应当自动解除');
+  assert.ok(quarantineOf(st, 's2', { now: at(10) }), 'still quarantined at 10 minutes');
+  assert.equal(quarantineOf(st, 's2', { now: at(6 * 60 + 10) }), null, 'it should lift by itself after 6 hours');
 });
 
-t('隔离期间再失败一次，不会把截止时间无限延长', () => {
+t('failing again during the quarantine does not extend the deadline indefinitely', () => {
   let st = { sources: {} };
   for (let i = 0; i < 3; i++) st = recordOutcome(st, 's3', { ok: false, now: at(0) });
   const until = st.sources.s3.until;
   st = recordOutcome(st, 's3', { ok: false, now: at(30) });
-  assert.equal(st.sources.s3.until, until, '截止时间应保持不变（否则失败越多锁越久）');
+  assert.equal(st.sources.s3.until, until, 'the deadline should stay put (otherwise more failures mean a longer lock)');
 });
 
-t('自定义规则：2 次就隔离、隔离 1 小时', () => {
+t('custom rules: quarantine after 2 failures, for 1 hour', () => {
   const rules = { failures: 2, hours: 1 };
   let st = { sources: {} };
   st = recordOutcome(st, 's4', { ok: false, now: at(0), rules });
@@ -103,11 +105,11 @@ t('自定义规则：2 次就隔离、隔离 1 小时', () => {
   st = recordOutcome(st, 's4', { ok: false, now: at(1), rules });
   const q2 = quarantineOf(st, 's4', { now: at(2), rules });
   assert.ok(q2);
-  assert.equal(Date.parse(q2.until) - at(1).getTime(), 3600000, '自定义隔离 1 小时');
+  assert.equal(Date.parse(q2.until) - at(1).getTime(), 3600000, 'a custom quarantine of 1 hour');
   assert.equal(q2.rule.hours, 1);
 });
 
-t('被隔离的来源进 skipped 并带上原因，且不再排进任何组', () => {
+t('a quarantined source goes into skipped with a reason, and is planned into no group', () => {
   let st = { sources: {} };
   for (let i = 0; i < 3; i++) st = recordOutcome(st, 'bad', { ok: false, error: 'ECONNRESET', now: at(i) });
   const sources = [
@@ -122,7 +124,7 @@ t('被隔离的来源进 skipped 并带上原因，且不再排进任何组', ()
   assert.match(plan.skipped[0].error, /ECONNRESET|连续失败/);
 });
 
-t('隔离状态能存能读（坏文件当空状态，不抛错）', () => {
+t('the quarantine state can be saved and read back (a broken file counts as empty, no throw)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-quar-'));
   const cfg = { paths: { logsDir: dir } };
   let st = { sources: {} };
@@ -131,39 +133,39 @@ t('隔离状态能存能读（坏文件当空状态，不抛错）', () => {
   const back = loadQuarantine(cfg);
   assert.equal(back.sources.x.failures, 1);
   fs.writeFileSync(path.join(dir, 'quarantine.json'), '{ broken', 'utf8');
-  assert.deepEqual(loadQuarantine(cfg), { sources: {} }, '坏文件要能容错');
+  assert.deepEqual(loadQuarantine(cfg), { sources: {} }, 'a broken file must be tolerated');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-process.stdout.write('\nfetchplan: 降级阶梯\n');
+process.stdout.write('\nfetchplan: degradation ladder\n');
 
-t('内置阶梯：只放站得住脚的转换', () => {
+t('built-in ladder: only conversions that hold up', () => {
   assert.deepEqual(fetchLadder({ fetch: 'mediawiki-api' }).map((s) => s.fetch), ['browser']);
   assert.deepEqual(fetchLadder({ fetch: 'rss' }).map((s) => s.fetch), ['browser']);
-  assert.deepEqual(fetchLadder({ fetch: 'bili-opus' }), [], '免登录动态没有可替代方式（不能自动升级成需登录的那个）');
+  assert.deepEqual(fetchLadder({ fetch: 'bili-opus' }), [], 'a login-free dynamic feed has no substitute (it must not auto-upgrade to the one that needs a login)');
   assert.deepEqual(fetchLadder({ fetch: 'browser' }), []);
 });
 
-t('来源可以自己声明 fallbacks，且优先于内置阶梯', () => {
+t('a source can declare its own fallbacks, and they win over the built-in ladder', () => {
   const s = { fetch: 'browser', fallbacks: ['rss', { fetch: 'mediawiki-api' }] };
   assert.deepEqual(fetchLadder(s).map((x) => x.fetch), ['rss', 'mediawiki-api']);
 });
 
-t('阶梯去重，也不会把自己排进去（防止死循环）', () => {
+t('the ladder is deduped and never schedules itself (guards against an infinite loop)', () => {
   const s = { fetch: 'rss', fallbacks: ['rss', 'browser', 'browser'] };
   const ladder = fetchLadder(s);
-  assert.deepEqual(ladder.map((x) => x.fetch), ['browser'], '自己与重复项都要去掉');
+  assert.deepEqual(ladder.map((x) => x.fetch), ['browser'], 'both the source itself and duplicates must go');
   const dup = { fetch: 'mediawiki-api', fallbacks: ['browser'] };
-  assert.deepEqual(fetchLadder(dup).map((x) => x.fetch), ['browser'], '内置与自声明重复时只留一个');
+  assert.deepEqual(fetchLadder(dup).map((x) => x.fetch), ['browser'], 'when built-in and self-declared overlap, keep only one');
 });
 
-t('默认隔离规则是「3 次 / 6 小时」（写在这里，免得以后被悄悄改掉）', () => {
+t('the default isolation rule is "3 failures / 6 hours" (written here so it cannot be changed quietly later)', () => {
   assert.deepEqual(QUARANTINE_DEFAULTS, { failures: 3, hours: 6 });
 });
 
-process.stdout.write('\nfetchplan: 接进 fetchAll 之后的实际行为\n');
+process.stdout.write('\nfetchplan: the actual behaviour once wired into fetchAll\n');
 
-/** 用测试接缝替换抓取方式，跑真实的 fetchAll（时间与调用顺序都能断言） */
+/** Swap the fetch methods through a test seam and run the real fetchAll (times and call order are both assertable) */
 async function runFetchAll(sources, { table, cfg: cfgOverride = {}, log } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-fetch-'));
   const cfg = {
@@ -180,7 +182,7 @@ async function runFetchAll(sources, { table, cfg: cfgOverride = {}, log } = {}) 
   }
 }
 
-await t('队间并行、队内串行（同一个出口不并发，不同出口不互相等）', async () => {
+await t('parallel between queues, serial within a queue (the same egress never runs concurrently, different egresses do not wait for each other)', async () => {
   const events = [];
   const mk = () => async (src) => {
     events.push(`start:${src.id}`);
@@ -196,12 +198,12 @@ await t('队间并行、队内串行（同一个出口不并发，不同出口�
   ];
   const out = await runFetchAll(sources, { table });
   assert.equal(out.length, 3);
-  assert.deepEqual(out.map((r) => r.source.id), ['d1', 'd2', 't1'], '结果要回到输入顺序');
-  assert.ok(events.indexOf('end:d1') < events.indexOf('start:d2'), '同队必须串行: ' + events.join(' '));
-  assert.ok(events.indexOf('start:t1') < events.indexOf('end:d1'), '不同队应当并行: ' + events.join(' '));
+  assert.deepEqual(out.map((r) => r.source.id), ['d1', 'd2', 't1'], 'results must return in input order');
+  assert.ok(events.indexOf('end:d1') < events.indexOf('start:d2'), 'the same queue must be serial: ' + events.join(' '));
+  assert.ok(events.indexOf('start:t1') < events.indexOf('end:d1'), 'different queues should run in parallel: ' + events.join(' '));
 });
 
-await t('降级阶梯：RSS 失败后自动改用 browser，并记下用了哪一步', async () => {
+await t('degradation ladder: after RSS fails it switches to browser automatically, and records which step was used', async () => {
   const calls = [];
   const table = {
     rss: async (src) => {
@@ -214,12 +216,12 @@ await t('降级阶梯：RSS 失败后自动改用 browser，并记下用了哪�
     },
   };
   const ladderOut = await runFetchAll([{ id: 's1', fetch: 'rss', proxy: 'direct' }], { table });
-  assert.deepEqual(calls, ['rss:s1', 'browser:s1'], '应当按阶梯依次尝试: ' + calls.join(','));
+  assert.deepEqual(calls, ['rss:s1', 'browser:s1'], 'the ladder should be tried in order: ' + calls.join(','));
   assert.equal(ladderOut[0].ok, true);
   assert.deepEqual(ladderOut[0].ladder, { from: 'rss', to: 'browser', firstError: 'feed 404' });
 });
 
-await t('连续失败到阈值后，下一轮不再请求这条来源（并在结果里说明）', async () => {
+await t('after consecutive failures reach the threshold, the next round no longer requests that source (and says so in the result)', async () => {
   const calls = [];
   const table = {
     rss: async (src) => {
@@ -237,9 +239,9 @@ await t('连续失败到阈值后，下一轮不再请求这条来源（并在�
   for (let i = 0; i < 3; i++) {
     await fetchAll(sources, { cfg, log: { info() {}, warn() {}, error() {} }, fetchTable: table });
   }
-  assert.equal(calls.length, 3, '前三次都该真的去抓（每次失败一次）');
+  assert.equal(calls.length, 3, 'the first three should really fetch (one failure each)');
   const fourth = await fetchAll(sources, { cfg, log: { info() {}, warn() {}, error() {} }, fetchTable: table });
-  assert.equal(calls.length, 3, '第四次不该再发请求');
+  assert.equal(calls.length, 3, 'the fourth should send no request at all');
   assert.equal(fourth[0].skipped, 'quarantined');
   assert.match(fourth[0].error, /隔离至/);
   fs.rmSync(dir, { recursive: true, force: true });

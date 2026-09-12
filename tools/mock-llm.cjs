@@ -32,7 +32,7 @@ function readBody(req) {
   });
 }
 
-/** 如果这是「特征抽取」请求，按它要的条数回一个 JSON 数组 */
+/** If this is a "feature extraction" request, answer with a JSON array sized to the count it asks for */
 function buildExtraction(userPrompt) {
   const text = String(userPrompt ?? '');
   const count = Number((/共\s*(\d+)\s*条/.exec(text) ?? [])[1] ?? 0);
@@ -56,8 +56,9 @@ function buildExtraction(userPrompt) {
 
 /** Build a report that proves what actually arrived in the prompt. */
 function buildReport(userPrompt) {
-  // 注意：**不能**在这里也去嗅探「共 N 条」—— 报告的 prompt 里同样有这句话，
-  // 那样会把报告本身换成 JSON 数组（这个坑踩过一次，报告页因此一个标题都没有）。
+  // Note: this must **not** also sniff for the "N items in total" header line — the report prompt
+  // contains that same phrase too, so doing it would replace the report itself with a JSON array
+  // (a pitfall we hit once: the reports page then had not a single heading).
   const text = String(userPrompt ?? '');
   const sourceSections = (text.match(/^## /gm) || []).length;
   const watchLines = (text.match(/^- 【监视】/gm) || []).length;
@@ -131,7 +132,7 @@ const server = http.createServer(async (req, res) => {
     if (/^ping$/.test(String(user).trim()) || (body.max_tokens ?? 0) <= 4) {
       return send(200, { choices: [{ message: { role: 'assistant', content: 'pong' } }] });
     }
-    // 特征抽取走 JSON 数组，其余走报告
+    // feature extraction goes to the JSON array, everything else goes to the report
     const content = /结构化抽取器/.test(system) ? buildExtraction(user) : buildReport(user);
     return send(200, {
       id: 'mock-1',

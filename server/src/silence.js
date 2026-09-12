@@ -1,40 +1,46 @@
-// silence.js — 静默/缺失检测：**「没动静」也是一条情报**
+// silence.js — silence/absence detection: **"nothing happened" is intelligence too**
 //
-// 为什么需要：现有告警全是「内容变了」——改了多少字节、命中哪个关键词。
-// 但对「判断一个箱的真实状态」来说，**缺失**往往比内容更有信息量：
-// 日更的人突然停更、几个人同时安静、整箱连着几天没有任何动静（企划结束？集体休假？账号出事？）。
-// 这些在现在的告警体系里是**看不见的**：没有条目就没有告警。
+// Why this is needed: every existing alert is about "the content changed" — how many bytes changed,
+// which keyword was hit. But for "judging the true state of an agency", **absence** is often more
+// informative than content: a daily poster suddenly stops, several people go quiet at once,
+// a whole agency shows no activity for days (project over? group holiday? account trouble?).
+// None of that is **visible** in the current alerting system: no items means no alert.
 //
-// 判据分两层，都相对**各自的基线**，不用拍脑袋的固定天数：
-//   1. 个人：某人连续多少天没有条目，超过他自己近期节奏的容忍区间才报（日更的人和月更的人
-//      不该用同一个阈值）；完全没有历史的人不报（没有基线就没有异常）。
-//   2. 整箱：同一 agency 的成员**同时**没动静 —— 单个人安静是常态，一箱人同时安静才可疑。
+// The criteria come in two layers, both relative to **each one's own baseline** rather than a
+// guessed fixed number of days:
+//   1. Person: how many consecutive days someone has no items, reported only once that exceeds the
+//      tolerance range of their own recent rhythm (a daily poster and a monthly poster should not
+//      share one threshold); someone with no history at all is never reported (no baseline, no anomaly).
+//   2. Agency-wide: members of the same agency go quiet **at the same time** — one person being quiet
+//      is normal, a whole agency going quiet at once is suspicious.
 //
-// 结果是「告警」而不是「结论」：这里只负责把可疑的缺失摆出来，
-// 判断留给人（也可能是企划休假、也可能是真出事了）。
+// The result is an "alert", not a "conclusion": this module only puts the suspicious absences on the
+// table, the judgement is left to a human (it may be a planned holiday, or it may be real trouble).
 import { AGENCY_HOSTS, urlHost } from './observe.js';
 
-/** 一天一条都没有时，允许静默多少天才会报警（默认按个人节奏推导，这里是兜底下限/上限） */
+/** How many days of silence are allowed before alerting when a day has not a single item (by default inferred from the person's own rhythm; these are the fallback floor/ceiling) */
 export const SILENCE_DEFAULTS = {
   enabled: true,
-  sampleDays: 20, // 用最近多少个**活跃日**估节奏
-  minDays: 3, // 至少静默这么多天才值得报（避免正常间隔被当成异常）
-  maxDays: 90, // 兜底上限：再长的节奏也不至于让人等一年才报
-  factor: 2.5, // 容忍区间 = 平均间隔 × factor，再夹在 minDays / maxDays 之间
-  groupQuietDays: 5, // 一箱人同时静默多少天算箱级信号
-  minMembers: 3, // 少于这么多成员的「箱」不参与箱级判断
+  sampleDays: 20, // how many recent **active days** to estimate the rhythm from
+  minDays: 3, // at least this many silent days before it is worth reporting (so a normal gap is not treated as an anomaly)
+  maxDays: 90, // fallback ceiling: however long the rhythm, nobody should have to wait a year for a report
+  factor: 2.5, // tolerance range = mean gap x factor, then clamped between minDays / maxDays
+  groupQuietDays: 5, // how many days of simultaneous silence across one agency counts as an agency-level signal
+  minMembers: 3, // an "agency" with fewer members than this does not take part in agency-level judgement
 };
 
 const DAY_MS = 86400000;
 const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
 
 /**
- * 从「某人 -> { 日期: 条数 }」算出他的**节奏**与最后活跃时间。
+ * From "person -> { day: item count }" compute their **rhythm** and last active time.
  *
- * 节奏 = 最近若干个活跃日之间的**平均间隔**（不是「窗口内活跃天数 / 窗口长度」）。
- * 踩过的坑：第一版把窗口锚在「最后一次活跃那天」，于是「三个月只发了三条」的人
- * 窗口里只剩他自己那一格 → 间隔算成 1 天 → 被当成日更，容忍区间塌到 3 天，
- * 停 5 天就误报。节奏要按**相邻活跃日的间距**算，才和「多久没动静」可比。
+ * Rhythm = the **mean gap** between the most recent active days (not "active days in window / window length").
+ * A trap we already hit: the first version anchored the window on "the last active day", so for someone
+ * who "posted three times in three months" the window held only their own single slot -> the gap came out
+ * as 1 day -> they were treated as a daily poster, the tolerance range collapsed to 3 days, and a 5-day
+ * break triggered a false report. The rhythm must be computed from the **spacing between consecutive
+ * active days** for it to be comparable with "how long has it been quiet".
  *
  * @returns {{mean:number|null, gapDays:number|null, lastDay:string|null, quietDays:number|null, activeDays:number, items:number}}
  */
@@ -55,7 +61,7 @@ export function baselineOf(byDayForPerson, { now = new Date(), sampleDays = SILE
   }
 
   return {
-    mean: Number((items / days.length).toFixed(2)), // 每个活跃日平均几条（只用于展示）
+    mean: Number((items / days.length).toFixed(2)), // mean items per active day (display only)
     gapDays,
     lastDay,
     quietDays,
@@ -64,20 +70,20 @@ export function baselineOf(byDayForPerson, { now = new Date(), sampleDays = SILE
   };
 }
 
-/** 这个人的容忍区间（天）：基线间隔 × factor，夹在 minDays 与 maxDays 之间 */
+/** This person's tolerance range (days): baseline gap x factor, clamped between minDays and maxDays */
 export function toleranceDays(baseline, rules = SILENCE_DEFAULTS) {
   const gap = baseline?.gapDays;
-  if (!gap || !Number.isFinite(gap)) return null; // 没有基线（只有一天记录）→ 不判断，宁可不报
+  if (!gap || !Number.isFinite(gap)) return null; // no baseline (only one day of records) -> do not judge; better to stay silent than to misreport
   const raw = gap * (Number(rules.factor) || SILENCE_DEFAULTS.factor);
   return Math.min(Number(rules.maxDays) || SILENCE_DEFAULTS.maxDays, Math.max(Number(rules.minDays) || SILENCE_DEFAULTS.minDays, raw));
 }
 
 /**
- * 检测静默。
+ * Detect silence.
  *
  * @param {object} o
- * @param {object} o.byDay     archive.peopleSeries() 的 byDay：{ personId: { 'YYYY-MM-DD': n } }
- * @param {Array}  o.people    config.people（拿来取名字与 agency）
+ * @param {object} o.byDay     byDay from archive.peopleSeries(): { personId: { 'YYYY-MM-DD': n } }
+ * @param {Array}  o.people    config.people (used to get names and agency)
  * @param {object} o.rules     config.silence
  * @param {Date}   o.now
  * @returns {{person:Array, group:Array, checked:number, skippedNoBaseline:number}}
@@ -112,13 +118,15 @@ export function detectSilence({ byDay = {}, people = [], rules = {}, now = new D
         baselineGapDays: baseline.gapDays,
         lastDay: baseline.lastDay,
         level: baseline.quietDays >= tol * 2 ? 'high' : 'warn',
+        // Report-visible product copy: this string ends up in the daily report and in push
+        // bodies, so it stays in the product's language (see docs/ENGLISH-LOGIC.md §1).
         reason: `${name} 已 ${baseline.quietDays} 天没有新条目（他自己的节奏约 ${baseline.gapDays} 天一条，容忍 ${tol} 天）`,
       });
     }
     rows.push({ personId, name, agency: person?.agency ?? null, quietDays: baseline.quietDays, lastDay: baseline.lastDay });
   }
 
-  // 箱级：同一 agency 的成员**同时**安静
+  // Agency level: members of the same agency go quiet **at the same time**
   const byAgency = new Map();
   for (const row of rows) {
     if (!row.agency) continue;
@@ -136,6 +144,7 @@ export function detectSilence({ byDay = {}, people = [], rules = {}, now = new D
         members: quiet.map((m) => m.name),
         memberCount: members.length,
         level: quiet.length === members.length ? 'high' : 'warn',
+        // Report-visible product copy (see the person-level reason above)
         reason: `${agency} 的 ${quiet.length}/${members.length} 位成员同时安静了 ${Math.min(...quiet.map((m) => m.quietDays))} 天以上 —— 单个人安静是常态，一箱人同时安静值得看一眼`,
       });
     }
@@ -146,21 +155,21 @@ export function detectSilence({ byDay = {}, people = [], rules = {}, now = new D
   return out;
 }
 
-/** 把静默检测结果压成一行摘要（给日志/报告/推送用） */
+/** Compress the silence detection result into a one-line summary (for logs/reports/pushes) */
 export function silenceSummary(res) {
   const parts = [];
-  if (res?.group?.length) parts.push(`箱级安静 ${res.group.length} 个：${res.group.map((g) => g.agency).join('、')}`);
-  if (res?.person?.length) parts.push(`个人静默 ${res.person.length} 人：${res.person.slice(0, 5).map((p) => p.name).join('、')}`);
-  if (!parts.length) return res?.checked ? `静默检测：${res.checked} 人有基线，均在正常区间` : '静默检测：暂无可判断的基线';
-  return parts.join('；');
+  if (res?.group?.length) parts.push(`agency-level quiet ${res.group.length}: ${res.group.map((g) => g.agency).join(', ')}`);
+  if (res?.person?.length) parts.push(`personal silence ${res.person.length}: ${res.person.slice(0, 5).map((p) => p.name).join(', ')}`);
+  if (!parts.length) return res?.checked ? `silence check: ${res.checked} people have a baseline, all within the normal range` : 'silence check: no baseline available to judge from';
+  return parts.join('; ');
 }
 
-/** 一箱（agency）的成员名单；没填 agency 的按来源/未分组处理 */
+/** Member list of one agency; people with no agency filled in are treated as source/ungrouped */
 export function membersOfAgency(people, agency) {
   return (people ?? []).filter((p) => String(p.agency ?? '') === String(agency));
 }
 
-/** 从箱自托管域名反推 agency 名（official-* 那些来源的 url 就是箱的域名） */
+/** Reverse-engineer the agency name from an agency self-hosted domain (the url of the official-* sources is the agency's domain) */
 export function agencyFromSourceUrl(url) {
   const host = urlHost(url);
   const hit = AGENCY_HOSTS.find((h) => host === h || host.endsWith('.' + h));

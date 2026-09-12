@@ -1,16 +1,18 @@
-// locale-coverage.mjs — 各语言的实际覆盖度 / real per-locale coverage
+// locale-coverage.mjs - real per-locale coverage
 //
-// 为什么需要这个：说「加了 12 种语言」很容易，但**界面到底有多少是母语、多少是英文兜底**
-// 才是有用的信息。缺键会静默回落到英文，使用者看到的是半英半母语的界面，
-// 而没有任何地方会报错 —— 这种「看起来做完了」是最容易骗到自己的状态。
+// Why this exists: claiming "12 languages were added" is easy, but what is actually useful is
+// **how much of the UI is native and how much falls back to English**. Missing keys fall back to
+// English silently, so users see a half-English, half-native UI and nothing anywhere reports an
+// error - that "looks finished" state is the easiest one to fool yourself with.
 //
-// 这个脚本把覆盖度算出来并**卡住下限**：
-//   · 只统计「这个语言自己提供的」键，回落到英文的不算覆盖
-//   · 覆盖度写进 web/src/locales/coverage.json 作为基线，以后掉下来就报错
-//     （棘轮：覆盖度只能往上走，不会因为后来加功能悄悄退化）
+// This script computes coverage and **holds a floor under it**:
+//   - only keys the language provides itself count; English fallbacks are not coverage
+//   - coverage is written to web/src/locales/coverage.json as a baseline, and dropping below it
+//     is an error (a ratchet: coverage may only move up, and features added later cannot quietly
+//     degrade it)
 //
-//   node tools/locale-coverage.mjs            查看 + 与基线比对
-//   node tools/locale-coverage.mjs --update   把当前值写成新基线
+//   node tools/locale-coverage.mjs            report + compare against the baseline
+//   node tools/locale-coverage.mjs --update   write the current numbers as the new baseline
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,15 +27,16 @@ const I18N = path.join(ROOT, 'web/src/i18n.jsx');
 const BASELINE = path.join(ROOT, 'web/src/locales/coverage.json');
 
 /**
- * 词条解析统一走 tools/lib/i18n-source.mjs（唯一实现）。
- * 这里原先自己写了一份 stripStrings/blockFor/topLevelKeys/zhValueLengths ——
- * 于是「管线认得的词条」和「覆盖度统计的词条」可以不一样，正是漏译藏身的地方。
+ * Entry parsing goes through tools/lib/i18n-source.mjs (the single implementation).
+ * This file used to carry its own stripStrings/blockFor/topLevelKeys/zhValueLengths, which let
+ * "the entries the pipeline knows" and "the entries coverage counts" diverge - exactly where
+ * untranslated entries hide.
  */
 const dicts = readDicts(fs.readFileSync(I18N, 'utf8'));
 const zhKeys = new Set(dicts.zh.keys());
 const enKeys = new Set(dicts.en.keys());
 
-// 界面真正用到的 key（只统计这些才有意义：词条里的死键不算）
+// The keys the UI actually uses (only these are worth counting: dead keys in the dictionary do not count)
 const CODE = ['.js', '.jsx'];
 const files = [];
 (function walk(dir) {
@@ -46,17 +49,20 @@ const files = [];
 })(path.join(ROOT, 'web/src'));
 const used = new Set();
 for (const f of files) {
-  for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bt\(\s*'([^']+)'\s*\)/g)) used.add(m[1]);
+  // `tn('key', n)` (number-aware labels) references a key just like `t('key')` does — see BUGS #54
+  for (const m of fs.readFileSync(f, 'utf8').matchAll(/\btn?\(\s*'([^']+)'\s*[,)]/g)) used.add(m[1]);
 }
-// 动态键：tab_<id> / calKind_<kind> / llmFeat_<key> 之类
+// Dynamic keys: tab_<id> / calKind_<kind> / llmFeat_<key> and the like
 const dynamicPrefixes = ['tab_', 'calKind_', 'llmFeat_', 'taskMode_', 'on_', 'freq_', 'field_', 'mode_', 'sort_'];
 for (const k of enKeys) if (dynamicPrefixes.some((p) => k.startsWith(p))) used.add(k);
 
 /**
- * 「本来就不用翻」的键：简中原文与英文**逐字相同**（品牌名与缩写，如 LLM / API Key）。
- * 它们在每种语言里都显示同一个字符串，算进分母只会制造永远补不齐的缺口
- * （每个语言都显示 563/565，看起来像漏了 2 条，其实是这 2 条不需要翻译）。
- * 判据取自源码本身，不另立一份「豁免清单」——清单会漂移，源码不会。
+ * Keys that "never needed translating": the zh source text is **character-for-character** the
+ * same as English (brand names and abbreviations, e.g. LLM / API Key). They render the same
+ * string in every language, and counting them in the denominator only creates a gap that can
+ * never be closed (every language shows 563/565, looking like 2 missing entries when in fact
+ * those 2 need no translation). The predicate comes from the source itself, with no separate
+ * "exemption list" - a list drifts, the source does not.
  */
 const LANG_NEUTRAL = new Set(
   [...used].filter((k) => {
@@ -68,8 +74,9 @@ const localizable = [...used].filter((k) => !LANG_NEUTRAL.has(k));
 const langNeutral = [...LANG_NEUTRAL].sort();
 
 /**
- * 回落链由 tools/lib/locale-chain.mjs 提供（唯一实现，翻译管线也用同一份）。
- * 这里原先自己「复刻」了一遍 i18n.jsx 的逻辑，于是和 humanKeys 漂移成了两套语义。
+ * The fallback chain comes from tools/lib/locale-chain.mjs (the single implementation, also used
+ * by the translation pipeline). This file used to re-implement the i18n.jsx logic, and drifted
+ * into a second, different semantic than humanKeys.
  */
 
 let GENERATED = {};
@@ -79,9 +86,10 @@ try {
   GENERATED = {};
 }
 
-// 机器译文层（可选）：tools/i18n-translate.mjs 的产物。它**算作「已本地化」**——
-// 对使用者来说「有日语译文」和「是人工写的」不改变界面体验；分开统计只是为了知道
-// 哪些还需要人工复核（--review 就是干这个的）。
+// The machine-translation layer (optional): the output of tools/i18n-translate.mjs. It **counts
+// as localized** - to a user, "has a Japanese translation" versus "was written by hand" makes no
+// difference to the UI experience; tracking them separately is only so we know which entries
+// still need human review (that is what --review is for).
 let MACHINE = {};
 try {
   MACHINE = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/machine.json'), 'utf8'));
@@ -89,7 +97,7 @@ try {
   MACHINE = {};
 }
 
-// 术语表：既给「有意保留原文」当豁免依据，也交给管线的判据函数
+// Glossary: both the exemption basis for "intentionally kept as-is" and an input to the pipeline's predicate functions
 let GLOSSARY = {};
 try {
   GLOSSARY = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8'));
@@ -97,21 +105,22 @@ try {
   GLOSSARY = {};
 }
 
-/** 这个语言**自己**提供的键（不含最终回落到英文的那部分） */
+/** The keys this language provides **itself** (excluding whatever finally falls back to English) */
 function ownKeys(code) {
   const keys = new Set();
-  // 英文本身与其拼写变体：不是「翻译」，而是基准语言
-  // （en-GB/AU/CA 的拼写由 toBritish() 从 en 推导，整份都有，不该显示 0%）
+  // English itself and its spelling variants are not a "translation" but the base language
+  // (en-GB/AU/CA spellings are derived from en by toBritish(), they cover the whole dictionary
+  // and must not show 0%)
   if (code.split('-')[0] === 'en') return enKeys;
   for (const c of usableChain(code)) {
     for (const layer of [HAND_COMMON[c], HAND[c], GENERATED[c]]) {
       if (!layer) continue;
       for (const k of Object.keys(layer)) keys.add(k);
     }
-    // 简体是基准语言，它自己那本就够了；繁体由构建期从它整份生成
+    // zh-Hans is a base language, its own dictionary is enough; zh-Hant is generated from it in full at build time
     if (c === 'zh' || c === 'zh-Hans') for (const k of zhKeys) keys.add(k);
   }
-  // 机器译文也算「这个语言自己的」——它直接决定使用者看到什么
+  // Machine translations count as "this language's own" too - they directly decide what the user sees
   for (const c of [code, ...usableChain(code)]) {
     const m = MACHINE[c];
     if (m) for (const k of Object.keys(m)) keys.add(k);
@@ -124,10 +133,12 @@ const rows = [];
 for (const loc of LOCALES) {
   const own = ownKeys(loc.code);
   const covered = localizable.filter((k) => own.has(k)).length;
-  // 「有值」不等于「能用」：机翻漏译会留下汉字原文，模型还会凭空写哨兵
-  // （真实事故：葡语界面出现「daqui a ⟦0⟧ dias」）。判据直接用管线里的那一个函数 ——
-  // 这里原先复制了一份，连「先剔长词还是短词」都不一样。
-  // 被人图层压住的机器词条不算：它**不会显示**，报出来只会让人去修一条看不见的东西。
+  // "Has a value" is not "is usable": a missed machine translation leaves the source text
+  // behind, and the model also invents sentinels (real incident: "daqui a ⟦0⟧ dias" showed up in
+  // the Portuguese UI). The predicate is the one function from the pipeline - this file used to
+  // carry a copy of it, and even disagreed about stripping long terms before short ones.
+  // Machine entries shadowed by the human layer do not count: they **never render**, so reporting
+  // them only sends people off to fix something invisible.
   const mach = MACHINE[loc.code] ?? (loc.code.split('-')[0] === 'en' ? {} : null);
   const shadowed = humanKeys(loc.code);
   let suspicious = 0;
@@ -146,40 +157,43 @@ const bar = (p) => {
   return '█'.repeat(n) + '░'.repeat(20 - n);
 };
 
-process.stdout.write(`\n界面用到的词条: ${used.size} 个（其中 ${langNeutral.length} 条简中原文与英文逐字相同，各语言都不需要翻译：${langNeutral.join(' / ')}）\n`);
-process.stdout.write(`需要本地化的词条: ${total} 个\n\n`);
+process.stdout.write(`\nEntries the UI uses: ${used.size} (of which ${langNeutral.length} have a zh source text identical to English, so no language needs them translated: ${langNeutral.join(' / ')})\n`);
+process.stdout.write(`Entries needing localization: ${total}\n\n`);
 for (const r of rows) {
-  const warn = r.suspicious ? `   ⚠ 坏译文 ${r.suspicious}` : '';
+  const warn = r.suspicious ? `   ⚠ broken translations ${r.suspicious}` : '';
   process.stdout.write(`  ${r.code.padEnd(9)} ${bar(r.pct)} ${String(Math.round(r.pct * 100)).padStart(3)}%  ${r.covered}/${r.total}  ${r.name}${warn}\n`);
 }
 const suspiciousTotal = rows.reduce((n, r) => n + r.suspicious, 0);
 if (suspiciousTotal) {
-  process.stdout.write(`\n  ⚠ ${suspiciousTotal} 条机翻是坏的（还留着原文，或残留 ⟦n⟧ 哨兵 —— 覆盖率只算「有值」，这份才算「能用」）\n`);
-  process.stdout.write(`     修法：node tools/i18n-translate.mjs --engine app --bust suspicious --locales <...>\n`);
+  process.stdout.write(`\n  ⚠ ${suspiciousTotal} machine translations are broken (they still hold the source text, or a stray ⟦n⟧ sentinel - coverage only counts "has a value", this counts "is usable")\n`);
+  process.stdout.write(`     Fix: node tools/i18n-translate.mjs --engine app --bust suspicious --locales <...>\n`);
 }
 
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;
 const update = process.argv.includes('--update');
 
 /**
- * 简体词条的「键 → 值长度」，直接用解析结果，不再自己写正则。
- * 分类要按**值**的长度，不是键名的长度 —— 按钮/字段是短值（翻译便宜、可见度最高），
- * 提示句是长值（成本高得多）。第一版按键名分，于是 516 条全被算成「短键」（其实里面
- * 有大量长句），等于没分类。
+ * "Key -> value length" for zh entries, taken straight from the parser instead of yet another
+ * hand-written regex. Bucketing must key off the length of the **value**, not of the key name -
+ * buttons/fields are short values (cheap to translate, most visible), hint sentences are long
+ * values (far more expensive). The first version bucketed by key name, so all 516 entries were
+ * classified as "short keys" (though plenty of them were long sentences), which made the split
+ * useless.
  */
 const valueLen = new Map([...dicts.zh].map(([k, v]) => [k, (v ?? '').length || 400]));
 
-/** 取简体词条的值（列缺失清单时一并显示，方便判断怎么翻） */
+/** Fetch a zh entry's value (shown alongside the missing list to make translation decisions easier) */
 const zhValueOf = (key) => dicts.zh.get(key) ?? '';
 
-// --missing <code>：列出该语言**还没本地化**的界面词条（用来挑下一批要翻译的键，
-// 而不是凭印象猜哪些缺）。短值优先 —— 那是使用者一打开就看到的按钮与字段。
+// --missing <code>: list the UI entries this language has **not localized yet** (used to pick the
+// next batch of keys to translate instead of guessing from memory which ones are missing).
+// Short values first - those are the buttons and fields a user sees the moment the page opens.
 const missingIdx = process.argv.indexOf('--missing');
 if (missingIdx >= 0) {
   const code = process.argv[missingIdx + 1];
   const loc = byCode(code);
   if (!loc) {
-    process.stderr.write(`未知地区码: ${code}\n`);
+    process.stderr.write(`unknown locale code: ${code}\n`);
     process.exit(1);
   }
   const own = ownKeys(code);
@@ -188,32 +202,32 @@ if (missingIdx >= 0) {
   const mid = missing.filter((k) => (valueLen.get(k) ?? 99) > 12 && (valueLen.get(k) ?? 99) <= 40).sort();
   const long = missing.filter((k) => (valueLen.get(k) ?? 99) > 40).sort();
   process.stdout.write(
-    `\n${code}（${loc.name}）缺 ${missing.length} 条：短值 ${short.length} / 中等 ${mid.length} / 长句 ${long.length}\n\n`,
+    `\n${code} (${loc.name}) is missing ${missing.length} entries: short values ${short.length} / medium ${mid.length} / long sentences ${long.length}\n\n`,
   );
   const show = (title, list, n) => {
-    process.stdout.write(`${title}（前 ${Math.min(n, list.length)}）:\n`);
+    process.stdout.write(`${title} (first ${Math.min(n, list.length)}):\n`);
     for (const k of list.slice(0, n)) process.stdout.write(`  ${k}  = ${(zhValueOf(k) ?? '').slice(0, 40)}\n`);
     process.stdout.write('\n');
   };
-  show('短值（优先：按钮/字段/状态）', short, 120);
-  show('中等（面板标题/短提示）', mid, 60);
-  show('长句（提示文案，成本最高）', long, 10);
+  show('Short values (priority: buttons/fields/status)', short, 120);
+  show('Medium (panel titles/short hints)', mid, 60);
+  show('Long sentences (hint text, the most expensive)', long, 10);
   process.exit(0);
 }
 
 if (update) {
   const out = { generatedAt: new Date().toISOString(), total, locales: Object.fromEntries(rows.map((r) => [r.code, r.covered])) };
   fs.writeFileSync(BASELINE, JSON.stringify(out, null, 2) + '\n', 'utf8');
-  process.stdout.write(`\n已写入基线 / baseline written: ${path.relative(ROOT, BASELINE)}\n`);
+  process.stdout.write(`\nbaseline written: ${path.relative(ROOT, BASELINE)}\n`);
   process.exit(0);
 }
 
 if (!baseline) {
-  process.stdout.write('\n还没有基线 —— 跑 node tools/locale-coverage.mjs --update 建立。\n');
+  process.stdout.write('\nNo baseline yet - run node tools/locale-coverage.mjs --update to create one.\n');
   process.exit(0);
 }
 
-// 棘轮：覆盖度不许下降（掉下来说明后来加的功能没跟上翻译）
+// Ratchet: coverage must not drop (a drop means features added later did not keep up with translation)
 const regressions = [];
 for (const r of rows) {
   const was = baseline.locales?.[r.code];
@@ -221,9 +235,9 @@ for (const r of rows) {
   if (r.covered < was) regressions.push(`${r.code}: ${was} → ${r.covered}`);
 }
 if (regressions.length) {
-  process.stdout.write('\n覆盖度回退了 / coverage regressed:\n');
+  process.stdout.write('\ncoverage regressed:\n');
   for (const x of regressions) process.stdout.write('  - ' + x + '\n');
-  process.stdout.write('\n（要么补词条，要么确认后跑 --update 更新基线）\n');
+  process.stdout.write('\n(either add the missing entries, or confirm and run --update to refresh the baseline)\n');
   process.exit(1);
 }
-process.stdout.write('\n覆盖度没有回退 ✓\n');
+process.stdout.write('\ncoverage did not regress ✓\n');

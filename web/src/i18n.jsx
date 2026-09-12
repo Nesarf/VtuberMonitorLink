@@ -1,18 +1,24 @@
-// i18n.jsx — 多语言与地区化 / multi-locale strings + regional formatting
+// i18n.jsx — multi-locale strings + regional formatting
 //
-// zh 与 en 两套完整词条留在这里（历史原因，600+ 条）。
-// 其余 24 个地区在 locales/index.js 里**只写差异**，沿 chain 逐级回落。
-// 新增语言：往 LOCALES 加一行 + 写一份 dict，缺键自动落到 en-US，不会白屏。
+// The two complete dictionaries, zh and en, live here (for historical reasons, 600+ entries each).
+// The other 24 locales live in locales/index.js and hold **only their differences**, falling back
+// level by level along their chain.
+// Adding a language: append one line to LOCALES + write one dict; missing keys fall back to
+// en-US automatically, so the UI never goes blank.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { LOCALES, byCode, negotiate } from './locales/index.js';
 import { GENERATED } from './locales/generated.js';
-// 机器译文层：由 tools/i18n-translate.mjs 产出，优先级最低（人工词条永远压过它）。
-// 文件先以空表 `{}` 提交 —— 这样构建期就能解析到它，没配 Key 之前界面完全不受影响。
+// The machine-translation layer: produced by tools/i18n-translate.mjs, and the lowest priority
+// layer (hand-written entries always beat it).
+// The file is committed as an empty table `{}` first - that way the build can resolve it, and the
+// UI is completely unaffected until a key is configured.
 import MACHINE from './locales/machine.json';
 import { HAND, HAND_COMMON } from './locales/overlays.js';
+import { PLURALS } from './locales/plurals.js';
 import { convertDict, toBritish } from './locales/spelling.js';
+import { countLabel, fillParams, pickPlural } from './plural.js';
 
-/** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
+/** Regional overlay entries: only the keys that differ from the level above (characters, spelling, wording, date habits) */
 export const OVERLAY = HAND;
 
 export const STRINGS = {
@@ -290,10 +296,10 @@ export const STRINGS = {
     merchEveryDays: '通贩扫描间隔(天)',
     watchWithRun: '运行时同时检查监视对象',
 
-    // 界面
+    // UI
     uiTitle: '界面',
     uiHint: '主题跟随系统，也可以固定。运行结束后可以弹桌面通知。',
-    // 观测模式 / observation mode
+    // observation mode
     obsTitle: '观测模式',
     obsHint:
       '看整箱状态时，痕迹本身就是信息：一次把全箱扫一遍、每天固定时刻、间隔精确相等 —— 这些模式与你是从哪个 IP 来的无关。开启后每轮只随机取一部分对象（轮换补齐），间隔随机，并且只让「日志留在对方服务器上」的入口走 Tor。',
@@ -309,7 +315,7 @@ export const STRINGS = {
     obsSampling: '本轮为取样',
     obsSamplingNote: '未取到的对象会在后续轮次轮到；本地归档是增量的，覆盖会补齐。「本轮没出现」不等于「没有动静」。',
     obsSkippedLogin: '本轮跳过（需登录态）',
-    // 用量与预算 / cost board
+    // cost board
     costTitle: '用量与预算',
     costHint:
       '这个工具的钱花在模型调用上。这里只统计能拿到的用量（模型没返回用量、或走本地模型的那几次会单独计数，不猜数字）。到预算 80% 会在运行日志里提醒；超过之后默认只警告，选「拦住」才会阻止运行。',
@@ -324,7 +330,7 @@ export const STRINGS = {
     costRemaining: '剩余',
     costUnknown: '次未拿到用量',
     obsLastSeen: '最近观测',
-    // VDB 花名册导入 / import from VDB
+    // import from VDB
     vdbTitle: '从 VDB 导入关注对象',
     vdbHint:
       'VDB 是 vtbs.moe 的上游花名册（社区维护，一万多条），每条带社团与各平台账号 —— 搜名字或平台账号就能一次把人连同社团、别名、账号一起录进来。数据只在运行时拉取（约 0.5MB，一条请求），不随本工具分发。',
@@ -337,7 +343,7 @@ export const STRINGS = {
     vdbImported: '已导入',
     vdbSkipped: '跳过',
     vdbNoResult: '没找到（试试别名、或平台账号 id）',
-    // 箱视角 / group view
+    // group view
     groupViewTitle: '箱视角（按团体看）',
     groupViewHint:
       '逐条情报流回答不了「这个箱现在怎么样」。这里把同一团体的成员排成热力图：一格一天、深色代表当天有条目；停更的人会被标出来，多人同一天出现记为「同刻出现」（企划联动的形状），整箱安静单独提示。判据都相对每个人自己的节奏 —— 日更的人停 3 天，和月更的人停 3 天，不是一回事。',
@@ -468,7 +474,7 @@ export const STRINGS = {
     rendered: '渲染视图',
     rawMarkdown: '原始 Markdown',
 
-    // 连通性 / 健康
+    // reachability / health
     latency: '延迟',
     loss: '失败率',
     directEgress: '直连',
@@ -491,7 +497,7 @@ export const STRINGS = {
     failover: '自动换出口',
     probeTtl: '数据缓存(分钟)',
 
-    // 缩略图 / 自检
+    // thumbnails / self-check
     thumbnail: '站点缩略图',
     loadThumb: '取缩略图',
     screenshot: '截图',
@@ -505,7 +511,7 @@ export const STRINGS = {
     noAdvice: '暂无诊断文件',
     deleteAdvice: '删除',
 
-    // 计划任务
+    // scheduled tasks
     scheduleTasks: '计划任务',
     scheduleHint2: '可以建多条任务，各自设定模式、频率与时间；程序没开时错过的任务会在启动后补跑一次。',
     addTask: '新增任务',
@@ -525,7 +531,7 @@ export const STRINGS = {
     historyTitle: '执行历史',
     noScheduleHistory: '还没有执行记录',
 
-    // 通知推送
+    // alert delivery
     notifyTitle: '告警推送',
     notifyPanelHint: '命中关键词、监视变更或运行失败时推到手机。留空表示不启用该通道。',
     addTarget: '新增通道',
@@ -538,7 +544,7 @@ export const STRINGS = {
     notifyTestOk: '测试消息已发出',
     desktopNotify: '桌面通知',
 
-    // 代理节点
+    // proxy nodes
     nodesTitle: '代理节点',
     nodesHint: '从本机 mihomo / Clash 读取节点列表，并测每个节点到你指定站点的延迟（内核的延迟接口本身就支持指定 URL）。',
     detectControl: '探测控制接口',
@@ -550,7 +556,7 @@ export const STRINGS = {
     switchTo: '切换',
     switched: '已切换',
 
-    // 导入导出
+    // import & export
     ioTitle: '配置导入导出',
     ioHint: '把站点、监视对象、LLM 档位、通知与排版一并导出成 JSON，换机器一键导入。默认不含任何密钥。',
     exportNoSecrets: '导出（不含密钥）',
@@ -559,7 +565,7 @@ export const STRINGS = {
     importHint: '选择之前导出的 JSON 文件；空字符串不会覆盖已有的密钥。',
     imported: '已导入',
 
-    // 排版 DIY
+    // layout DIY
     layoutTitle: '排版',
     layoutHint: '报告与情报卡的呈现方式，改完立刻生效（也算即时预览）。',
     layoutMode: '呈现方式',
@@ -580,7 +586,7 @@ export const STRINGS = {
     showSource: '显示来源',
     accent: '主题色',
 
-    // 情报
+    // intel
     starred: '星标',
     onlyStarred: '只看星标',
     onlyUnread: '只看未读',
@@ -592,7 +598,7 @@ export const STRINGS = {
     comparedChanged: '内容变化',
     noPreviousRun: '还没有上一次可以对比',
 
-    // 检索（纯本地匹配，不需要 LLM）
+    // search (pure local matching, no LLM needed)
     tab_llm: 'LLM',
     llmEmptyHint: '还没有任何档位 —— 先选一个提供商建一个，输入框才会出现（此前它们包在「有档位才渲染」的条件里，所以看起来像没有地方可填）。',
     llmCreateFirst: '建一个档位',
@@ -705,7 +711,7 @@ export const STRINGS = {
     assistTerms: '建议检索词',
     assistTags: '建议标签',
 
-    // 导出 / 特征
+    // export / features
     exportXlsx: '导出 Excel',
     exportDocx: '导出 Word',
     exportDocxReport: '导出 Word',
@@ -726,7 +732,7 @@ export const STRINGS = {
     mode_tor: 'Tor（无痕）',
     proxyModeTitle: '出口方式',
 
-    // 匿名模式
+    // anonymous mode
     privacyTitle: '隐私 / 无痕',
     privacyHint: '匿名模式下完全不使用登录态：不读浏览器 cookie、不复用 profile。准备发布或做无痕化处理时打开它。',
     anonymousMode: '匿名模式',
@@ -1460,14 +1466,15 @@ export const STRINGS = {
 };
 
 /**
- * 星期名不再手写数组：用 Intl 从地区派生，26 个地区自动正确，
- * 而且尊重各地区的一周起始日（美/日/韩/港台周日，中/欧/俄周一）。
+ * Weekday names are no longer a hand-written array: they are derived from the locale with Intl,
+ * which is automatically correct for all 26 locales, and it also respects each region's first day
+ * of the week (US / JP / KR / HK / TW start on Sunday, CN / EU / RU on Monday).
  */
 function weekdaysFor(code, weekStart, style = 'short') {
   const fmt = new Intl.DateTimeFormat(code, { weekday: style, timeZone: 'UTC' });
   const out = [];
   for (let i = 0; i < 7; i++) {
-    // 2024-01-07 是周日；按 weekStart 轮转
+    // 2024-01-07 is a Sunday; rotate by weekStart
     const d = new Date(Date.UTC(2024, 0, 7 + ((weekStart + i) % 7)));
     out.push(fmt.format(d));
   }
@@ -1475,10 +1482,11 @@ function weekdaysFor(code, weekStart, style = 'short') {
 }
 
 /**
- * 递归展开回落链 —— **必须传递**。
- * 踩过的坑：zh-TW 的 chain 写的是 ['zh-TW','zh-Hant','zh-Hans']，
- * 而基础词条的键是 'zh' 不是 'zh-Hans'，于是它一路落不到简体底本、直接掉成英文。
- * 递归展开后：zh-TW → zh-Hant → zh-Hans → zh ✓
+ * Expand the fallback chain recursively -- **recursion is mandatory here**.
+ * The pitfall we hit: zh-TW's chain is written as ['zh-TW','zh-Hant','zh-Hans'],
+ * but the base dictionary key is 'zh', not 'zh-Hans', so it never reached the Simplified base
+ * and dropped straight to English instead.
+ * With recursive expansion: zh-TW -> zh-Hant -> zh-Hans -> zh ✓
  */
 function resolveChain(code, seen = new Set()) {
   if (seen.has(code)) return [];
@@ -1492,13 +1500,16 @@ function resolveChain(code, seen = new Set()) {
 }
 
 /**
- * 真正可用的回落链：**只在同一语言内继承地区差异**，跨语言一律落到英文。
+ * The fallback chain that is actually usable: **regional differences are inherited only within one
+ * language**; anything cross-language falls back to English.
  *
- * 为什么必须这样：uk-UA / pl-PL / sr-RS 的 chain 里写了 ru-RU（最初只是想「缺键时有个兜底」），
- * 结果它们把**俄语字符串**当成了自己的界面文案显示给使用者 —— 把俄语当乌克兰语是明确的错误，
- * 不只是「翻译不够好」。同语言内的地区继承是对的（es-MX→es-419→es-ES、
- * fr-CA→fr-FR、pt-BR→pt-PT、zh-TW→zh-Hant→zh-Hans、en-AU→en-GB→en-US），
- * 跨语言则必须走英文兜底 —— 英文没翻译至少不冒犯任何人。
+ * Why it has to be this way: the chain of uk-UA / pl-PL / sr-RS listed ru-RU (originally just
+ * meant as "a fallback when a key is missing"), and as a result they showed **Russian strings** as
+ * their own UI copy -- presenting Russian as Ukrainian is plainly wrong, not merely "a translation
+ * that is not good enough". Regional inheritance inside one language is correct
+ * (es-MX->es-419->es-ES, fr-CA->fr-FR, pt-BR->pt-PT, zh-TW->zh-Hant->zh-Hans, en-AU->en-GB->en-US);
+ * cross-language has to take the English fallback -- English that is not translated at least
+ * offends nobody.
  */
 function usableChain(code) {
   const base = String(code).split('-')[0];
@@ -1508,11 +1519,13 @@ function usableChain(code) {
 const Ctx = createContext(null);
 
 /**
- * 应用主题到 <html>。
+ * Apply the theme to <html>.
  *
- * 顺带记进 localStorage：config.json 要等一个 API 往返才拿到，在那之前页面已经画了一帧 ——
- * 「系统是浅色 + 我选了深色」的人每次刷新都会看到一道白闪。index.html 里有一小段
- * **同步**脚本先按记忆里的值上色，这里再把服务端配置（唯一权威）覆盖上去。
+ * It is also stored in localStorage on the way: config.json only arrives after one API round trip,
+ * and the page has already painted one frame by then - so anyone on "system is light + I picked
+ * dark" saw a white flash on every reload. index.html carries a small **synchronous** script that
+ * paints from the remembered value first, and this then overwrites it with the server config
+ * (the single source of truth).
  */
 export function applyTheme(theme) {
   const root = document.documentElement;
@@ -1522,7 +1535,7 @@ export function applyTheme(theme) {
   try {
     localStorage.setItem('vml-theme', value);
   } catch (e) {
-    /* 隐私模式下写不了就算了，不影响显示 */
+    /* If private mode refuses the write, so be it - it does not affect rendering */
   }
 }
 
@@ -1536,44 +1549,76 @@ export function I18nProvider({ children }) {
 
   const loc = byCode(lang) ?? byCode('en-US');
 
-  // 推导出来的地区词条。繁体不再是运行期查表 —— 它由 tools/i18n-hant.mjs
-  // 在构建期用 OpenCC 词典整份生成（见 locales/generated.js）：
-  //   zh-Hant → t（通用）· zh-HK → hk（香港）· zh-TW → twp（台湾正体，含用词）
-  // 生成器带自检：ASCII/占位符结构不许被破坏、差异率异常要报错、
-  // 未复核的「疑似漏转简体字」直接让构建失败。
+  // The derived regional dictionaries. Traditional Chinese is no longer a runtime lookup table -
+  // it is generated wholesale at build time from the OpenCC dictionaries by tools/i18n-hant.mjs
+  // (see locales/generated.js):
+  //   zh-Hant -> t (generic) · zh-HK -> hk (Hong Kong) · zh-TW -> twp (Taiwan standard, with wording)
+  // The generator self-checks: the ASCII / placeholder structure must not be broken, an abnormal
+  // difference rate is an error, and an unreviewed "suspected untranslated Simplified character"
+  // fails the build outright.
   const derived = useMemo(() => {
     const brit = convertDict(STRINGS.en, toBritish);
     return {
       ...GENERATED,
       'en-GB': brit,
-      'en-AU': brit, // 澳洲跟随英式拼写
-      'en-CA': brit, // 加拿大拼写英式为主
+      'en-AU': brit, // Australia follows British spelling
+      'en-CA': brit, // Canadian spelling is mostly British
     };
   }, []);
 
   const dict = useMemo(() => {
-    // 合并顺序：usableChain 返回的是**基础 → 具体**（zh → zh-Hans → zh-Hant → zh-TW），
-    // 正向合并、后面的压前面的 ⇒ **具体地区永远压过基础**。这一条必须保持正向：
-    // 我一度以为「父覆盖了子」而把顺序反过来，结果繁体三变体全部退回简体（被巡检当场抓到）。
+    // Merge order: usableChain returns **base -> specific** (zh -> zh-Hans -> zh-Hant -> zh-TW),
+    // merged forwards, later overriding earlier, so **the specific locale always beats the base**.
+    // This direction must stay forward: I once assumed "the parent overrides the child" and
+    // reversed it, and all three Traditional variants fell back to Simplified (caught by the
+    // traversal check on the spot).
     //
-    // 每一级内部优先级（后面的压前面的）：
-    //   机器译文 → 人工通用词条 → 该地区自己的词条
-    // 也就是「机器翻译永远压不过人工」。
+    // Priority inside each level (later overrides earlier):
+    //   machine translations -> hand-written common entries -> the region's own entries
+    // In other words, "a machine translation never beats a hand-written one".
     let out = {};
     for (const c of usableChain(loc.code)) {
       const level = {
         ...(MACHINE[c] ?? {}),
         ...(HAND_COMMON[c] ?? {}),
+        // Number-dependent forms sit at the same priority as hand-written wording:
+        // `<key>_<plural category>` beats the machine layer, and the plain key stays as the
+        // fallback for languages that do not inflect (see locales/plurals.js, BUGS #54).
+        ...(PLURALS[c] ?? {}),
         ...(OVERLAY[c] ?? derived[c] ?? STRINGS[c] ?? {}),
       };
       out = { ...out, ...level };
     }
-    // 英文兜底：只补前面都没有的键
+    // English fallback: fill in only the keys nothing above provided
     out = { ...STRINGS.en, ...out };
     return out;
   }, [loc, derived]);
 
-  const t = useCallback((k) => dict[k] ?? STRINGS.en?.[k] ?? k, [dict]);
+  /**
+   * `t(key)` → the plain string.
+   * `t(key, { n: 5 })` → picks `<key>_<plural category>` for that number when the language
+   *   provides one, and substitutes `{n}` (or any other `{name}` from params).
+   * For a full "count + noun" label use `tn(key, n)` instead — that is the one that decides
+   * whether the number goes inside the phrase (see web/src/plural.js and BUGS #54).
+   */
+  const t = useCallback(
+    (k, params) => {
+      const num = params && Number.isFinite(params.n) ? params.n : null;
+      const raw =
+        (num !== null ? pickPlural(dict, k, loc.code, num) : null) ?? dict[k] ?? STRINGS.en?.[k] ?? k;
+      return params ? fillParams(raw, params) : raw;
+    },
+    [dict, loc.code]
+  );
+
+  /** Full "count + noun" label: plural category + the number placed where the language wants it. */
+  const tn = useCallback(
+    (k, n) => {
+      const raw = pickPlural(dict, k, loc.code, n) ?? dict[k] ?? STRINGS.en?.[k] ?? k;
+      return countLabel(raw, n);
+    },
+    [dict, loc.code]
+  );
 
   useEffect(() => {
     try {
@@ -1581,27 +1626,32 @@ export function I18nProvider({ children }) {
     } catch {}
     const root = document.documentElement;
     root.lang = loc.code;
-    // RTL 语言（阿拉伯语等）：整页方向跟着换，布局用逻辑属性才不会散
+    // RTL languages (Arabic and friends): the whole page direction flips with it, and the layout
+    // only holds together if it uses logical properties
     root.dir = loc.dir ?? 'ltr';
   }, [lang, loc]);
 
   const value = useMemo(() => {
     const weekdays = weekdaysFor(loc.code, loc.weekStart);
     return {
-      // ⚠️ lang 是**基础语言**（zh / en / ja…），不是地区码。
-      // 服务端返回的 name 只有 {zh,en} 两种键，界面里十几处 `name[lang]` 都靠它。
-      // 之前把 lang 换成 'zh-Hans' 这种完整地区码，那些地方全部取空、退化成显示 id。
-      // 需要完整地区码的地方用 localeCode。
+      // lang is the **base language** (zh / en / ja ...), not a region code.
+      // The server returns names keyed only by {zh,en}, and a dozen places in the UI rely on
+      // `name[lang]`.
+      // Switching lang to a full region code such as 'zh-Hans' once made every one of those lookups
+      // come back empty and degrade to showing the id.
+      // Where a full region code is needed, use localeCode.
       lang: loc.code.split('-')[0],
       localeCode: loc.code,
       setLang,
       t,
+      tn,
       locale: loc,
       weekStart: loc.weekStart,
       dir: loc.dir ?? 'ltr',
       weekdays,
-      // 固定「周日在前」的一周：计划任务里 dayOfWeek 的存储语义就是 0=周日，
-      // 不能跟着地区把顺序转掉 —— 那会把已存的任务悄悄改到别的日子上。
+      // A fixed Sun-first week: the storage semantics of dayOfWeek in scheduled tasks is 0=Sunday,
+      // and the order must not be rotated along with the region - that would silently move tasks
+      // that are already stored onto a different day.
       weekdaysSunFirst: weekdaysFor(loc.code, 0),
       weekdaysLong: weekdaysFor(loc.code, loc.weekStart, 'long'),
       fmtDate: (d, opts) => new Intl.DateTimeFormat(loc.code, opts ?? { dateStyle: 'medium' }).format(new Date(d)),
@@ -1622,7 +1672,7 @@ export function I18nProvider({ children }) {
         return rtf.format(Math.round(diff), 'second');
       },
     };
-  }, [lang, loc, t]);
+  }, [lang, loc, t, tn]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

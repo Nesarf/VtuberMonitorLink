@@ -1,9 +1,12 @@
-// People.jsx — 按「人」关注 / follow people rather than sources
+// People.jsx - follow people rather than sources
 //
-// 界面要回答的三个问题，按重要性排序：
-//   1) 我关注的人今天有动静吗（→ 顶部按「最近出现」排序的名单 + 条数）
-//   2) 凭什么说这条是他的（→ 每条都显示命中的别名与字段，匹配永远可解释）
-//   3) 怎么把人加进来最省事（→ 名字 + 账号；再从已有实体统计里一键导入）
+// The three questions this page has to answer, in order of importance:
+//   1) Did the people I follow do anything today (→ a list at the top sorted by "most recent
+//      activity", plus item counts)
+//   2) Why does it claim this item is theirs (→ every item shows the alias and the field that
+//      hit, so matching is always explainable)
+//   3) What is the least-effort way to add a person (→ name + accounts; then a one-click import
+//      from the existing entity statistics)
 import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -26,7 +29,7 @@ const BLANK = {
 const LEVELS = ['info', 'alert', 'urgent'];
 
 export default function People() {
-  const { t, fmtDateTime } = useI18n();
+  const { t, tn, fmtDateTime } = useI18n();
   const [data, setData] = useState(null);
   const [feed, setFeed] = useState(null);
   const [open, setOpen] = useState('');
@@ -64,7 +67,7 @@ export default function People() {
     setVdbMsg('');
     try {
       const r = await api.vdbSync();
-      setVdbMsg(`✅ ${r.count} · ${r.groups} ${t('vdbGroups')}`);
+      setVdbMsg(`✅ ${r.count} · ${tn('vdbGroups', r.groups)}`);
       setVdb(await api.vdbStatus());
     } catch (e) {
       setVdbMsg(`❌ ${e.message}`);
@@ -95,17 +98,18 @@ export default function People() {
     } catch (e) {
       setErr(e.message);
     }
-    // 箱视角单独取（它读归档，跟关注对象列表不是一个数据源）
+    // The group view is fetched separately (it reads the archive, which is not the same data
+    // source as the follow list)
     try {
       setGv(await api.groups(30));
     } catch (e) {
       setGv({ ok: false, groups: [], people: 0, error: e.message });
     }
-    // VDB 花名册状态（只读缓存，不触发下载）
+    // VDB roster status (cached read only, never triggers a download)
     try {
       setVdb(await api.vdbStatus());
     } catch {
-      /* 没缓存就是没缓存，不打扰 */
+      /* no cache means no cache - do not make a fuss */
     }
   }, []);
 
@@ -194,9 +198,10 @@ export default function People() {
 
   return (
     <>
-      {/* ── 从 VDB 导入 / import from VDB ──
-          VDB（vtbs.moe 的上游花名册）给的是我们缺的那一维：**社团（箱）** +
-          多语言名字 + **各平台**账号。数据只运行时拉取，不进发行包，因此这里署名。 */}
+      {/* ── import from VDB ──
+          VDB (the upstream roster behind vtbs.moe) supplies the dimension we were missing:
+          **agency (group)** + multilingual names + **per-platform** accounts. The data is only
+          fetched at runtime and never enters the release package, hence the attribution here. */}
       <section className="panel">
         <h2>{t('vdbTitle')}</h2>
         <div className="hint">{t('vdbHint')}</div>
@@ -220,7 +225,7 @@ export default function People() {
         </div>
         {vdb && (
           <div className="muted small" style={{ marginTop: 6 }}>
-            {t('vdbRoster')}: {vdb.count} · {Object.keys(vdb.groups ?? {}).length} {t('vdbGroups')}
+            {t('vdbRoster')}: {vdb.count} · {tn('vdbGroups', Object.keys(vdb.groups ?? {}).length)}
             {vdb.generatedAt ? ` · ${String(vdb.generatedAt).slice(0, 10)}` : ''} · {vdb.source} · {vdb.license}
           </div>
         )}
@@ -260,10 +265,11 @@ export default function People() {
         </section>
       )}
 
-      {/* ── 箱视角 / group view ──
-          逐条情报流回答不了「这个箱现在怎么样」。这里按 agency 聚成一块：
-          每日热力图（谁在动、谁停了）、同刻出现（企划/联动）、共同沉默（整箱安静）、
-          以及每个人相对**自己**节奏的异常。 */}
+      {/* ── group view ──
+          A per-item intel feed cannot answer "how is this group doing right now". This groups by
+          agency: a daily heatmap (who is active, who stopped), same-time appearances
+          (projects/collabs), shared silence (the whole group going quiet), and each person's
+          deviation from **their own** rhythm. */}
       <section className="panel">
         <h2>
           {t('groupViewTitle')}
@@ -288,11 +294,11 @@ export default function People() {
                 <span className={`chip ${g.groupSignal.level === 'high' ? 'alert' : 'optional'}`}>{g.groupSignal.reason}</span>
               )}
             </div>
-            {/* 热力图：一行一个人，一格一天（越深的格子条目越多） */}
+            {/* Heatmap: one row per person, one cell per day (darker cells hold more items) */}
             <div className="heat">
               {g.members.map((m) => (
                 <div key={m.id} className="heat-row">
-                  <span className="heat-name" title={`${m.name}${m.quietDays !== null ? ` · ${t('groupQuiet')} ${m.quietDays} ${t('groupDays')}` : ''}`}>
+                  <span className="heat-name" title={`${m.name}${m.quietDays !== null ? ` · ${t('groupQuiet')} ${tn('groupDays', m.quietDays)}` : ''}`}>
                     {m.level === 'high' ? '🔴' : m.level === 'warn' ? '🟡' : m.level === 'unknown' ? '⚪' : '🟢'} {m.name}
                   </span>
                   <span className="heat-cells">
@@ -301,7 +307,7 @@ export default function People() {
                         key={i}
                         className={n > 0 ? 'heat-on' : 'heat-off'}
                         style={n > 0 ? { opacity: Math.min(1, 0.35 + n * 0.25) } : undefined}
-                        title={`${gv.axis[i]} · ${n} ${t('items')}`}
+                        title={`${gv.axis[i]} · ${tn('items', n)}`}
                       />
                     ))}
                   </span>
@@ -317,8 +323,8 @@ export default function People() {
               {g.coActive.length
                 ? `（${g.coActive.map((c) => `${c.day.slice(5)} ${c.count}${t('groupPeopleUnit')}`).join(' / ')}）`
                 : ''}
-              {g.quietStreak ? ` · ${t('groupQuietStreak')} ${g.quietStreak} ${t('groupDays')}` : ''}
-              {g.fullHouseDays ? ` · ${t('groupFullHouse')} ${g.fullHouseDays} ${t('groupDays')}` : ''}
+              {g.quietStreak ? ` · ${t('groupQuietStreak')} ${tn('groupDays', g.quietStreak)}` : ''}
+              {g.fullHouseDays ? ` · ${t('groupFullHouse')} ${tn('groupDays', g.fullHouseDays)}` : ''}
             </div>
           </div>
         ))}
@@ -384,7 +390,7 @@ export default function People() {
                 <div key={it.id ?? i} className="people-feed-row">
                   <div>{it.title ?? String(it.text ?? '').slice(0, 120)}</div>
                   <div className="muted small">
-                    {/* 匹配必须可解释：写清是哪个别名、在哪个字段命中的 */}
+                    {/* Matching must stay explainable: say which alias hit and in which field */}
                     {t('peopleWhy')}: {(it.peopleHits ?? []).map((h) => `${h.alias}@${h.field}`).join('、')}
                     {it.url ? (
                       <>

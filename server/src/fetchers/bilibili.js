@@ -1,14 +1,14 @@
-// fetchers/bilibili.js — B 站动态抓取
+// fetchers/bilibili.js — bilibili dynamics fetching
 //
-// 实测结论（决定了本文件为什么要写成这样）：
-//   • api.bilibili.com **直连可用，走代理反而被风控**（412 / -352）。
-//     所以这里一律用 net.js 的 direct 模式，除非来源显式要求走代理。
-//   • 裸请求会被 412 拦，必须先取一次 buvid3/buvid4（finger/spi）当 cookie。
-//   • x/polymer/web-dynamic/v1/feed/space（带配图的完整动态）风控极严，
-//     未登录基本稳定 -352；只有复用登录态才拿得到。
-//   • x/polymer/web-dynamic/v1/opus/feed/space（图文动态）**无需登录、无需 wbi**，
-//     稳定返回 20 条，含正文 / 点赞数 / opus 链接 —— 这是主力路径。
-//   • 登录态的取值顺序：来源自带 cookie → 配置的浏览器 profile → 浏览器渲染兜底。
+// Measured conclusions (they are why this file is written the way it is):
+//   - api.bilibili.com **works on a direct connection; going through a proxy is what gets you risk-controlled** (412 / -352).
+//     So everything here uses net.js's direct mode, unless a source explicitly asks for a proxy.
+//   - A bare request gets blocked with 412; you first have to fetch buvid3/buvid4 (finger/spi) and send them as cookies.
+//   - x/polymer/web-dynamic/v1/feed/space (full dynamics with images) is risk-controlled extremely hard:
+//     without a login it is reliably -352; only reusing a login state gets it.
+//   - x/polymer/web-dynamic/v1/opus/feed/space (image + text dynamics) **needs no login and no wbi**,
+//     reliably returns 20 entries with the body / like count / opus link -- this is the main path.
+//   - Order for obtaining a login state: cookie carried by the source -> configured browser profile -> browser rendering as fallback.
 import { netFetch, resolveProxyMode } from '../net.js';
 import { wbiFetch } from '../wbi.js';
 
@@ -17,7 +17,7 @@ const UA =
 
 const API = 'https://api.bilibili.com';
 
-/** buvid 引导结果按进程缓存，避免每个来源都打一次 spi */
+/** buvid bootstrap result, cached per process so that every source does not have to hit spi */
 let buvid = null;
 
 function baseHeaders(uid) {
@@ -30,7 +30,7 @@ function baseHeaders(uid) {
   };
 }
 
-/** 取（并缓存）buvid3/buvid4 —— 没有它连公开接口都会被 412 */
+/** Fetch (and cache) buvid3/buvid4 -- without them even the public endpoints answer 412 */
 export async function ensureBuvid(ctx) {
   if (buvid) return buvid;
   const r = await netFetch(`${API}/x/frontend/finger/spi`, { headers: baseHeaders(), signal: AbortSignal.timeout(20000) }, {
@@ -40,7 +40,7 @@ export async function ensureBuvid(ctx) {
   const j = await r.json().catch(() => null);
   const d = j?.data ?? {};
   buvid = { b3: d.b_3 ?? '', b4: d.b_4 ?? '' };
-  ctx.log?.info(`bilibili buvid 获取 ${buvid.b3 ? 'ok' : '失败'}`);
+  ctx.log?.info(`bilibili buvid fetch ${buvid.b3 ? 'ok' : 'failed'}`);
   return buvid;
 }
 
@@ -50,7 +50,7 @@ function cookieHeader(bv, extra) {
   return parts.join('; ');
 }
 
-/** 把 opus/feed/space 的条目规范化成情报条目 */
+/** Normalize opus/feed/space entries into intel items */
 function normalizeOpus(items, uid) {
   return items.map((it) => {
     const url = it.jump_url ? (it.jump_url.startsWith('//') ? `https:${it.jump_url}` : it.jump_url) : `https://www.bilibili.com/opus/${it.opus_id}`;
@@ -70,7 +70,7 @@ function normalizeOpus(items, uid) {
 }
 
 /**
- * 图文动态（免登录主力路径）
+ * Image + text dynamics (the main path, no login needed)
  * GET /x/polymer/web-dynamic/v1/opus/feed/space?host_mid=<uid>&page=1&type=all
  */
 export async function fetchBilibiliOpus(source, ctx) {
@@ -92,7 +92,7 @@ export async function fetchBilibiliOpus(source, ctx) {
       );
       j = await r.json().catch(() => null);
       if (j?.code === 0) break;
-      // -412 / -352 都是风控，主动退让再试
+      // -412 and -352 are both risk control; back off deliberately before retrying
       if (attempt < 3) await new Promise((res) => setTimeout(res, 1500 * attempt));
     }
     if (j?.code !== 0) {
@@ -105,7 +105,7 @@ export async function fetchBilibiliOpus(source, ctx) {
 
   if (!items.length && errors.length) throw new Error(`B 站风控拦截 / blocked: ${errors.join('; ')}`);
 
-  ctx.log?.info(`bilibili opus ${uid}: ${items.length} 条动态${errors.length ? `（${errors[0]}）` : ''}`);
+  ctx.log?.info(`bilibili opus ${uid}: ${items.length} dynamics${errors.length ? ` (${errors[0]})` : ''}`);
   return {
     ok: true,
     ext: 'json',
@@ -116,7 +116,7 @@ export async function fetchBilibiliOpus(source, ctx) {
   };
 }
 
-/** 粉丝数（用于关注量增长追踪）/ follower count for growth tracking */
+/** Follower count (for tracking audience growth) / follower count for growth tracking */
 export async function fetchFollowers(uid, ctx, bv) {
   const b = bv ?? (await ensureBuvid(ctx));
   const r = await netFetch(
@@ -130,9 +130,9 @@ export async function fetchFollowers(uid, ctx, bv) {
 }
 
 /**
- * 拿一份可用的登录态。
- * 顺序：来源自带 cookie → 从配置的浏览器 profile 只读提取 → 没有就算了。
- * 提取是「复制 cookie 库再解密」的路子，所以**浏览器开着也没关系**。
+ * Get one usable login state.
+ * Order: cookie carried by the source -> read-only extraction from the configured browser profile -> give up.
+ * The extraction is the "copy the cookie store, then decrypt" route, so **it is fine for the browser to be open**.
  */
 export async function resolveLogin(source, ctx) {
   if (source.cookie) return { cookie: source.cookie, via: 'inline' };
@@ -141,24 +141,24 @@ export async function resolveLogin(source, ctx) {
   const { readBrowserCookies } = await import('../cookies.js');
   const r = await readBrowserCookies(profileDir, ['bilibili.com']);
   if (!r.ok) {
-    ctx.log?.info(`bilibili 登录态不可用 / no login: ${r.error}`);
+    ctx.log?.info(`bilibili login unavailable / no login: ${r.error}`);
     return { cookie: null, via: 'none', reason: r.error };
   }
   const hasSession = (r.names ?? []).includes('SESSDATA');
-  ctx.log?.info(`bilibili 登录态已载入（${r.names.length} 个 cookie${hasSession ? '，含 SESSDATA' : '，无 SESSDATA'}）`);
+  ctx.log?.info(`bilibili login loaded (${r.names.length} cookies${hasSession ? ', with SESSDATA' : ', no SESSDATA'})`);
   return { cookie: r.cookieHeader, via: 'profile', hasSession, warning: r.warning, profile: r.profile };
 }
 
 /**
- * 把 feed/space 的条目规范化（含配图、相对时间、视频标题）。
+ * Normalize feed/space entries (images, relative time and video title included).
  *
- * 实测要点：
- *   • 必须带 features=itemOpusStyle —— 否则新版图文动态的 major 是
- *     MAJOR_TYPE_DRAW 且 items 为空、desc 为 null（正文全丢）。
- *     带上之后变成 MAJOR_TYPE_OPUS，正文在 major.opus.summary.text，
- *     而**配图数量与 URL 完全不变**（已对比验证）。
- *   • major.type 才是判别字段（it.type 有时不可靠）。
- *   • 转发动态（DYNAMIC_TYPE_FORWARD）正文在被转发的 orig 里，要一并取出来。
+ * Measured points:
+ *   - features=itemOpusStyle is mandatory -- without it, a new-style image + text dynamic has major
+ *     MAJOR_TYPE_DRAW with empty items and a null desc (the whole body is lost).
+ *     With it the type becomes MAJOR_TYPE_OPUS, the body sits in major.opus.summary.text,
+ *     and the **image count and URLs are completely unchanged** (verified by comparison).
+ *   - major.type is the field that actually discriminates (it.type is sometimes unreliable).
+ *   - For a forwarded dynamic (DYNAMIC_TYPE_FORWARD) the body lives in the forwarded orig and has to be picked up as well.
  */
 function imagesOf(md) {
   const major = md?.major ?? {};
@@ -218,9 +218,9 @@ function normalizeDynamic(items, uid) {
 }
 
 /**
- * 登录态下的完整动态：直接调 JSON 接口，拿到正文 + 配图 + 发布时间。
- * 这是首选路径 —— 数据干净，而且**不需要关掉用户的浏览器**。
- * 拿不到登录态时才退回浏览器渲染。
+ * Full dynamics with a login state: call the JSON endpoint directly and get the body + images + publish time.
+ * This is the preferred path -- the data is clean, and **the user's browser does not have to be closed**.
+ * Only when no login state is available does it fall back to browser rendering.
  */
 export async function fetchBilibiliDynamic(source, ctx) {
   const uid = String(source.uid ?? '').trim();
@@ -229,8 +229,9 @@ export async function fetchBilibiliDynamic(source, ctx) {
 
   if (login.cookie) {
     const bv = await ensureBuvid(ctx);
-    // WBI 签名：这条端点风控极严（实测不带签名稳定 -352），
-    // 而「有登录态」并不够 —— 签名才是过风控的关键。签名加在 query 上。
+    // WBI signature: this endpoint is risk-controlled extremely hard (measured: without a signature it is
+    // reliably -352), and "having a login state" is not enough -- the signature is what gets past risk
+    // control. The signature is appended to the query.
     const url = `${API}/x/polymer/web-dynamic/v1/feed/space?host_mid=${encodeURIComponent(uid)}&timezone_offset=-480&platform=web&features=itemOpusStyle`;
     let j = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -247,7 +248,7 @@ export async function fetchBilibiliDynamic(source, ctx) {
     }
     if (j?.code === 0) {
       const items = normalizeDynamic(j.data?.items ?? [], uid);
-      ctx.log?.info(`bilibili 完整动态 ${uid}: ${items.length} 条（登录态接口）`);
+      ctx.log?.info(`bilibili full dynamics ${uid}: ${items.length} entries (logged-in API)`);
       return {
         ok: true,
         ext: 'json',
@@ -257,18 +258,18 @@ export async function fetchBilibiliDynamic(source, ctx) {
         followers: await fetchFollowers(uid, ctx, bv).catch(() => null),
       };
     }
-    ctx.log?.warn(`bilibili 登录态接口返回 code=${j?.code} ${j?.message ?? ''}，退回浏览器渲染`);
+    ctx.log?.warn(`bilibili logged-in API returned code=${j?.code} ${j?.message ?? ''}, falling back to browser rendering`);
     if (login.via === 'inline') {
       throw new Error(`B 站接口拒绝 / code=${j?.code} ${j?.message ?? ''}（cookie 可能已失效）`);
     }
   } else {
-    ctx.log?.warn(`bilibili 无登录态（${login.reason ?? 'unknown'}），走浏览器渲染：${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : '未配置 profile 时多半会弹滑块验证'}`);
+    ctx.log?.warn(`bilibili has no login (${login.reason ?? 'unknown'}), going through browser rendering: ${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : 'with no profile configured this will most likely raise a slider captcha'}`);
   }
 
   return fetchBilibiliDynamicRendered(source, ctx, login);
 }
 
-/** 兜底：用 Playwright 渲染动态页（需要目标浏览器处于关闭状态） */
+/** Fallback: render the dynamics page with Playwright (requires the target browser to be closed) */
 export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
   const uid = String(source.uid ?? '').trim();
   if (!uid) throw new Error('bilibili 来源缺少 uid / missing uid');
@@ -283,7 +284,7 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
   let context = null;
   let browser = null;
   const watchdog = setTimeout(() => {
-    ctx.log?.error('bilibili 动态渲染硬超时 / hard timeout');
+    ctx.log?.error('bilibili dynamic rendering: hard timeout');
     process.exitCode = 3;
   }, bcfg.hardTimeoutMs ?? 90000);
 
@@ -341,7 +342,7 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
       stats: {},
     }));
 
-    ctx.log?.info(`bilibili dynamic ${uid}: ${items.length} 条（浏览器渲染）`);
+    ctx.log?.info(`bilibili dynamic ${uid}: ${items.length} entries (browser rendering)`);
     return {
       ok: true,
       ext: 'json',
@@ -350,7 +351,7 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
       followers: await fetchFollowers(uid, ctx).catch(() => null),
     };
   } catch (err) {
-    // 复用 profile 要求该浏览器已关闭，把 Playwright 的原始报错翻译成人话
+    // Reusing a profile requires that browser to be closed; translate Playwright's raw error into plain words
     const m = String(err?.message ?? '');
     if (/ProcessSingleton|is already (running|in use)|SingletonLock|profile.*lock/i.test(m)) {
       throw new Error(

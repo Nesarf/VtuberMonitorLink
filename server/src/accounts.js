@@ -1,10 +1,11 @@
-// accounts.js — 发现本机可用的 bilibili 登录账号 / discover available bilibili logins
+// accounts.js — discover the bilibili logins available on this machine / discover available bilibili logins
 //
-// 为什么单独一个模块：发弹幕是**用使用者本人身份写东西出去**，跟本项目其它一切
-// 「只读抓取」性质完全不同。所以：
-//   • 这一步是**只读**的：枚举浏览器 profile、读 cookie、调一次 nav 问出「我是谁」；
-//   • **绝不回传 cookie 值**，只回传账号名 / mid / 有没有 SESSDATA 与 bili_jct；
-//   • 发送在另一个模块里，且必须显式确认（见 sendDanmaku）。
+// Why it is a module of its own: posting a danmaku **writes something out under the user's own
+// identity**, which is a completely different animal from the "read-only scraping" that
+// everything else in this project does. So:
+//   - this step is **read-only**: enumerate browser profiles, read cookies, call nav once to ask "who am I";
+//   - **cookie values are never handed back**, only the account name / mid / whether SESSDATA and bili_jct exist;
+//   - sending lives in another module and requires explicit confirmation (see sendDanmaku).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,7 +15,7 @@ import { readBrowserCookies } from './cookies.js';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-/** 常见浏览器的 userData 根目录（不写死某一台机器，都从环境变量推） */
+/** userData roots of the common browsers (never hard-coded to one machine; all derived from env vars) */
 export function browserRoots() {
   const home = os.homedir();
   const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
@@ -32,7 +33,7 @@ export function browserRoots() {
   return list.filter(([, p]) => fs.existsSync(p));
 }
 
-/** 展开一个 userData 根下的全部 profile 目录 */
+/** Expand every profile directory under one userData root */
 export function profilesUnder(root) {
   const out = [];
   const hasCookies = (p) => fs.existsSync(path.join(p, 'Network', 'Cookies')) || fs.existsSync(path.join(p, 'Cookies'));
@@ -51,7 +52,7 @@ export function profilesUnder(root) {
   return out;
 }
 
-/** 问 B 站「这个 cookie 是谁」；顺便确认登录态是否还有效 */
+/** Ask bilibili "who is this cookie"; also confirms whether the login is still valid */
 export async function whoAmI(cfg, cookieHeader) {
   try {
     const r = await netFetch(
@@ -72,11 +73,11 @@ export async function whoAmI(cfg, cookieHeader) {
 }
 
 /**
- * 枚举本机所有可用的 bilibili 登录。
+ * Enumerate every usable bilibili login on this machine.
  * @returns {Promise<{accounts:Array, scanned:number, errors:Array}>}
  */
 export async function listAccounts(cfg) {
-  const dirs = new Map(); // profile 路径 -> 标签
+  const dirs = new Map(); // profile path -> label
   const configured = String(cfg?.browser?.profileDir ?? '').trim();
   if (configured) dirs.set(path.resolve(configured), '（设置里指定的）');
   for (const [label, root] of browserRoots()) {
@@ -94,20 +95,21 @@ export async function listAccounts(cfg) {
       continue;
     }
     if (!ck.ok) {
-      // 没有登录态是常态（大部分 profile 都没登过 B 站），不必当错误刷屏
+      // No login state is the normal case (most profiles never signed in to bilibili),
+      // so it is not worth flooding the errors with it
       continue;
     }
     const hasSession = (ck.names ?? []).includes('SESSDATA');
     const hasCsrf = (ck.names ?? []).includes('bili_jct');
     const me = hasSession ? await whoAmI(cfg, ck.cookieHeader) : { ok: true, isLogin: false };
     accounts.push({
-      // id 用 profile 路径的短哈希：不回传路径以外的任何敏感信息
+      // id is a short hash of the profile path: no sensitive information beyond the path is handed back
       id: Buffer.from(dir).toString('base64url').slice(0, 16),
       profile: dir,
       browser,
       hasSession,
       hasCsrf,
-      // 能发弹幕的最低条件：SESSDATA + bili_jct，且 nav 确认已登录
+      // Minimum requirement to post a danmaku: SESSDATA + bili_jct, plus nav confirming the login
       canSend: !!(hasSession && hasCsrf && me.isLogin),
       mid: me.mid ?? null,
       uname: me.uname ?? null,

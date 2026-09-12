@@ -1,20 +1,23 @@
-// calendar.js — 纪念日 / 生日 / 3D披露 / 周年 倒计时
+// calendar.js — countdowns for anniversaries / birthdays / 3D reveals / anniversaries of debut
 //
-// 为什么这块要单独写一模块而不是在界面里算：日期算术里有两个地方几乎一定会错，
-// 而且错得很隐蔽：
+// Why this is a module of its own instead of arithmetic inside the UI: there are two places in date
+// arithmetic where you are almost certain to go wrong, and the mistakes hide well:
 //
-//  1) **闰日**。2 月 29 日的生日，在平年该怎么算？业界做法是「顺延到 3 月 1 日」。
-//     用 `new Date(y, 1, 29)` 会很自然地滚到 3 月 1 日 —— 看起来对，但它同时会让
-//     「天数差」变成非整数天（因为本地时间偏移变化），于是排序和倒计时都会漂。
+//  1) **Leap day**. What is a February 29 birthday supposed to be in a common year? The industry
+//     convention is "shift to March 1".
+//     `new Date(y, 1, 29)` rolls to March 1 quite naturally — it looks right, but it also turns the
+//     "difference in days" into a non-integer number of days (because the local time offset changed),
+//     so both sorting and the countdown drift.
 //
-//  2) **时区与夏令时**。用 `(a - b) / 86400000` 算天数差，在有夏令时的时区会得到
-//     23 小时或 25 小时的一天 → 差一天。正确做法是把两端的**日历日**取成
-//     'YYYY-MM-DD' 字符串（用 Intl 在目标时区格式化），再按 UTC 解析回来相减，
-//     这样「日期差」永远是整数天。
+//  2) **Time zones and daylight saving**. Computing a day difference as `(a - b) / 86400000` yields a
+//     23-hour or 25-hour day in a zone with DST → off by one. The correct way is to take the
+//     **calendar day** at both ends as a 'YYYY-MM-DD' string (formatted with Intl in the target zone),
+//     parse both back as UTC and subtract — then the "day difference" is always a whole number of days.
 //
-// 所以本模块只做两件事：把任意时刻规约成目标时区的日历日字符串；在日历日上做整数算术。
+// So this module does exactly two things: reduce any moment to a calendar-day string in the target time
+// zone, and do integer arithmetic on calendar days.
 
-/** 把某个时刻在指定时区下的「日历日」取成 YYYY-MM-DD（en-CA 恰好就是这个格式） */
+/** take the "calendar day" of a moment in the given time zone as YYYY-MM-DD (en-CA happens to use exactly that format) */
 export function dayInTz(date, timeZone) {
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -25,13 +28,13 @@ export function dayInTz(date, timeZone) {
   return fmt.format(date);
 }
 
-/** 'YYYY-MM-DD' → 用于整数天算术的 UTC 时间戳 */
+/** 'YYYY-MM-DD' → a UTC timestamp for integer-day arithmetic */
 function dayStamp(dayStr) {
   const [y, m, d] = String(dayStr).split('-').map(Number);
   return Date.UTC(y, m - 1, d);
 }
 
-/** 两个日历日之间相差多少天（整数，不受夏令时影响） */
+/** how many days apart two calendar days are (an integer, unaffected by daylight saving) */
 export function daysBetween(fromDay, toDay) {
   return Math.round((dayStamp(toDay) - dayStamp(fromDay)) / 86400000);
 }
@@ -47,15 +50,15 @@ function daysInMonth(y, m) {
 export const KINDS = ['birthday', 'debut', '3d', 'anniversary', 'event', 'other'];
 
 /**
- * 算出某个条目「下一次」发生的日历日。
+ * Work out the calendar day on which an entry "happens next".
  *
- * 条目支持两种：
- *   { date: 'MM-DD' }            每年重复（生日、出道日、周年）
- *   { date: 'YYYY-MM-DD' }       只发生一次（3D 披露、演唱会）
- * 可选 `since: YYYY` 表示「从哪一年开始算」，用来算第几年。
+ * Two kinds of entry are supported:
+ *   { date: 'MM-DD' }             repeats every year (birthday, debut day, anniversary)
+ *   { date: 'YYYY-MM-DD' }        happens exactly once (3D reveal, concert)
+ * The optional `since: YYYY` says "from which year to count", used to compute which anniversary it is.
  *
  * @param {object} entry
- * @param {string} today 目标时区下的今天 'YYYY-MM-DD'
+ * @param {string} today today in the target time zone, 'YYYY-MM-DD'
  * @returns {{day:string, year:number, turns:number|null, leapAdjusted:boolean}|null}
  */
 export function nextOccurrence(entry, today) {
@@ -65,7 +68,7 @@ export function nextOccurrence(entry, today) {
   const r = /^(\d{2})-(\d{2})$/.exec(raw);
   if (!m && !r) return null;
 
-  // 一次性日期
+  // a one-off date
   if (m) {
     const day = raw;
     const diff = daysBetween(today, day);
@@ -79,13 +82,13 @@ export function nextOccurrence(entry, today) {
 
   const since = Number(entry?.since) || null;
 
-  // 从今年开始往后找第一个「还没过」的年份（最多看 8 年，防止异常数据死循环）
+  // starting from this year, walk forward to the first year that has not passed yet (look at 8 years at most, so malformed data cannot spin forever)
   for (let y = tY; y <= tY + 8; y++) {
     let useM = mm;
     let useD = dd;
     let leapAdjusted = false;
     if (mm === 2 && dd === 29 && !isLeapYear(y)) {
-      // 闰日在平年顺延到 3 月 1 日（沿用惯例，并且明确标出来让界面能提示）
+      // a leap day in a common year shifts to March 1 (following convention, and flagged explicitly so the UI can point it out)
       useM = 3;
       useD = 1;
       leapAdjusted = true;
@@ -99,16 +102,17 @@ export function nextOccurrence(entry, today) {
 }
 
 /**
- * 全部条目的倒计时视图。
+ * The countdown view over every entry.
  * @param {object} cfg
  * @param {{days?:number, now?:Date, weekStart?:number}} opts
  */
 export function upcoming(cfg, opts = {}) {
-  // 注意用 || 而不是 ??：配置里 timeZone 默认是**空字符串**，
-  // 而 ?? 只认 null/undefined，空串会一路传下去，最后界面上的时区显示为空（踩过）。
+  // Note the || rather than ??: timeZone defaults to the **empty string** in the config,
+  // and ?? only recognizes null/undefined, so the empty string travels all the way down and the time zone
+  // shown in the UI ends up blank (hit this one).
   const tz = opts.timeZone || cfg?.calendar?.timeZone || undefined;
   const now = opts.now ?? new Date();
-  // 不传时区时用系统时区：Intl 允许 timeZone 为 undefined
+  // with no time zone passed, use the system one: Intl allows timeZone to be undefined
   const today = tz ? dayInTz(now, tz) : localDay(now);
   const entries = cfg?.calendar?.entries ?? [];
   const rows = [];
@@ -156,10 +160,10 @@ function localDay(d) {
 }
 
 // ─────────────────────────────────────────────
-// 从情报里**本地**抽取纪念日线索（不联网、不用 LLM）
+// Extract anniversary hints from the intel **locally** (no network, no LLM)
 // ─────────────────────────────────────────────
 
-/** 关键词 → 类型。中日英都有，因为情报源本来就是多语的。 */
+/** keyword → kind. CJK and English both appear, because the intel sources are multilingual to begin with. */
 const KIND_HINTS = [
   ['3d', /3D(披露|お披露目|おひろめ|debut|model|化)|3D化|three[- ]?d|３Ｄ/],
   ['birthday', /誕生日|诞生日|生日|バースデー|birthday|생일/],
@@ -167,7 +171,7 @@ const KIND_HINTS = [
   ['anniversary', /周年|記念日|anniversary|アニバーサリー/],
 ];
 
-/** 日期形态：2026年3月5日 / 3月5日 / 3/5 / 2026-03-05 / 03-05 */
+/** date shapes: 2026-03-05 / 03-05 / 3/5, plus the CJK year/month/day forms the first two patterns above accept */
 const DATE_PATTERNS = [
   /(\d{4})\s*[年\-\/.]\s*(\d{1,2})\s*[月\-\/.]\s*(\d{1,2})\s*日?/,
   /(\d{1,2})\s*月\s*(\d{1,2})\s*日/,
@@ -175,9 +179,10 @@ const DATE_PATTERNS = [
 ];
 
 /**
- * 从情报条目文本里找「可能的纪念日」。
- * 只做**线索**：日期 + 类型 + 原文片段，用来提示使用者确认，不自动落库。
- * 这样既不依赖 LLM，也不会因为误判污染日历。
+ * Look for "possible anniversaries" in the text of intel items.
+ * It only produces **hints**: a date + a kind + a snippet of the source text, meant to prompt the user to
+ * confirm; nothing is written to the calendar automatically.
+ * That way it depends on no LLM, and a misread cannot pollute the calendar.
  */
 export function detectFromItems(items, { limit = 40 } = {}) {
   const found = [];
@@ -219,15 +224,15 @@ export function detectFromItems(items, { limit = 40 } = {}) {
   return found;
 }
 
-/** 规范化一个日历条目（界面/接口来的数据都要过这里） */
+/** normalize one calendar entry (data coming from the UI/API all passes through here) */
 export function sanitizeEntry(input, idGen = () => `cal-${Date.now().toString(36)}`) {
   const name = String(input?.name ?? '').trim().slice(0, 80);
   const date = String(input?.date ?? '').trim();
   const rec = /^(\d{2})-(\d{2})$/.exec(date);
   const once = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!name) return { error: 'name is required' };
-  // 光校验格式不够：'13-45' 也符合 \d{2}-\d{2}，必须校验范围
-  // （2/29 用闰年当基准来判断，这样它是合法输入，平年的顺延交给 nextOccurrence）
+  // Checking the shape alone is not enough: '13-45' also matches \d{2}-\d{2}, so the range has to be checked too
+  // (2/29 is judged against a leap year, which makes it a valid input; shifting it for common years is left to nextOccurrence)
   if (rec) {
     const mm = Number(rec[1]);
     const dd = Number(rec[2]);
@@ -261,8 +266,8 @@ export function sanitizeEntry(input, idGen = () => `cal-${Date.now().toString(36
 }
 
 /**
- * 某个月的网格（用于界面上的月历）。
- * weekStart: 0=周日（美/日/韩/港台），1=周一（中/欧/俄）—— 直接吃地区的设置。
+ * The grid of one month (used by the month calendar in the UI).
+ * weekStart: 0=Sunday (US/JP/KR/HK-TW), 1=Monday (CN/EU/RU) — taken straight from the region setting.
  */
 export function monthGrid(year, month, weekStart = 1, { marks = {} } = {}) {
   const first = Date.UTC(year, month - 1, 1);
@@ -285,7 +290,7 @@ export function monthGrid(year, month, weekStart = 1, { marks = {} } = {}) {
   return { year, month, weekStart, cells };
 }
 
-/** 把条目按日历日索引起来（月历标点用） */
+/** index the entries by calendar day (used for the month-calendar dots) */
 export function marksFor(cfg, year, month, opts = {}) {
   const entries = (cfg?.calendar?.entries ?? []).filter((e) => e && e.hidden !== true);
   const marks = {};
@@ -299,7 +304,7 @@ export function marksFor(cfg, year, month, opts = {}) {
       let dd = Number(yearly[2]);
       if (mm === 2 && dd === 29 && !isLeapYear(year)) {
         mm = 3;
-        dd = 1; // 与 nextOccurrence 保持一致
+        dd = 1; // keep in step with nextOccurrence
       }
       if (mm !== month) continue;
       const day = `${year}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;

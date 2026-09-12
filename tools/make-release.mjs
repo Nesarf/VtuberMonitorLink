@@ -1,28 +1,29 @@
-// make-release.mjs — 生成对外发布目录（无痕化）/ build the public release tree
+// make-release.mjs — build the public release tree / build the public release tree
 //
-// 目标产物（默认 <工程同级>/VML-release，可用 --out 指定）：
+// Target artifacts (default <sibling of the project>/VML-release, overridable with --out):
 //
 //   <out>/
-//     README.md               ← 对外说明（不带本机信息）
-//     PUBLISH-TO-GITHUB.md    ← 推到 GitHub 的逐步命令
-//     src/ …                  ← 无痕化后的**完整工程副本**（可直接 git init 推上去）
+//     README.md               <- public description (carries no local machine info)
+//     PUBLISH-TO-GITHUB.md    <- the step-by-step commands for pushing to GitHub
+//     src/ …                  <- the **complete, sanitized copy of the project** (can be git init'd and pushed directly)
 //     releases/<version>/
-//         VtuberMonitorLink-<版本>-win-x64.zip
-//         *.zip.manifest.json   ← 包内文件清单（发布校验据此断言「没有运行期数据」）
+//         VtuberMonitorLink-<version>-win-x64.zip
+//         *.zip.manifest.json   <- the in-package file listing (release verification asserts "no runtime data" against it)
 //         SHA256SUMS.txt
 //         RELEASE-NOTES.md
 //
-// 「无痕化」在这里是**硬闸门**，不是尽力而为：
-//   · 运行期数据（config.json / reports / feeds / logs / watch / thumbs / advice）绝不进副本
-//   · .git / node_modules / build / dist 不进副本
-//   · 副本写完立刻用工程自己的扫描器复扫（tools/verify-release.cjs --scan-only --dir），
-//     一旦发现密钥、绝对路径、私有名字、harness 标记 → 整个发布中止（退出码 1）
-//   · 发行 zip 的清单也会被断言：出现任何运行期数据同样中止
+// Sanitization here is a **hard gate**, not a best effort:
+//   · runtime data (config.json / reports / feeds / logs / watch / thumbs / advice) never enters the copy
+//   · .git / node_modules / build / dist do not enter the copy
+//   · as soon as the copy is written it is re-scanned with the project's own scanner (tools/verify-release.cjs --scan-only --dir),
+//     and any secret, absolute path, private name or harness marker -> the whole release aborts (exit code 1)
+//   · the release zip's manifest is asserted too: any runtime data present aborts as well
 //
-// 注意：本文件里**不写死任何本机路径** —— 默认输出目录由 VML_RELEASE_OUT 环境变量
-// 或工程同级目录推导。写死盘符本身就是无痕化要抓的东西（而且扫描器真的会抓到它）。
+// Note: this file **hardcodes no local path** -- the default output directory is derived from the VML_RELEASE_OUT
+// environment variable or from the directory next to the project. A hardcoded drive letter is itself exactly what
+// sanitization has to catch (and the scanner really would catch it).
 //
-//   node tools/make-release.mjs [--out <目录>] [--skip-copy]
+//   node tools/make-release.mjs [--out <dir>] [--skip-copy]
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,7 +44,7 @@ const rel = (p) => path.relative(ROOT, p).replace(/\\/g, '/');
 const log = (s) => process.stdout.write(s + '\n');
 const problems = [];
 
-// 绝不进对外副本的东西。前三类是运行期数据（含密钥），后面是开发中间产物与本机私货。
+// Things that never enter the public copy. The first three classes are runtime data (including secrets), the rest are development intermediates and local machine leftovers.
 const NEVER_COPY = new Set([
   '.git',
   'node_modules',
@@ -63,7 +64,7 @@ const NEVER_COPY = new Set([
   '.cache',
   '.cache',
 ]);
-// 允许出现的「示例路径」（文档里教别人填的那种），扫描时会放行
+// The "example paths" allowed to appear (the kind the docs tell others to fill in); the scan lets them through
 const EXAMPLE_PATH_HINTS = [/E:\\\\YourCache/, /E:\\YourCache/];
 
 function copyTree(src, dst) {
@@ -90,7 +91,7 @@ function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-// ───────────────────────────────────────────── 0. 前置条件
+// ───────────────────────────────────────────── 0. preconditions
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const version = pkg.version;
@@ -98,32 +99,32 @@ const outRoot = args.out;
 const srcOut = path.join(outRoot, 'src');
 const relOut = path.join(outRoot, 'releases', version);
 
-log(`\n发布目录 / release tree: ${outRoot}`);
-log(`版本 / version: ${version}\n`);
+log(`\nrelease tree / release tree: ${outRoot}`);
+log(`version / version: ${version}\n`);
 
 const zipName = `VtuberMonitorLink-${version}-win-x64.zip`;
 const zipPath = path.join(ROOT, 'dist', zipName);
 const manifestPath = zipPath + '.manifest.json';
 if (!fs.existsSync(zipPath)) {
-  log('  ⚠ 还没有发行包 —— 先跑 node tools/build-portable.cjs');
+  log('  ! no release package yet -- run node tools/build-portable.cjs first');
 } else {
-  log(`  ✓ 找到发行包 ${zipName}（${(fs.statSync(zipPath).size / 1024 / 1024).toFixed(1)} MB）`);
+  log(`  ok found release package ${zipName} (${(fs.statSync(zipPath).size / 1024 / 1024).toFixed(1)} MB)`);
 }
 
-// ───────────────────────────────────────────── 1. 拷贝无痕化副本
+// ───────────────────────────────────────────── 1. copy the sanitized tree
 
 if (args.copy) {
-  log('\n[1/5] 拷贝无痕化工程副本');
+  log('\n[1/5] copying the sanitized project tree');
   fs.rmSync(srcOut, { recursive: true, force: true });
   fs.mkdirSync(srcOut, { recursive: true });
   const n = copyTree(ROOT, srcOut);
-  log(`  -> ${rel(srcOut)}（${n} 个文件）`);
-  for (const skip of [...NEVER_COPY].sort()) log(`     排除 ${skip}`);
+  log(`  -> ${rel(srcOut)} (${n} files)`);
+  for (const skip of [...NEVER_COPY].sort()) log(`     excluding ${skip}`);
 }
 
-// ───────────────────────────────────────────── 2. 用工程自己的扫描器复扫
+// ───────────────────────────────────────────── 2. re-scan with the project's own scanner
 
-log('\n[2/5] 无痕化扫描（用工程自己的校验器 --scan-only）');
+log('\n[2/5] sanitization scan (using the project\'s own verifier --scan-only)');
 const scan = spawnSync(
   process.execPath,
   [path.join(ROOT, 'tools', 'verify-release.cjs'), '--scan-only', '--dir', srcOut],
@@ -134,29 +135,29 @@ for (const line of scanOut.split(/\r?\n/)) {
   if (/PROBLEM|problem\(s\)|note:/.test(line)) log('  ' + line.trim());
 }
 if (scan.status !== 0) {
-  problems.push('无痕化扫描未通过（见上）—— 发布中止');
+  problems.push('the sanitization scan did not pass (see above) -- release aborted');
 } else {
-  log('  ✓ 没有密钥、绝对路径、私有名字、harness 标记');
+  log('  ok no secrets, absolute paths, private names or harness markers');
 }
 
-// ───────────────────────────────────────────── 3. 发行包 + 校验和
+// ───────────────────────────────────────────── 3. release package + checksums
 
-log('\n[3/5] 组装 releases/');
+log('\n[3/5] assembling releases/');
 fs.mkdirSync(relOut, { recursive: true });
 if (fs.existsSync(zipPath)) {
   fs.copyFileSync(zipPath, path.join(relOut, zipName));
   if (fs.existsSync(manifestPath)) {
     const man = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    // 硬断言：包里不能有运行期数据（config.json 里有 API Key，历史报告是隐私）
+    // Hard assertion: the package must not contain runtime data (config.json holds the API key, past reports are private)
     const bad = (man.files ?? []).filter((f) => /^app\/(config\.json|reports|feeds|logs|watch|thumbs|advice)(\/|$)/.test(f));
     if (bad.length) {
-      problems.push(`发行包里出现运行期数据: ${bad.slice(0, 5).join(', ')}`);
+      problems.push(`runtime data appeared in the release package: ${bad.slice(0, 5).join(', ')}`);
     } else {
-      log(`  ✓ 包内 ${man.files.length} 个文件，无运行期数据（已排除 ${man.excluded.length} 项）`);
+      log(`  ok ${man.files.length} files in the package, no runtime data (${man.excluded.length} items excluded)`);
     }
     fs.copyFileSync(manifestPath, path.join(relOut, path.basename(manifestPath)));
   } else {
-    problems.push('缺少 zip 清单（.manifest.json）—— 无法断言包内容，发布中止');
+    problems.push('the zip manifest (.manifest.json) is missing -- the package contents cannot be asserted, release aborted');
   }
 }
 
@@ -165,13 +166,13 @@ for (const f of fs.readdirSync(relOut).filter((f) => !f.endsWith('SHA256SUMS.txt
   sums.push(`${sha256(path.join(relOut, f))}  ${f}`);
 }
 fs.writeFileSync(path.join(relOut, 'SHA256SUMS.txt'), sums.join('\n') + '\n', 'utf8');
-log(`  -> ${rel(relOut)}（${fs.readdirSync(relOut).length} 个文件 + SHA256SUMS.txt）`);
+log(`  -> ${rel(relOut)} (${fs.readdirSync(relOut).length} files + SHA256SUMS.txt)`);
 
-// ───────────────────────────────────────────── 4. 对外说明与发布步骤
+// ───────────────────────────────────────────── 4. public documentation and release steps
 
-log('\n[4/5] 对外文档');
-// 目录分工要写在最显眼的地方：这个目录是**冻结尾发布快照**，不是开发树。
-// 在副本里改代码然后发现「改了没生效」是很容易踩的一次性错误。
+log('\n[4/5] public documentation');
+// The division of labour must be stated in the most obvious place: this directory is a **frozen release snapshot**, not a development tree.
+// Editing code in the copy and then finding "my change had no effect" is an easy one-time mistake to make.
 fs.writeFileSync(
   path.join(outRoot, 'README-FIRST.md'),
   `# 这个目录是什么 / What this directory is
@@ -275,13 +276,13 @@ if (fs.existsSync(path.join(srcOut, 'README.md'))) {
 }
 log('  -> PUBLISH-TO-GITHUB.md, releases/' + version + '/RELEASE-NOTES.md');
 
-// ───────────────────────────────────────────── 5. 结果
+// ───────────────────────────────────────────── 5. result
 
-log('\n[5/5] 结果');
+log('\n[5/5] result');
 if (problems.length) {
   for (const p of problems) log('  PROBLEM: ' + p);
-  log(`\n${problems.length} 处问题 —— 发布中止，先修掉再重跑。\n`);
+  log(`\n${problems.length} problems -- release aborted, fix them and re-run.\n`);
   process.exit(1);
 }
-log(`  ✓ 发布目录已就绪: ${outRoot}`);
-log('    下一步：看 PUBLISH-TO-GITHUB.md\n');
+log(`  ok release directory is ready: ${outRoot}`);
+log('    next step: read PUBLISH-TO-GITHUB.md\n');

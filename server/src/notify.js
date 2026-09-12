@@ -1,21 +1,24 @@
-// notify.js — 告警推送 / outbound alert delivery
+// notify.js — outbound alert delivery
 //
-// 目标：让「提前预警」真的落到手机上。
+// Goal: make "early warning" actually land on a phone.
 //
-// 这一版补的是三件真正缺的事：
+// This version fills in the three things that were genuinely missing:
 //
-//  1) **静默时段**。凌晨三点推一条「嘉然今天直播」没有意义 —— 但**丢弃**更糟，
-//     因为使用者根本不知道发生过。所以静默期内的通知进**队列**，出静默期补发。
-//     跨午夜的时段（23:00→08:00）是最常见的形态，也是最容易写错的地方：
-//     不能写成 `start <= t && t < end`（那样 23:00→08:00 永远不成立）。
-//     另外「守时」必须按配置的时区算 —— 盯日箱时你的 23:00 不是对方的 23:00。
+//  1) **Quiet hours**. Pushing "Jaran is live today" at 3 a.m. is pointless —— but **dropping** it is
+//     worse, because the user never learns it happened. So notifications during quiet hours go into a
+//     **queue** and are flushed once quiet hours end.
+//     The cross-midnight window (23:00→08:00) is the most common shape and the easiest place to get
+//     it wrong: it cannot be written as `start <= t && t < end` (that window is never true for 23:00→08:00).
+//     Also "keeping time" has to be computed in the configured time zone —— when watching a JP agency
+//     your 23:00 is not their 23:00.
 //
-//  2) **去重**。同一条标题在几小时内重复推是纯粹的骚扰（报告标题往往就是同一个）。
+//  2) **Deduplication**. Pushing the same title again within a few hours is pure harassment (report titles are often the same).
 //
-//  3) **更多渠道**：钉钉（要 HMAC 签名）、企业微信、ntfy、Gotify、PushPlus、Slack。
-//     钉钉的加签不能用 `+` 直接拼 URL（base64 里有 `+`/`/`），必须 encodeURIComponent。
+//  3) **More channels**: DingTalk (needs an HMAC signature), WeCom, ntfy, Gotify, PushPlus, Slack.
+//     DingTalk's signature cannot be appended to the URL with plain `+` (base64 contains `+`/`/`),
+//     it must go through encodeURIComponent.
 //
-// 仍然全部走 netFetch，因此遵循（且可按目标覆盖）代理配置。
+// Everything still goes through netFetch, so it follows the proxy config (and can override it per target).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -112,9 +115,9 @@ export function newTarget(kind = 'bark', overrides = {}) {
     kind: k.id,
     name: k.name,
     enabled: true,
-    // always: 每次运行都推 | alerts: 只在有告警时 | failures: 只在失败时
+    // always: push on every run | alerts: only when there are alerts | failures: only on failure
     on: 'alerts',
-    // inherit: 遵守静默时段（延后补发）| bypass: 无视静默时段，立刻推
+    // inherit: respect quiet hours (flush later) | bypass: ignore quiet hours, push at once
     quiet: 'inherit',
     key: '',
     server: '',
@@ -143,7 +146,7 @@ export function sanitizeTarget(t = {}, i = 0) {
   return out;
 }
 
-/** 这个目标该不该为本次事件触发 / should this target fire for this event */
+/** Should this target fire for this event */
 function shouldFire(target, { level }) {
   if (!target.enabled) return false;
   if (target.on === 'always') return true;
@@ -156,9 +159,9 @@ function truncate(s, n) {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
 
-// ───────────────────────────────────────────── 静默时段 / quiet hours
+// ───────────────────────────────────────────── quiet hours
 
-/** 'HH:MM' → 分钟数 */
+/** 'HH:MM' → minutes */
 export function toMinutes(hhmm) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm ?? '').trim());
   if (!m) return null;
@@ -168,7 +171,7 @@ export function toMinutes(hhmm) {
   return h * 60 + min;
 }
 
-/** 某个时刻在指定时区下的「当天分钟数」与星期几 */
+/** The "minutes into the day" and the weekday of an instant in the given time zone */
 export function localClock(at, timeZone) {
   const d = at instanceof Date ? at : new Date(at ?? Date.now());
   const fmt = new Intl.DateTimeFormat('en-GB', {
@@ -186,13 +189,14 @@ export function localClock(at, timeZone) {
 }
 
 /**
- * 现在是否处于静默时段。
+ * Are we inside quiet hours right now.
  *
- * 跨午夜是最容易写错的地方：23:00 → 08:00 这种情况不能用 `start <= t < end` 判断
- * （这个区间在单日内永远为空）。正确做法是判断「在不在禁区里」：
- *   start > end  → t >= start || t < end      （跨午夜）
- *   start <= end → t >= start && t < end      （同一天内）
- * start === end 视为「全天静默」（这是使用者明确表达「别推」的方式）。
+ * Cross-midnight is the easiest place to get it wrong: a 23:00 → 08:00 window cannot be tested with
+ * `start <= t < end` (that interval is always empty within a single day). The correct approach is to
+ * test "is it inside the forbidden zone":
+ *   start > end  → t >= start || t < end      (crosses midnight)
+ *   start <= end → t >= start && t < end      (within the same day)
+ * start === end counts as "all-day quiet" (that is how the user explicitly says "do not push").
  */
 export function inQuietHours(cfg, { at = new Date(), kind = null, level = 'info' } = {}) {
   const q = cfg?.notify?.quietHours ?? {};
@@ -200,6 +204,8 @@ export function inQuietHours(cfg, { at = new Date(), kind = null, level = 'info'
   const start = toMinutes(q.start ?? '23:00');
   const end = toMinutes(q.end ?? '08:00');
   if (start === null || end === null) return { quiet: false, error: 'invalid quiet hours' };
+  // Reason strings in this section are shown in Settings ("quiet now · <reason>") and in the
+  // notification queue, i.e. they are product copy: they stay in the product's language.
   if (start === end) return { quiet: true, until: null, reason: '全天静默' };
 
   const { minutes, weekday, hhmm } = localClock(at, q.timeZone || cfg?.calendar?.timeZone);
@@ -210,14 +216,14 @@ export function inQuietHours(cfg, { at = new Date(), kind = null, level = 'info'
   const quiet = start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;
   if (!quiet) return { quiet: false, clock: hhmm };
 
-  // 免静默的级别（urgent 默认豁免：开播这类时间敏感的通知等不起）
+  // Levels exempt from quiet hours (urgent is exempt by default: time-sensitive notifications like a stream starting cannot wait)
   const bypass = q.bypassLevels ?? ['urgent'];
   if (Array.isArray(bypass) && bypass.includes(level)) return { quiet: false, clock: hhmm, bypassed: true };
 
   return { quiet: true, clock: hhmm, start: q.start, end: q.end, reason: `静默时段 ${q.start}–${q.end}` };
 }
 
-// ───────────────────────────────────────────── 队列与去重
+// ───────────────────────────────────────────── queue and dedupe
 
 function jfile(cfg, name) {
   return path.join(resolveDir(cfg, 'logsDir'), name);
@@ -236,7 +242,7 @@ function writeJson(cfg, name, data) {
     fs.mkdirSync(resolveDir(cfg, 'logsDir'), { recursive: true });
     fs.writeFileSync(jfile(cfg, name), JSON.stringify(data, null, 2), 'utf8');
   } catch {
-    // 落盘失败不该让通知流程崩掉
+    // A failed write must not take the notification flow down
   }
 }
 
@@ -248,7 +254,7 @@ function fingerprint(payload) {
     .slice(0, 16);
 }
 
-/** 同一条内容在 N 分钟内只推一次 */
+/** The same content is pushed only once per N minutes */
 export function isDuplicate(cfg, payload, at = Date.now()) {
   const mins = Number(cfg?.notify?.dedupeMinutes ?? 0);
   if (!(mins > 0)) return false;
@@ -263,7 +269,7 @@ export function rememberSent(cfg, payload, at = new Date()) {
   if (!(mins > 0)) return;
   const seen = readJson(cfg, 'notify-seen.json', {});
   seen[fingerprint(payload)] = at.toISOString();
-  // 顺手清掉过期项，避免无限增长
+  // Also clear out expired entries along the way so the file cannot grow forever
   const cutoff = at.getTime() - Math.max(mins, 1440) * 60000;
   for (const [k, v] of Object.entries(seen)) if (Date.parse(v) < cutoff) delete seen[k];
   writeJson(cfg, 'notify-seen.json', seen);
@@ -277,7 +283,7 @@ export function readQueue(cfg) {
   return readJson(cfg, 'notify-queue.json', []);
 }
 
-/** 静默期内积压的通知 */
+/** Notifications piling up during quiet hours */
 export function enqueue(cfg, log, payload, { reason, targetIds = null } = {}) {
   const q = readQueue(cfg);
   const item = {
@@ -288,20 +294,20 @@ export function enqueue(cfg, log, payload, { reason, targetIds = null } = {}) {
     title: payload.title ?? '',
     body: payload.body ?? '',
     url: payload.url ?? null,
-    targetIds, // null = 发给当时该发的所有目标
+    targetIds, // null = send to every target that should have fired at the time
   };
   q.push(item);
-  // 上限保护：积压太多没意义，留最近的 200 条
+  // Cap protection: a huge backlog is meaningless, so the most recent 200 are kept
   const capped = q.slice(-200);
   writeJson(cfg, 'notify-queue.json', capped);
-  log?.info(`通知已进入队列（${item.reason}）/ queued: ${item.title}`);
+  log?.info(`queued: ${item.title} (${item.reason})`);
   return item;
 }
 
 /**
- * 把队列里该发的补发出去。
+ * Flush the queue entries that are due.
  * @param {object} o
- * @param {boolean} o.force 忽略静默时段（手动点「立即补发」时用）
+ * @param {boolean} o.force ignore quiet hours (used by the manual "flush now" button)
  */
 export async function flushQueue(cfg, log, { force = false, limit = 20 } = {}) {
   const q = readQueue(cfg);
@@ -317,29 +323,29 @@ export async function flushQueue(cfg, log, { force = false, limit = 20 } = {}) {
       body: item.body,
       level: item.level,
       url: item.url,
-      // 补发时不再走静默判断（已经出静默期了），但仍走目标过滤
+      // A flush does not re-enter the quiet check (quiet hours are already over), but target filtering still applies
       _skipQuiet: true,
       _targetIds: item.targetIds,
     });
     if (res.sent > 0 || res.results.length === 0) sentIds.add(item.id);
-    else if (res.results.every((r) => r.ok === false && r.error)) sentIds.add(item.id); // 全失败也别永远卡在队列里
+    else if (res.results.every((r) => r.ok === false && r.error)) sentIds.add(item.id); // even a total failure must not stay stuck in the queue forever
   }
   const remaining = q.filter((x) => !sentIds.has(x.id));
   writeJson(cfg, 'notify-queue.json', remaining);
-  if (sentIds.size) log?.info(`补发了 ${sentIds.size} 条积压通知 / flushed ${sentIds.size} queued notifications`);
+  if (sentIds.size) log?.info(`flushed ${sentIds.size} queued notifications`);
   return { flushed: sentIds.size, remaining: remaining.length };
 }
 
-// ───────────────────────────────────────────── 渠道请求构造
+// ───────────────────────────────────────────── channel request construction
 
-/** 钉钉加签：HMAC-SHA256(timestamp + "\n" + secret) 再 base64，最后必须 URL 编码 */
+/** DingTalk signing: HMAC-SHA256(timestamp + "\n" + secret) then base64, and finally it must be URL-encoded */
 export function dingtalkSign(secret, timestamp) {
   const stringToSign = `${timestamp}\n${secret}`;
   const hmac = crypto.createHmac('sha256', secret).update(stringToSign, 'utf8').digest('base64');
   return { sign: hmac, query: `timestamp=${timestamp}&sign=${encodeURIComponent(hmac)}` };
 }
 
-/** 把一条通知变成具体请求 / turn one notification into a concrete request */
+/** Turn one notification into a concrete request */
 export function buildRequest(target, payload) {
   const title = truncate(payload.title ?? "Vtuber's Monitor Link", 80);
   const body = truncate(payload.body ?? '', 1500);
@@ -428,14 +434,14 @@ export function buildRequest(target, payload) {
   }
 }
 
-/** HTTP 头不能含中文/换行 —— ntfy 的 Title 走头部，必须编码 */
+/** HTTP headers cannot contain CJK characters or newlines —— ntfy's Title goes in a header, so it must be encoded */
 function encodeHeader(s) {
   const ascii = /^[\x20-\x7E]*$/.test(s);
   if (ascii) return s;
   return `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`;
 }
 
-// ───────────────────────────────────────────── 投递
+// ───────────────────────────────────────────── delivery
 
 async function deliver(cfg, log, payload) {
   const targets = (cfg?.notify?.targets ?? []).filter((t) => shouldFire(t, payload));
@@ -448,7 +454,7 @@ async function deliver(cfg, log, payload) {
       continue;
     }
     let lastErr = null;
-    // 一次重试：网络抖动导致的漏推是最难察觉的失败
+    // One retry: a dropped push caused by network jitter is the hardest kind of failure to notice
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const res = await netFetch(
@@ -466,9 +472,9 @@ async function deliver(cfg, log, payload) {
         try {
           business = JSON.parse(text);
         } catch {
-          /* 不是 JSON 就算了 */
+          /* if it is not JSON, never mind */
         }
-        // Bark / Server酱 / 钉钉 / 企业微信 / 飞书 都用 200 + 业务码表示结果
+        // Bark / ServerChan / DingTalk / WeCom / Feishu all express the result as 200 plus a business code
         const bad =
           business &&
           ((typeof business.code === 'number' && business.code !== 0) ||
@@ -477,11 +483,11 @@ async function deliver(cfg, log, payload) {
         const ok = res.ok && !bad;
         if (ok) {
           results.push({ id: t.id, name: t.name, kind: t.kind, ok: true, status: res.status, error: null });
-          log?.info(`通知已发送 / notified: ${t.name} (${t.kind})`);
+          log?.info(`notified: ${t.name} (${t.kind})`);
         } else {
           const err = business?.message ?? business?.errmsg ?? business?.msg ?? `HTTP ${res.status}`;
           results.push({ id: t.id, name: t.name, kind: t.kind, ok: false, status: res.status, error: err });
-          log?.warn(`通知失败 / notify failed: ${t.name} — ${err}`);
+          log?.warn(`notify failed: ${t.name} — ${err}`);
         }
         lastErr = null;
         break;
@@ -493,31 +499,33 @@ async function deliver(cfg, log, payload) {
     }
     if (lastErr) {
       results.push({ id: t.id, name: t.name, kind: t.kind, ok: false, error: lastErr });
-      log?.warn(`通知异常 / notify error: ${t.name} — ${lastErr}`);
+      log?.warn(`notify error: ${t.name} — ${lastErr}`);
     }
   }
   return { sent: results.filter((r) => r.ok).length, results };
 }
 
 /**
- * 发一条通知。顺序是：目标过滤 → 去重 → 静默时段（进队列）→ 投递。
- * 失败不影响其它目标，也绝不抛出去。
+ * Send one notification. The order is: target filtering → dedupe → quiet hours (into the queue) → delivery.
+ * A failure does not affect the other targets, and it is never thrown outwards.
  */
 export async function notify(cfg, log, payload) {
-  // 注意：这里**不要**顺手 flush 队列。
-  // 我最初写了个 `flushQueue(cfg, log).catch(() => {})`（不 await），结果它会在
-  // 调用方已经改了配置之后才真正执行 —— 静默判断用的是「执行那一刻」的配置，
-  // 于是刚入队的通知会被立刻补发出去（自检里表现为「静默期内不该投递却投递了」）。
-  // 补发必须由调用方在明确的时间点 await 调用（runner 每次运行结束、或手动触发）。
+  // Note: do **not** casually flush the queue here.
+  // I originally wrote a `flushQueue(cfg, log).catch(() => {})` (without awaiting), and it ended up
+  // running only after the caller had already changed the config —— the quiet check uses the config of
+  // "the instant it runs", so a notification that had just been queued was flushed straight out again
+  // (in the self-test this showed up as "delivered during quiet hours when it should not have been").
+  // A flush must be awaited by the caller at a well-defined moment (at the end of every runner run, or
+  // on a manual trigger).
   if (isDuplicate(cfg, payload)) {
-    log?.info(`通知重复，已跳过 / duplicate notification skipped: ${payload.title ?? ''}`);
+    log?.info(`duplicate notification skipped: ${payload.title ?? ''}`);
     return { sent: 0, results: [], skipped: 'duplicate' };
   }
 
   if (!payload._skipQuiet) {
     const t = inQuietHours(cfg, { at: new Date(), level: payload.level ?? 'info' });
     if (t.quiet) {
-      // 全部目标都豁免时才直接发；否则进队列等静默结束
+      // Send straight away only when every target is exempt; otherwise queue it and wait for quiet hours to end
       const targets = (cfg?.notify?.targets ?? []).filter((x) => shouldFire(x, payload));
       const bypassed = targets.filter((x) => x.quiet === 'bypass');
       if (!bypassed.length) {
@@ -525,7 +533,7 @@ export async function notify(cfg, log, payload) {
         return { sent: 0, results: [], queued: item.id, reason: t.reason };
       }
       payload = { ...payload, _targetIds: bypassed.map((x) => x.id) };
-      log?.info(`静默时段，但有 ${bypassed.length} 个目标豁免 / bypassing quiet hours for ${bypassed.length} target(s)`);
+      log?.info(`quiet hours, but ${bypassed.length} target(s) are exempt`);
     }
   }
 
@@ -534,14 +542,14 @@ export async function notify(cfg, log, payload) {
   return out;
 }
 
-/** 把敏感字段打码，用于只读接口 / mask secrets for read-only endpoints */
+/** Mask secrets for read-only endpoints */
 export function maskTarget(t) {
   const masked = { ...t };
   for (const k of ['key', 'token', 'secret', 'chatId', 'webhookUrl']) {
     if (!masked[k]) continue;
     if (k === 'webhookUrl') {
-      // 整条路径都要抹掉：Discord / 飞书 / 企业微信的密钥就在路径里，短路径也不能漏
-      // （之前的规则只打码 ≥6 字符的末段，/hook 这种就直接漏出去了）
+      // The whole path has to be erased: the Discord / Feishu / WeCom secrets live in the path, and a short path must not slip through either
+      // (the previous rule only masked a trailing segment of >= 6 characters, so something like /hook leaked straight out)
       try {
         const u = new URL(masked[k]);
         const path = u.pathname && u.pathname !== '/' ? '/***' : '/';

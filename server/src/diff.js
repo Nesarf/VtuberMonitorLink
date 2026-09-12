@@ -1,11 +1,11 @@
-// diff.js — 极简行级 diff
-// 只服务于「监视对象变更」这一件事：给人看的、有界大小的、增删标记清楚。
-// 不追求最小编辑距离，追求稳定与可读。
+// diff.js — a minimal line-level diff
+// It serves exactly one purpose, "watch target changes": human-readable, bounded in size, with clear add/remove markers.
+// It does not chase the minimal edit distance; it chases stability and readability.
 
 /**
- * 行级 diff（LCS 动态规划，超过上限时退化成整块替换）
- * @param {string} a 旧文本
- * @param {string} b 新文本
+ * Line-level diff (LCS dynamic programming; falls back to a block replace past the cap)
+ * @param {string} a old text
+ * @param {string} b new text
  * @param {{maxLines?:number}} opts
  * @returns {{op:' '|'-'|'+', text:string, aLine:number|null, bLine:number|null}[]}
  */
@@ -15,14 +15,14 @@ export function diffLines(a, b, opts = {}) {
   const B = String(b ?? '').split(/\r?\n/);
 
   if (A.length > maxLines || B.length > maxLines) {
-    // 太大就退化成「整块替换」，仍然能看出变了，但不做逐行对齐
+    // Too large -> fall back to "replace the whole block": you can still see that it changed, but there is no per-line alignment
     return [
       ...A.map((text, i) => ({ op: '-', text, aLine: i + 1, bLine: null })),
       ...B.map((text, i) => ({ op: '+', text, aLine: null, bLine: i + 1 })),
     ];
   }
 
-  // 先做公共前后缀裁剪，常见情形下能把 DP 规模压到很小
+  // Trim the common prefix and suffix first; in the common case that shrinks the DP table to something tiny
   let start = 0;
   while (start < A.length && start < B.length && A[start] === B[start]) start++;
   let endA = A.length;
@@ -44,7 +44,7 @@ export function diffLines(a, b, opts = {}) {
     for (let i = 0; i < n; i++) out.push({ op: '-', text: midA[i], aLine: start + i + 1, bLine: null });
     for (let j = 0; j < m; j++) out.push({ op: '+', text: midB[j], aLine: null, bLine: start + j + 1 });
   } else {
-    // LCS 表
+    // LCS table
     const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
     for (let i = n - 1; i >= 0; i--) {
       for (let j = m - 1; j >= 0; j--) {
@@ -76,7 +76,7 @@ export function diffLines(a, b, opts = {}) {
   return out;
 }
 
-/** 汇总统计 / summarize a diff */
+/** Summarize a diff */
 export function diffStats(lines) {
   let added = 0;
   let removed = 0;
@@ -87,7 +87,7 @@ export function diffStats(lines) {
   return { added, removed, changed: added + removed, lines: lines.length };
 }
 
-/** 只保留有变化的片段（前后各留几行上下文）/ keep changed hunks with context */
+/** Keep changed hunks only (a few lines of context on each side) */
 export function diffHunks(lines, context = 3) {
   const keep = new Set();
   lines.forEach((l, i) => {

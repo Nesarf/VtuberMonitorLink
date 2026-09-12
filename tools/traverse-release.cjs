@@ -38,15 +38,18 @@ function check(name, ok, detail) {
 }
 
 /**
- * 一条检查依赖**外网**（example.com 那条监视目标要真的连出去）。
- * 网络抖动时它会随机红 —— 而随机红最后会被当成「噪音」忽略掉，等于把这条检查删了。
- * 所以：先重试两次；仍是**连不上**（超时/DNS/连接被拒）就报成 [skip] 并写明原因，
- * 只有「连上了但结果不对」才算失败。skip 是**显式**的，不会被误读成通过。
+ * One check depends on the **external network** (the example.com watch target really has to
+ * connect out).
+ * When the network wobbles it turns red at random — and a random red eventually gets ignored
+ * as "noise", which amounts to deleting the check.
+ * So: retry twice first; if it is still **unreachable** (timeout/DNS/connection refused) report
+ * it as [skip] and spell out why. Only "it connected but the result is wrong" counts as a failure.
+ * skip is **explicit**; it must never be misread as a pass.
  */
 function checkNetwork(name, ok, detail, isNetworkError) {
   if (!ok && isNetworkError) {
-    results.push({ name: name, ok: true, skipped: true, detail: '外网不可达，本条跳过：' + String(detail).slice(0, 120) });
-    process.stdout.write('  [skip] ' + name + '  -- 外网不可达: ' + String(detail).slice(0, 120) + '\n');
+    results.push({ name: name, ok: true, skipped: true, detail: 'external network unreachable, skipping this check: ' + String(detail).slice(0, 120) });
+    process.stdout.write('  [skip] ' + name + '  -- external network unreachable: ' + String(detail).slice(0, 120) + '\n');
     return;
   }
   check(name, ok, detail);
@@ -88,11 +91,13 @@ async function main() {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const out = fs.createWriteStream(logFile, { flags: 'w' });
 
-  // 起 app 之前先确认端口是空的：上一个巡检（或使用者自己开着的窗口）还占着的话，
-  // 我们起的这个会绑不上，而请求会被**别人的实例**接走 —— 症状会漂到完全不相关的地方
+  // Confirm the port is free before starting the app: if a previous traversal (or a window the
+  // user left open themselves) still holds it, the instance we start will fail to bind and the
+  // requests will be picked up by **someone else's instance** — the symptom then drifts somewhere
+  // completely unrelated
   const free = await waitPortFree(args.port, { onWait: (m) => process.stdout.write('  ' + m + '\n') });
   if (!free.free) {
-    process.stdout.write('  [FAIL] 端口 ' + args.port + ' 一直被占用，无法起一个干净的实例\n');
+    process.stdout.write('  [FAIL] port ' + args.port + ' is still occupied, cannot start a clean instance\n');
     process.exit(1);
   }
 
@@ -228,7 +233,8 @@ async function main() {
     const px = await api('GET', '/api/proxy/detect');
     check('GET /api/proxy/detect responds', px.status === 200 && Array.isArray(px.json.found) && typeof px.json.probed === 'number', 'probed ' + (px.json && px.json.probed) + ', found ' + JSON.stringify((px.json && px.json.found) || []));
 
-    // 登录态探测：有没有登录取决于这台机器，所以只检查「契约」而不是结果
+    // Login-state probing: whether there is a login depends on this machine, so only the
+    // "contract" is checked, not the result
     const ck = await api('POST', '/api/cookies/check', { domains: ['bilibili.com'] });
     check('POST /api/cookies/check answers with a contract', ck.status === 200 && typeof ck.json.ok === 'boolean' && Array.isArray(ck.json.names), ck.json.ok ? ck.json.cookieCount + ' cookies, SESSDATA=' + ck.json.hasSession : String(ck.json.error).slice(0, 60));
     check('the cookie endpoint never returns values', !JSON.stringify(ck.json).includes('SESSDATA='), 'names only');
@@ -279,7 +285,8 @@ async function main() {
     check('the target round-trips', (w2.json.targets ?? []).length === 1 && w2.json.targets[0].label === 'traverse probe');
     check('only whitelisted fields survive', w2.json.targets[0].fetch === undefined && w2.json.targets[0].cadence === undefined, JSON.stringify(Object.keys(w2.json.targets[0])));
 
-    // 这条要真的连出去（example.com）。网络抖动重试两次，仍连不上就显式跳过。
+    // This one really has to connect out (example.com). The network wobbles, so retry twice;
+    // if it is still unreachable, skip it explicitly.
     let wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
     for (let i = 0; i < 2 && wc.json.results?.[0]?.ok !== true; i++) {
       await sleep(1500);
@@ -335,8 +342,9 @@ async function main() {
     check('DELETE removes it again', delSrc.status === 200 && delSrc.json.removed === 1);
 
     // ------------------------------------------------------- 8b. VDB roster
-    // 第三方数据（CC BY-NC-SA 4.0）：这里刻意**不触发下载**（不调 /sync），
-    // 只验证「离线能答、许可有署名、没有把整库塞进响应」。
+    // Third-party data (CC BY-NC-SA 4.0): this deliberately **does not trigger a download**
+    // (it does not call /sync); it only verifies "it answers offline, the licence is attributed,
+    // and the whole roster is not shoved into the response".
     process.stdout.write('\n8b. roster (VDB, multi-platform)\n');
     const vdbSt = await api('GET', '/api/vdb/status');
     check(
@@ -438,10 +446,11 @@ async function main() {
           /* ignore */
         }
       }
-      // **等它真的退干净**再收工：后面 traverse-ui 起在同一个端口上，
-      // 上一个进程还没放开端口就往下走的话，症状会漂到它那边（踩过）
+      // **Wait for it to really exit** before wrapping up: traverse-ui later starts on the same
+      // port, and if we move on before the previous process has released it the symptom drifts
+      // over to that one (we have stepped on this)
       const gone = await waitChildExit(child);
-      if (!gone) process.stdout.write('  (warn) app 进程没在 8 秒内退出，端口可能还没放开\n');
+      if (!gone) process.stdout.write('  (warn) the app process did not exit within 8 seconds, the port may not be released yet\n');
     }
 
     // Restore the release folder so it stays shippable.
@@ -466,7 +475,7 @@ async function main() {
   const failed = results.filter((r) => !r.ok);
   const skipped = results.filter((r) => r.skipped);
   process.stdout.write('\n' + (results.length - failed.length) + '/' + results.length + ' checks passed');
-  if (skipped.length) process.stdout.write('（其中 ' + skipped.length + ' 条因外网不可达显式跳过）');
+  if (skipped.length) process.stdout.write(' (' + skipped.length + ' explicitly skipped because the external network was unreachable)');
   process.stdout.write('\n');
   if (skipped.length) for (const s of skipped) process.stdout.write('  SKIPPED: ' + s.name + '  -- ' + s.detail + '\n');
   if (failed.length) {

@@ -1,4 +1,4 @@
-// App.jsx — 六页壳 + 主题 + 排版变量 + 运行结束通知
+// App.jsx — the six-page shell + theme + layout variables + run-finished notification
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from './i18n.jsx';
 import { LOCALES } from './locales/index.js';
@@ -37,7 +37,7 @@ export default function App() {
       })
       .catch(() => {});
 
-    // 设置页改排版时广播，壳立刻跟着变
+    // Broadcast when the settings page changes the layout, so the shell follows immediately
     const onLayout = (e) => {
       setLayout(e.detail ?? {});
       applyLayout(e.detail);
@@ -55,7 +55,7 @@ export default function App() {
         prevRun.current = { running: st.running, finishedAt: st.finishedAt };
         setAlerts(st.alerts ?? 0);
       } catch {
-        /* 服务没起来时静默 */
+        /* stay silent while the service is not up */
       }
     };
     const timer = setInterval(tick, 3000);
@@ -73,12 +73,12 @@ export default function App() {
       if (typeof Notification === 'undefined') return;
       if (Notification.permission === 'granted') new Notification(title, { body: String(body).slice(0, 160) });
     } catch {
-      /* 忽略 */
+      /* ignore */
     }
   };
 
-  // 标签页的显示名。**加新标签必须同时改这里** —— 只往 TABS 里加 id 的话
-  // labels[id] 是 undefined，标签会渲染成空白（巡检按名字点标签时才发现）。
+  // Display names of the tabs. **Adding a tab means changing this too** -- if you only add an id to TABS,
+  // labels[id] is undefined and the tab renders blank (only noticed when a walkthrough clicks tabs by name).
   const labels = {
     intel: t('tab_intel'),
     search: t('tab_search'),
@@ -92,7 +92,7 @@ export default function App() {
     settings: t('tab_settings'),
     reports: t('tab_reports'),
   };
-  // 兜底：万一又漏了，至少显示 id 而不是空白
+  // Fallback: if one is missed again, at least show the id rather than a blank
   const labelOf = (id) => labels[id] || id;
 
   const applyLayoutNow = (next) => {
@@ -113,7 +113,7 @@ export default function App() {
             ⚠ {alerts} {t('alerts')}
           </span>
         )}
-        {/* 26 个地区没法用「中/英」两态按钮切换了：改成下拉，语言名用它自己的文字写 */}
+        {/* 26 locales cannot be switched with a two-state "zh/en" button any more: it is a dropdown now, and each language name is written in its own script */}
         <select
           className="ghost lang"
           aria-label="language"

@@ -1,17 +1,20 @@
-// share.js — 一键分享 / one-click sharing
+// share.js — one-click sharing / one-click sharing
 //
-// 「分享」这件事有两类目标，它们对**登录**的要求完全不同，必须分开对待：
+// "Sharing" covers two classes of target, and they differ completely in what they require around **login**,
+// so they have to be treated separately:
 //
-//   A. 不需要登录的：导出单文件 HTML / Markdown / JSON、复制文本、推到 webhook
-//      —— 这是主路径。它永远可用，也不涉及任何账号风险。
-//   B. 需要登录的：发到 B 站动态 / X 之类。这类必须**先探测登录态再决定能不能做** ——
-//      不能假装能发、更不能在没登录时默默失败。而且**绝不在定时运行里自动发**：
-//      对外发声是不可撤销的动作，必须由人明确确认（与弹幕发送同一套纪律）。
+//   A. No login needed: export a single-file HTML / Markdown / JSON, copy as text, push to a webhook
+//      -- this is the main path. It is always available and carries no account risk whatsoever.
+//   B. Login needed: post to a bilibili dynamic / X and the like. These must **probe the login state first
+//      and only then decide whether they can run** -- we may not pretend we can post, and even less silently
+//      fail while logged out. And they are **never sent automatically by a scheduled run**: speaking in
+//      public is an irreversible act that requires explicit human confirmation (the same discipline as danmaku posting).
 //
-// 所以本模块的核心不是「怎么发」，而是三件事：
-//   1) **生成一个自带样式的单文件**（打开就能看，不依赖任何外部资源，发给朋友不会被拦）
-//   2) **如实说明每个目标缺什么**（ready / needs-login / needs-verification / unsupported）
-//   3) **能做的才做，且留痕**（确认闸门 + 审计日志）
+// So the core of this module is not "how to post" but three things:
+//   1) **Generate a single file that carries its own styling** (open it and it just works, no external
+//      assets, and it will not get blocked when sent to a friend)
+//   2) **State honestly what each target is missing** (ready / needs-login / needs-verification / unsupported)
+//   3) **Do only what can be done, and leave a trace** (confirmation gate + audit log)
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -21,13 +24,14 @@ import { readBrowserCookies } from './cookies.js';
 import { netFetch } from './net.js';
 
 /**
- * 分享目标登记表。
+ * The share-target registry.
  *
- * 每个目标必须如实声明：
- *   needsLogin  —— 是否需要登录态
- *   status      —— ready（现在就可用）/ needs-login（缺登录）/ needs-verification（功能已实现
- *                  但**还没被真实账号验证过**，必须验证后才允许对外使用）/ unsupported（做不到）
- * 宁可写 needs-verification 也不要假装 ready —— 对外发东西失败或发错是不可撤销的。
+ * Every target must declare honestly:
+ *   needsLogin  -- whether a login state is required
+ *   status      -- ready (usable right now) / needs-login (login missing) / needs-verification (the feature
+ *                  exists but **has never been verified with a real account**, and may only be used
+ *                  externally once it has been) / unsupported (cannot be done)
+ * Better to write needs-verification than to pretend to be ready -- a failed or wrong public post is irreversible.
  */
 export const SHARE_TARGETS = [
   {
@@ -110,9 +114,9 @@ export function targetById(id) {
   return SHARE_TARGETS.find((t) => t.id === id) ?? null;
 }
 
-// ───────────────────────────────────────────── 内容打包
+// ───────────────────────────────────────────── content packaging
 
-/** 从情报条目里收集可分享的内容（就地使用 people / keywords 字段） */
+/** Collect the shareable content out of the intel items (using the people / keywords fields in place) */
 function collect(items, { maxItems = 60 } = {}) {
   return (items ?? [])
     .slice(0, maxItems)
@@ -130,7 +134,7 @@ function collect(items, { maxItems = 60 } = {}) {
     }));
 }
 
-/** 纯 markdown 版本（也用于 HTML 与文本的中间形态） */
+/** Plain markdown version (also the intermediate form for HTML and text) */
 export function toMarkdown(bundle) {
   const lines = [`# ${bundle.title}`, ''];
   if (bundle.subtitle) lines.push(`> ${bundle.subtitle}`, '');
@@ -159,9 +163,10 @@ export function toPlainText(bundle) {
 }
 
 /**
- * 单文件 HTML。
- * 关键要求：**不带任何外部引用**（没有外链 CSS / 字体 / 图片 / 脚本）——
- * 对方在离线、内网、或任何限制环境下都能打开；也不会因为图片防盗链而一片空白。
+ * Single-file HTML.
+ * Key requirement: **no external references whatsoever** (no linked CSS / fonts / images / scripts) --
+ * so the recipient can open it offline, on an intranet, or in any restricted environment; and it never
+ * goes blank because an image host enforces hotlink protection.
  */
 export function toHtml(bundle) {
   const esc = (s) =>
@@ -192,7 +197,7 @@ export function toHtml(bundle) {
 ${bundle.subtitle ? `<p class="sub">${esc(bundle.subtitle)}</p>` : ''}
 <p class="note">共 ${bundle.items.length} 条 · 生成于 ${esc(bundle.generatedAt)}${bundle.note ? ` · ${esc(bundle.note)}` : ''}</p>
 ${cards}`;
-  // 复用报告那套样式壳，保证「同一套观感」；再加两条分享场景需要的规则
+  // Reuse the report styling shell so the look stays "the same family"; then add the two rules the share view needs
   return htmlShell(bundle.title, '', '').replace(
     '</body>',
     `<style>
@@ -208,15 +213,16 @@ ${body}
 }
 
 /**
- * 生成一个分享包。
+ * Build a share bundle.
  *
- * 注意区分两个日期，它们不该混为一谈：
- *   · contentDate —— **内容**属于哪一天（那份日报 / 那个人当时的数据）
- *   · generatedAt —— **什么时候导出**的
- * 文件名与标题用 contentDate（对方拿到手才知道这是什么），没有内容日期时才落到导出日。
+ * Mind the two dates, they must not be conflated:
+ *   - contentDate -- which day the **content** belongs to (that daily report / that person's data at the time)
+ *   - generatedAt -- **when it was exported**
+ * The filename and the title use contentDate (only then does the recipient know what this is); with no
+ * content date it falls back to the export day.
  * @param {object} o
  * @param {'latest'|'day'|'person'|'event'|'items'} o.scopeKind
- * @param {object[]} o.items 已经筛好的条目
+ * @param {object[]} o.items the already-filtered items
  * @param {string} o.title
  */
 export function buildBundle({
@@ -248,7 +254,7 @@ export function renderBundle(bundle, format = 'html') {
   return { mime: 'text/html; charset=utf-8', ext: 'html', body: toHtml(bundle) };
 }
 
-/** 文件名：带上范围与**内容日期**，方便对方一眼知道这是什么 */
+/** Filename: carries the scope and the **content date**, so the recipient knows at a glance what this is */
 export function bundleFilename(bundle, ext) {
   const safe = String(bundle.title).replace(/[^\w\u4e00-\u9fff-]+/g, '_').slice(0, 40);
   const day = bundle.contentDate ?? bundle.generatedAt.slice(0, 10);
@@ -256,25 +262,26 @@ export function bundleFilename(bundle, ext) {
 }
 
 /**
- * 生成 content-disposition 头。
+ * Build the content-disposition header.
  *
- * ⚠️ HTTP 头**只能是 ASCII** —— 文件名里带中文（分享标题往往是中文）会直接抛
- * `ERR_INVALID_CHAR: Invalid character in header content`，接口 500。
- * 单元测试只验证了「文件名生成得对」，没走 HTTP 层，所以没抓到（巡检的真实请求抓到了）。
- * 正确做法是 RFC 5987/6266：给一个 ASCII 兜底名 + `filename*=UTF-8''<百分号编码>`，
- * 现代浏览器会优先用后者，于是中文名照样能保住。
+ * HTTP headers may carry **ASCII only** -- a filename with Chinese in it (share titles usually are
+ * Chinese) throws `ERR_INVALID_CHAR: Invalid character in header content` outright and the endpoint
+ * answers 500. The unit tests only verified "the filename is generated correctly" and never went
+ * through the HTTP layer, so they missed it (the traversal's real request caught it).
+ * The right way is RFC 5987/6266: an ASCII fallback name plus `filename*=UTF-8''<percent-encoded>`;
+ * modern browsers prefer the latter, so the Chinese name survives anyway.
  */
 export function contentDisposition(filename) {
   const ascii = String(filename).replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
-// ───────────────────────────────────────────── 登录需求
+// ───────────────────────────────────────────── login requirements
 
 /**
- * 一个分享目标现在能不能用。
+ * Whether one share target can be used right now.
  * @param {object} target
- * @param {object[]} accounts listAccounts() 的结果
+ * @param {object[]} accounts the result of listAccounts()
  */
 export function checkReadiness(target, accounts = []) {
   if (!target) return { ok: false, reason: 'unknown target' };
@@ -294,7 +301,7 @@ export function checkReadiness(target, accounts = []) {
   return { ok: target.status === 'ready', status: target.status, account: usable[0].name ?? usable[0].mid ?? null, ready: target.status === 'ready' };
 }
 
-/** 所有目标就绪情况一览（界面用它显示「缺什么」） */
+/** Readiness of every target at a glance (the UI uses it to show what is missing) */
 export function readinessReport(accounts = [], verified = []) {
   return SHARE_TARGETS.map((t) => {
     const r = checkReadiness(t, accounts);
@@ -314,15 +321,16 @@ export function readinessReport(accounts = [], verified = []) {
   });
 }
 
-// ───────────────────────────────────────────── 账号读取的缓存
+// ───────────────────────────────────────────── accounts cache
 
 /**
- * 读取登录态是**阻塞**的（同步 SQLite + execFileSync 调 PowerShell 解 DPAPI），
- * 而 Node 是单线程 —— 每次打开分享页都现读一遍，会把整个服务卡住几秒，
- * 连累其它请求（巡检里表现为报告列表迟迟停在「加载中」）。
+ * Reading the login state is **blocking** (synchronous SQLite plus execFileSync calling PowerShell to
+ * unwrap DPAPI), and Node is single-threaded -- reading it fresh on every visit to the share page would
+ * stall the whole server for seconds and drag every other request down with it (in the traversal that
+ * showed up as the report list sitting at "loading" forever).
  *
- * 所以：读一次缓存一会儿。但**对外发声前必须强制刷新** ——
- * 发帖前拿到过期的登录态判断，等于拿旧钥匙开新锁。
+ * So: read once, cache for a while. But **force a refresh before speaking in public** -- basing a post
+ * decision on a stale login state is like opening a new lock with an old key.
  */
 const accountsCache = { at: 0, value: null };
 export const ACCOUNTS_TTL_MS = 60000;
@@ -338,7 +346,7 @@ export async function getAccounts(cfg, { force = false, ttlMs = ACCOUNTS_TTL_MS 
     accountsCache.at = now;
     return { accounts: accountsCache.value, cached: false };
   } catch (e) {
-    // 读不到就当没有登录态（而不是让整个接口 500）
+    // When it cannot be read, treat it as "no login state" (rather than letting the whole endpoint 500)
     return { accounts: accountsCache.value ?? [], cached: false, error: e.message };
   }
 }
@@ -348,20 +356,20 @@ export function clearAccountsCache() {
   accountsCache.value = null;
 }
 
-// ───────────────────────────────────────────── 审计
+// ───────────────────────────────────────────── audit
 
 export function auditPath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), 'share.jsonl');
 }
 
-/** 任何「对外发声」的动作都要留痕（谁、什么时候、发到哪、发了什么摘要） */
+/** Every "speaking in public" action has to leave a trace (who, when, where it went, a summary of what was sent) */
 export function appendAudit(cfg, entry) {
   const p = auditPath(cfg);
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.appendFileSync(p, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
   } catch {
-    // 审计写不进去也不能让主流程崩，但要如实返回失败
+    // A failed audit write must not bring the main flow down, but the failure still has to be reported honestly
     return false;
   }
   return true;
@@ -389,14 +397,14 @@ export function readAudit(cfg, limit = 50) {
 }
 
 /**
- * 对外发声的闸门。
+ * The gate in front of speaking in public.
  *
- * 与弹幕发送同一套纪律，因为失败/发错都不可撤销：
- *   ① 必须显式 confirm
- *   ② 目标必须存在且**当前可做**（登录态够、且不是「未验证」）
- *   ③ 内容非空且长度受限
- *   ④ 留审计
- * 定时任务永远不会走到这里 —— 调用点只在 HTTP 路由上。
+ * Same discipline as danmaku posting, because a failure or a wrong post is irreversible:
+ *   1. an explicit confirm is mandatory
+ *   2. the target must exist and be **currently doable** (login state sufficient, and not "unverified")
+ *   3. the content must be non-empty and within the length limit
+ *   4. leave an audit entry
+ * A scheduled run never reaches this code -- the only call sites are HTTP routes.
  */
 export function guardPost(cfg, { target, accounts = [], verified = [], text, confirm = false }) {
   const t = targetById(target);
@@ -421,10 +429,11 @@ export function guardPost(cfg, { target, accounts = [], verified = [], text, con
 }
 
 /**
- * 真的把内容发到 B 站动态。
+ * Actually post the content to a bilibili dynamic.
  *
- * 纪律与弹幕一致：**现场重新读 cookie**（不缓存）、CSRF 从 bili_jct 取、
- * 失败如实回传 B 站给的错误码。这个函数只在「已确认 + 已验证 + 已登录」之后才会被调用。
+ * Same discipline as danmaku: **re-read the cookie on the spot** (no caching), take CSRF from bili_jct,
+ * and report the error code bilibili gives back honestly. This function is only ever called after
+ * "confirmed + verified + logged in".
  */
 export async function postBilibiliDynamic(cfg, { accountId, text, log = null }) {
   const { accounts } = await listAccounts(cfg);
@@ -458,8 +467,8 @@ export async function postBilibiliDynamic(cfg, { accountId, text, log = null }) 
     const code = Number(j?.code ?? -1);
     const ok = res.ok && code === 0;
     const out = { ok, code, account: acct.name ?? acct.id, error: ok ? null : j?.message ?? `HTTP ${res.status}` };
-    if (ok) log?.info(`动态已发布 / dynamic posted as ${out.account}`);
-    else log?.warn(`动态发布失败 / dynamic post failed: ${out.error}`);
+    if (ok) log?.info(`dynamic posted as ${out.account}`);
+    else log?.warn(`dynamic post failed: ${out.error}`);
     return out;
   } catch (e) {
     const cause = e?.cause?.code ?? e?.cause?.message ?? '';

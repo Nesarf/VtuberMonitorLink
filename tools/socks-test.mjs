@@ -1,14 +1,14 @@
-// socks-test.mjs — SOCKS5 连接器的自检 / self-test for the hand-written SOCKS5 connector
+// socks-test.mjs — self-test for the hand-written SOCKS5 connector / self-test for the hand-written SOCKS5 connector
 //
-// 为什么需要：这条路**以前只测到「端口不通」就结束了**（Tor 没起来时探测返回
-// ECONNREFUSED，看起来像"功能正常，只是没开 Tor"）。于是 TLS 这一段从没被跑过，
-// 而它恰恰是坏的：握手完成后我们把**裸 socket** 交给了 undici，
-// 于是明文的 `GET /api/ip HTTP/1.1` 被发到目标 443 端口 —— 真实表现是
-// `400 The plain HTTP request was sent to HTTPS port`，而 app 的探测只报
-// 「端口通，但出口检测失败」，看起来像 Tor 的问题。
+// Why it is needed: this path **used to stop testing the moment the port was unreachable** (with Tor down the
+// probe returns ECONNREFUSED, which looks like "the feature works, Tor just is not running"). So the TLS part
+// was never exercised -- and that is precisely the part that was broken: once the handshake completed we handed
+// the **bare socket** to undici, so a plaintext `GET /api/ip HTTP/1.1` went to the target's port 443. The real
+// symptom is `400 The plain HTTP request was sent to HTTPS port`, while the app's probe only reported
+// "port reachable, but the egress check failed", which looks like a Tor problem.
 //
-// 这里的判据不需要证书、不需要联网：起一个**假 SOCKS 服务**（转发到本地假目标），
-// 然后看隧道里第一段字节到底是 TLS ClientHello（0x16）还是明文 HTTP。
+// The criteria here need neither a certificate nor a network: start a **fake SOCKS service** (forwarding to a
+// local fake origin), then look at whether the first bytes in the tunnel are a TLS ClientHello (0x16) or plaintext HTTP.
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { socksAgent, torLaunchPlan } from '../server/src/socks.js';
@@ -26,9 +26,9 @@ const t = async (name, fn) => {
   }
 };
 
-// ── 假 SOCKS5 服务：只实现无认证 + CONNECT，把连接**一律转发到假目标**
-// （注意：不能真去连请求里的主机名 —— 那是个 .invalid 域名，连不上；
-//   这里的假代理只负责把隧道对上，好让我们观察客户端到底往里写了什么）
+// ── Fake SOCKS5 service: implements no-auth + CONNECT only, and forwards every connection **to the fake origin**
+// (Note: it must not really connect to the hostname in the request -- that is a .invalid domain and would not
+//  resolve; this fake proxy only has to join the tunnel up, so we can watch what the client writes into it)
 function fakeSocks(targetPort) {
   const seen = [];
   const server = net.createServer((sock) => {
@@ -63,8 +63,9 @@ function fakeSocks(targetPort) {
           rest = buf.subarray(10);
         }
         seen.push({ atyp, host, port });
-        // 先暂停客户端 socket：上游连上之前到达的字节会被 'data' 监听吃掉，
-        // 那样明明握手成功了目标却收不到请求（我第一次写这个假服务就是这个坑）。
+        // Pause the client socket first: bytes that arrive before the upstream is connected get eaten by the
+        // 'data' listener, so the handshake succeeds yet the origin never receives the request (my first version
+        // of this fake service fell straight into that hole).
         sock.pause();
         upstream = net.connect({ host: '127.0.0.1', port: targetPort }, () => {
           sock.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0]));
@@ -81,7 +82,7 @@ function fakeSocks(targetPort) {
   return { server, seen };
 }
 
-// ── 假目标：把收到的第一段字节记下来（客户端随后会因为我们不是真 TLS 而报错，无所谓）
+// ── Fake origin: record the first bytes it receives (the client will then error out because we are not real TLS, which does not matter)
 function fakeOrigin() {
   const state = { first: null, raw: Buffer.alloc(0) };
   const server = net.createServer((sock) => {
@@ -103,42 +104,42 @@ const socks = fakeSocks(originPort);
 const socksPort = await listen(socks.server);
 const agent = socksAgent(`socks5://127.0.0.1:${socksPort}`);
 
-process.stdout.write('\nsocks: SOCKS5 连接器\n');
+process.stdout.write('\nsocks: SOCKS5 connector\n');
 
-await t('握手时把**域名**交给代理解析（DNS 不出本机）', async () => {
+await t('the handshake hands the **hostname** to the proxy for resolution (DNS never leaves this machine)', async () => {
   await fetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
   const last = socks.seen.at(-1);
-  assert.ok(last, '假 SOCKS 服务没收到 CONNECT');
-  assert.equal(last.atyp, 3, 'atyp 应为 3（域名），实际 ' + last.atyp);
+  assert.ok(last, 'the fake SOCKS service received no CONNECT');
+  assert.equal(last.atyp, 3, 'atyp should be 3 (domain), got ' + last.atyp);
   assert.equal(last.host, 'vml-test-host.invalid');
   assert.equal(last.port, originPort);
 });
 
-await t('http:// 目标：隧道里就是明文 HTTP', async () => {
+await t('http:// target: the tunnel carries plain HTTP', async () => {
   origin.state.first = null;
   let err = null;
   await fetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch((e) => {
     err = e;
   });
-  assert.equal(origin.state.first, 0x47, '应以 "G"（GET）开头，实际字节 ' + origin.state.first + ' · fetch 错误: ' + (err ? err.message : '无'));
+  assert.equal(origin.state.first, 0x47, 'should start with "G" (GET), got byte ' + origin.state.first + ' · fetch error: ' + (err ? err.message : 'none'));
 });
 
-await t('https:// 目标：隧道里必须是 TLS ClientHello（0x16），不是明文 HTTP', async () => {
+await t('https:// target: the tunnel must carry a TLS ClientHello (0x16), not plain HTTP', async () => {
   origin.state.first = null;
   origin.state.raw = Buffer.alloc(0);
   await fetch(`https://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
-  assert.ok(origin.state.first !== null, '目标没收到任何字节');
+  assert.ok(origin.state.first !== null, 'the origin received no bytes at all');
   assert.equal(
     origin.state.first,
     0x16,
-    '第一字节应为 0x16（TLS handshake），实际 ' +
+    'the first byte should be 0x16 (TLS handshake), got ' +
       origin.state.first +
-      ' —— 明文 ' +
+      ' -- plaintext ' +
       JSON.stringify(origin.state.raw.subarray(0, 20).toString('utf8')),
   );
 });
 
-// ── 真实 Tor 可选验证（有这个 SOCKS 端口时才跑）
+// ── Optional real-Tor verification (only runs when that SOCKS port is listening)
 const torUp = await new Promise((resolve) => {
   const s = net.connect({ host: '127.0.0.1', port: 9150 });
   s.setTimeout(1000, () => { s.destroy(); resolve(false); });
@@ -147,7 +148,7 @@ const torUp = await new Promise((resolve) => {
 });
 
 if (torUp) {
-  await t('真 Tor：经 SOCKS 出去，check.torproject.org 判为 Tor 出口', async () => {
+  await t('real Tor: goes out through SOCKS and check.torproject.org reports a Tor exit', async () => {
     const res = await fetch('https://check.torproject.org/api/ip', {
       dispatcher: socksAgent('socks5://127.0.0.1:9150'),
       signal: AbortSignal.timeout(45000),
@@ -155,51 +156,51 @@ if (torUp) {
     assert.equal(res.status, 200, 'HTTP ' + res.status);
     const j = await res.json();
     assert.equal(j.IsTor, true, JSON.stringify(j));
-    assert.ok(j.IP, '应当有出口 IP');
-    process.stdout.write('         出口: ' + j.IP + '\n');
+    assert.ok(j.IP, 'there should be an exit IP');
+    process.stdout.write('         exit: ' + j.IP + '\n');
   });
 } else {
-  process.stdout.write('  [skip] 真 Tor（127.0.0.1:9150 没在监听）\n');
+  process.stdout.write('  [skip] real Tor (nothing is listening on 127.0.0.1:9150)\n');
 }
 
-// ── 「一键唤起 Tor」的参数构造（纯函数，离线可断言）
-process.stdout.write('\nsocks: 唤起 Tor 的参数\n');
+// ── "launch Tor with one click" argument building (a pure function, assertable offline)
+process.stdout.write('\nsocks: Tor launch arguments\n');
 
 const TB_EXE = 'E:\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe';
 const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: 'E:\\VtuberMonitorLink\\dist\\VtuberMonitorLink\\app' });
 
-await t('Tor Browser 布局：带 --defaults-torrc + 自己的 torrc，并覆盖 DisableNetwork', async () => {
+await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNetwork overridden', async () => {
   if (!realPlan.ok) {
-    // 这台机器上没装 Tor Browser 时，用假布局验证逻辑本身
+    // With Tor Browser not installed on this machine, verify the logic itself with a fake layout
     const fake = torLaunchPlan({ exe: 'X:\\nope\\TorBrowser\\Tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9150' });
-    assert.equal(fake.kind, 'standalone', '没有 torrc 时应退回独立 tor 分支');
+    assert.equal(fake.kind, 'standalone', 'with no torrc it should fall back to the standalone tor branch');
     return;
   }
   assert.equal(realPlan.kind, 'tor-browser', JSON.stringify(realPlan));
-  assert.ok(realPlan.args.includes('--defaults-torrc'), '必须用 --defaults-torrc（-f 传两个会被 Tor 拒）');
-  assert.ok(realPlan.args.includes('-f'), '必须带 torrc');
-  assert.ok(realPlan.args.includes('--DisableNetwork') && realPlan.args.includes('0'), '必须显式打开网络（Tor Browser 会在 torrc 里留 DisableNetwork 1）');
-  assert.equal(realPlan.args[realPlan.args.indexOf('--SocksPort') + 1], '9150', '端口要跟配置一致');
-  assert.ok(/Browser$/.test(realPlan.cwd), 'cwd 必须是 Browser 目录（可插拔传输用的是相对路径）: ' + realPlan.cwd);
+  assert.ok(realPlan.args.includes('--defaults-torrc'), '--defaults-torrc is mandatory (passing -f twice is rejected by Tor)');
+  assert.ok(realPlan.args.includes('-f'), 'the torrc is mandatory');
+  assert.ok(realPlan.args.includes('--DisableNetwork') && realPlan.args.includes('0'), 'the network has to be switched on explicitly (Tor Browser leaves DisableNetwork 1 in its torrc)');
+  assert.equal(realPlan.args[realPlan.args.indexOf('--SocksPort') + 1], '9150', 'the port must match the configuration');
+  assert.ok(/Browser$/.test(realPlan.cwd), 'cwd must be the Browser directory (pluggable transports use relative paths): ' + realPlan.cwd);
 });
 
-await t('独立 tor：数据目录放在应用目录里，绝不写 C 盘', async () => {
+await t('standalone tor: the data directory sits under the app directory and never touches the C drive', async () => {
   const plan = torLaunchPlan({ exe: 'X:\\tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9050', appRoot: 'E:\\App' });
   assert.equal(plan.kind, 'standalone');
   const dataDir = plan.args[plan.args.indexOf('--DataDirectory') + 1];
-  assert.ok(dataDir && dataDir.startsWith('E:\\App'), '数据目录应在应用目录下，实际 ' + dataDir);
-  assert.ok(!/^[Cc]:/.test(dataDir), '不许落 C 盘');
+  assert.ok(dataDir && dataDir.startsWith('E:\\App'), 'the data directory should sit under the app directory, got ' + dataDir);
+  assert.ok(!/^[Cc]:/.test(dataDir), 'it must not land on the C drive');
   assert.equal(plan.args[plan.args.indexOf('--SocksPort') + 1], '127.0.0.1:9050');
 });
 
-// ── 探测接口的 Tor 一档：把它指到假 SOCKS 上，验证真的走了 SOCKS
-process.stdout.write('\nsocks: 探测的 Tor 出口\n');
+// ── The probe's Tor mode: point it at the fake SOCKS and verify it really goes through SOCKS
+process.stdout.write("\nsocks: the probe's Tor egress\n");
 
-await t('probeUrl(modes:[tor]) 会经 SOCKS 取首字节，并给出结论', async () => {
+await t('probeUrl(modes:[tor]) takes the first byte through SOCKS and returns a verdict', async () => {
   const http = await import('node:http');
   const { probeUrl } = await import('../server/src/probe.js');
 
-  // 假目标换成最小 HTTP 服务（探测只看首字节）
+  // Swap the fake origin for a minimal HTTP service (the probe only looks at the first byte)
   const web = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('ok');
@@ -211,14 +212,14 @@ await t('probeUrl(modes:[tor]) 会经 SOCKS 取首字节，并给出结论', asy
   const cfg = { proxy: { torSocks: `socks5://127.0.0.1:${relayPort}` }, paths: {} };
   const r = await probeUrl(`http://vml-origin.invalid:${webPort}/`, { cfg, modes: ['tor'], samples: 1 });
   assert.equal(r.modes.tor?.method, 'socks-ttfb', JSON.stringify(r.modes.tor));
-  assert.equal(r.modes.tor.ok, true, '经 SOCKS 应当能取到首字节: ' + JSON.stringify(r.modes.tor));
-  assert.equal(r.verdict, 'tor', '唯一可用出口就是 tor，结论应为 tor（实际 ' + r.verdict + '）');
-  assert.ok(relay.seen.length >= 1, '假 SOCKS 没收到 CONNECT');
+  assert.equal(r.modes.tor.ok, true, 'going through SOCKS should yield a first byte: ' + JSON.stringify(r.modes.tor));
+  assert.equal(r.verdict, 'tor', 'the only usable egress is tor, so the verdict should be tor (got ' + r.verdict + ')');
+  assert.ok(relay.seen.length >= 1, 'the fake SOCKS service received no CONNECT');
   web.close();
   relay.server.close();
 });
 
-await t('没配 Tor 时如实标 skipped，而不是假装测过', async () => {
+await t('with no Tor configured it reports skipped honestly instead of pretending to have tested', async () => {
   const { probeUrl } = await import('../server/src/probe.js');
   const r = await probeUrl('http://example.invalid/', { cfg: { proxy: {} }, modes: ['tor'], samples: 1 });
   assert.equal(r.modes.tor.skipped, true);

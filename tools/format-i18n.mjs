@@ -1,14 +1,15 @@
-// format-i18n.mjs — 修「两个键粘在同一行」/ glue-two-keys-on-one-line
+// format-i18n.mjs — repair "two keys glued onto one line"
 //
-// 背景：我在用编辑工具往 i18n.jsx 里插词条时，有几次 old_string 以换行结尾、
-// 而替换内容没有，于是新键和后面原有的键被拼到了同一行：
-//     llmFeat_probe: '站点测速 …',    tab_live: '直播',
-// 语法上完全合法、界面也正常（键都在），但：
-//   · 按行首匹配的检查/脚本会漏掉第二个键（完整性检查就是这么发现它的）
-//   · diff 与 review 变得很难看
+// Background: while using an editing tool to insert entries into i18n.jsx, a few times old_string ended
+// with a newline while the replacement did not, so a new key and the key that already followed it were
+// spliced onto the same line (the values below stand for the Chinese UI labels):
+//     llmFeat_probe: '<zh value>',    tab_live: '<zh value>',
+// Syntactically perfectly legal, and the UI still works (both keys are there), but:
+//   - checks/scripts that match at the start of a line miss the second key (that is how the completeness check found it)
+//   - diffs and review become ugly
 //
-//   node tools/format-i18n.mjs        只检查（有问题则退出码 1）
-//   node tools/format-i18n.mjs --fix  就地修好
+//   node tools/format-i18n.mjs        check only (exit code 1 when something is wrong)
+//   node tools/format-i18n.mjs --fix  fix in place
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TARGETS = ['web/src/i18n.jsx', 'web/src/locales/overlays.js', 'web/src/locales/index.js'];
 
-// 一行里出现：字符串结尾 + 逗号 + ≥2 空格 + 一个「标识符:」→ 说明第二个键被粘上来了
+// A line showing: end of string + comma + >=2 spaces + an "identifier:" -> the second key got glued on
 const GLUED = /^(\s*)(.*?['"]),\s{2,}([A-Za-z_][A-Za-z0-9_]*\s*:.*)$/;
 
 const fix = process.argv.includes('--fix');
@@ -31,7 +32,7 @@ for (const rel of TARGETS) {
   let hits = 0;
   const out = [];
   for (const line of parts) {
-    // 注释行不动（注释里出现这种形状是正常的说明文字）
+    // leave comment lines alone (this shape appearing inside a comment is normal prose)
     if (/^\s*(\/\/|\*|\/\*)/.test(line)) {
       out.push(line);
       continue;
@@ -43,22 +44,22 @@ for (const rel of TARGETS) {
     }
     hits++;
     lines.push(`${rel}: ${line.trim().slice(0, 100)}`);
-    // 拆成两行，缩进沿用原行
+    // split into two lines, reusing the original line's indentation
     out.push(`${m[1]}${m[2]},`);
     out.push(`${m[1]}${m[3]}`);
   }
   if (hits && fix) fs.writeFileSync(abs, out.join('\n'), 'utf8');
   if (hits) total += hits;
-  process.stdout.write(`  ${rel.padEnd(30)} ${hits} 处粘连${hits && fix ? '（已修）' : ''}\n`);
+  process.stdout.write(`  ${rel.padEnd(30)} ${hits} glued${hits && fix ? ' (fixed)' : ''}\n`);
 }
 
 if (!total) {
-  process.stdout.write('\n  没有粘连的键。\n');
+  process.stdout.write('\n  no glued keys.\n');
   process.exit(0);
 }
 for (const l of lines) process.stdout.write('    ' + l + '\n');
 if (!fix) {
-  process.stdout.write(`\n${total} 处键被粘在同一行 —— 跑 node tools/format-i18n.mjs --fix 修好。\n`);
+  process.stdout.write(`\n${total} keys glued onto one line - run node tools/format-i18n.mjs --fix to repair.\n`);
   process.exit(1);
 }
-process.stdout.write(`\n已修 ${total} 处。\n`);
+process.stdout.write(`\nfixed ${total}.\n`);

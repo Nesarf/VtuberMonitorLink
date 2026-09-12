@@ -1,7 +1,9 @@
-// i18n-translate-test.mjs — 翻译管线的自检 / self-test for the translation pipeline
+// i18n-translate-test.mjs - self-test for the translation pipeline
 //
-// 管线里最贵的错误是「安静地写坏数据」：把占位符翻没了、把术语翻乱了、
-// 拿机器译文覆盖了人工校对过的内容。所以这些都要有断言，而且用假引擎跑（不花钱）。
+// The most expensive mistake in this pipeline is silently corrupting data: dropping a
+// placeholder, scrambling terminology, or overwriting human-proofread text with machine
+// output. So each of those cases gets an assertion, and they all run against a fake
+// engine (free).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,17 +28,17 @@ const t = (name, fn) => {
   }
 };
 
-process.stdout.write('\ni18n-translate: 占位符保护\n');
-t('{} / ${} / %s / 换行 / 日期形态都被替换成哨兵', () => {
+process.stdout.write('\ni18n-translate: placeholder protection\n');
+t('{} / ${} / %s / newlines / date shapes are all replaced by sentinels', () => {
   const { text, tokens } = protect('确认发到「{target}」？${x} %s\\n 格式 MM-DD 与 12-31');
-  assert.ok(!text.includes('{target}'), '花括号占位符必须被保护: ' + text);
+  assert.ok(!text.includes('{target}'), 'brace placeholders must be protected: ' + text);
   assert.ok(!text.includes('${x}'));
   assert.ok(!text.includes('%s'));
-  assert.ok(text.includes('⟦'), '应该有哨兵');
-  assert.ok(tokens.length >= 5, 'token 数: ' + tokens.length);
+  assert.ok(text.includes('⟦'), 'a sentinel is expected');
+  assert.ok(tokens.length >= 5, 'token count: ' + tokens.length);
 });
 
-t('还原后与原文一致（往返无损）', () => {
+t('restoring yields the original text (lossless round-trip)', () => {
   const src = '确认发到「{target}」？\\n 日期 MM-DD 结束';
   const { text, tokens } = protect(src);
   const back = restore(text.replace(/⟦(\d+)⟧/g, (m) => m), tokens);
@@ -44,85 +46,88 @@ t('还原后与原文一致（往返无损）', () => {
   assert.equal(back.ok, true);
 });
 
-t('哨兵被模型弄丢 → 判失败（宁缺勿坏）', () => {
+t('a sentinel the model lost -> reported as failure (better missing than broken)', () => {
   const { tokens } = protect('确认发到「{target}」？');
   const r = restore('Confirm sending to (nothing)?', tokens);
-  assert.equal(r.ok, false, '缺哨兵必须判失败');
+  assert.equal(r.ok, false, 'a missing sentinel must count as failure');
   assert.equal(r.missing.length, 1);
 });
 
-t('模型把方括号写成圆括号也能容错还原', () => {
+t('brackets the model rewrote as parentheses still restore tolerantly', () => {
   const { tokens } = protect('发送到「{target}」');
   const r = restore('Send to ( 0 )?', tokens);
   assert.equal(r.ok, true);
   assert.equal(r.text, 'Send to {target}?');
 });
 
-process.stdout.write('\ni18n-translate: 术语表\n');
-t('术语被锁死：模型拿不到它，也就改不动它', () => {
+process.stdout.write('\ni18n-translate: glossary\n');
+t('terms are locked away: the model never sees them, so it cannot alter them', () => {
   const glossary = { 情报: { 'ja-JP': 'インテリジェンス' } };
   const { text, tokens } = protect('情报卡片流', glossary, 'ja-JP');
-  assert.ok(!text.includes('情报'), '术语应先被替换掉: ' + text);
+  assert.ok(!text.includes('情报'), 'terms must be substituted first: ' + text);
   const back = restore(text, tokens);
   assert.equal(back.text, 'インテリジェンス卡片流');
 });
 
-t('没有该语言的术语时退回 default', () => {
+t('falls back to default when the term has no entry for that language', () => {
   const glossary = { 嘉然: { default: 'Diana' } };
   const { text, tokens } = protect('嘉然 3D披露', glossary, 'ko-KR');
   assert.equal(restore(text, tokens).text, 'Diana 3D披露');
 });
 
-t('长术语优先（避免短词把长词切碎）', () => {
+t('longer terms win (a short term must not split a longer one)', () => {
   const glossary = { 情报: { default: 'I' }, 情报卡片: { default: 'IC' } };
   const { text, tokens } = protect('情报卡片', glossary, 'ja-JP');
-  assert.equal(restore(text, tokens).text, 'IC', '应当整体匹配长术语');
+  assert.equal(restore(text, tokens).text, 'IC', 'the long term must be matched as a whole');
 });
 
-process.stdout.write('\ni18n-translate: 缓存键\n');
-t('键 = 源串 + 目标语言（换语言要重译，改源串是新键）', () => {
+process.stdout.write('\ni18n-translate: cache keys\n');
+t('key = source string + target language (a new language re-translates, an edited source is a new key)', () => {
   const a = cacheKey('情报', 'ja-JP');
   const b = cacheKey('情报', 'ko-KR');
   const c = cacheKey('情报 ', 'ja-JP');
-  assert.notEqual(a, b, '不同语言不能共用译文');
-  assert.notEqual(a, c, '源串变了就是新键');
-  assert.equal(a, cacheKey('情报', 'ja-JP'), '同源同语言必须稳定');
+  assert.notEqual(a, b, 'different languages must not share a translation');
+  assert.notEqual(a, c, 'an edited source string is a new key');
+  assert.equal(a, cacheKey('情报', 'ja-JP'), 'same source and language must be stable');
 });
 
-process.stdout.write('\ni18n-translate: 层级（人工永远压过机器）\n');
-t('人工词条被识别出来，机器层不得覆盖', () => {
+process.stdout.write('\ni18n-translate: layers (human always beats machine)\n');
+t('human entries are recognized and the machine layer must not overwrite them', () => {
   const ja = humanKeys('ja-JP');
-  assert.ok(ja.has('save'), 'save 是人工写的');
-  assert.ok(ja.has('tab_intel'), 'tab_intel 是人工写的');
+  assert.ok(ja.has('save'), 'save is human-written');
+  assert.ok(ja.has('tab_intel'), 'tab_intel is human-written');
   assert.ok(!ja.has('__nonexistent__'));
 });
 
-t('同语言的地区继承也算人工（es-MX 复用 es-ES 的人工词条）', () => {
+t('regional inheritance within one language counts as human too (es-MX reuses es-ES human entries)', () => {
   const mx = humanKeys('es-MX');
-  assert.ok(mx.has('save'), 'es-ES 的 save 应当也算 es-MX 的人工层');
+  assert.ok(mx.has('save'), 'save from es-ES must also count as a human entry for es-MX');
 });
 
-t('兄弟地区**不算**人工：pt-PT 不能靠 pt-BR 的人工词条挡掉机翻', () => {
-  // 这条是踩过的坑：humanKeys 原先按「同 base 的所有地区」算人工，
-  // 于是 pt-BR 写过的词条让 pt-PT 永远不翻译 —— 可是 pt-PT 的 chain 是
-  // ['pt-PT','en-US']，运行时继承不到 pt-BR，那 4 条就一直是英文兜底，
-  // 而覆盖度表格显示 100%（缺口被统计口径吃掉了）。
+t('sibling regions do NOT count as human: pt-PT must not block machine translation via pt-BR entries', () => {
+  // A trap we already hit: humanKeys used to count every region of the same base as human,
+  // so any entry written for pt-BR made pt-PT untranslatable forever - yet pt-PT's chain is
+  // ['pt-PT','en-US'], it cannot inherit from pt-BR at runtime, so those 4 entries kept
+  // falling back to English while the coverage table still showed 100% (the gap was eaten
+  // by the counting rule).
   const ptbr = humanKeys('pt-BR');
   const ptpt = humanKeys('pt-PT');
-  assert.ok(ptbr.has('probe'), 'pt-BR 自己应当有 probe（说明它确实是人工写的）');
-  assert.ok(!ptpt.has('probe'), 'pt-PT 不该把 pt-BR 的 probe 当人工已有（否则永远不翻）');
-  assert.ok(ptbr.has('probe'), 'pt-BR 自己的仍然算人工');
-  // 继承链本身：真正的祖先要继承，兄弟不要（这里直接断言链，不依赖哪些语言写了人工层）。
-  // 顺序是「基础 → 具体」——前端就是按这个顺序正向合并，后写的（更具体）压前面的。
+  assert.ok(ptbr.has('probe'), 'pt-BR itself must have probe (proof that it really is human-written)');
+  assert.ok(!ptpt.has('probe'), 'pt-PT must not treat the pt-BR probe as already human (or it never gets translated)');
+  assert.ok(ptbr.has('probe'), "pt-BR's own entry still counts as human");
+  // The inheritance chain itself: real ancestors inherit, siblings do not (we assert the chain
+  // directly here rather than relying on which languages happen to have a human layer).
+  // The order is base -> specific: the frontend merges forward in that order, and later (more
+  // specific) entries override earlier ones.
   assert.deepEqual(inheritableAncestors('zh-TW'), ['zh', 'zh-Hans', 'zh-Hant']);
   assert.deepEqual(inheritableAncestors('pt-BR'), ['pt-PT']);
-  assert.deepEqual(inheritableAncestors('pt-PT'), [], 'pt-PT 不继承 pt-BR');
-  assert.deepEqual(inheritableAncestors('uk-UA'), [], 'uk 不继承 ru（跨语言回落是英文，不是把俄语当乌克兰语）');
+  assert.deepEqual(inheritableAncestors('pt-PT'), [], 'pt-PT does not inherit from pt-BR');
+  assert.deepEqual(inheritableAncestors('uk-UA'), [], 'uk does not inherit ru (cross-language fallback is English, Russian is not treated as Ukrainian)');
   assert.deepEqual(inheritableAncestors('es-MX'), ['es-ES', 'es-419']);
 });
 
-process.stdout.write('\ni18n-translate: 词条解析（源码里的四种写法都要认）\n');
-t('双引号、跨行 + 拼接、嵌套对象都能正确解析', () => {
+process.stdout.write('\ni18n-translate: dictionary parsing (all four source shapes must be handled)\n');
+t('double quotes, multi-line concatenation and nested objects all parse correctly', () => {
   const sample = [
     'const STRINGS = {',
     '  zh: {',
@@ -139,68 +144,72 @@ t('双引号、跨行 + 拼接、嵌套对象都能正确解析', () => {
     '};',
   ].join('\n');
   const { zh } = readDicts(sample);
-  assert.equal(zh.get('appTitle'), "Vtuber's Monitor Link", '双引号的值必须读出来');
-  assert.equal(zh.get('loginHint'), '第一段。第二段。第三段。', '跨行拼接的值必须拼起来');
-  assert.equal(zh.get('nested'), '', '嵌套对象不是文案');
-  assert.equal(zh.get('after'), '后面的词条不能被吃掉', '嵌套对象不能吃掉后面的行');
+  assert.equal(zh.get('appTitle'), "Vtuber's Monitor Link", 'a double-quoted value must be read');
+  assert.equal(zh.get('loginHint'), '第一段。第二段。第三段。', 'a multi-line concatenated value must be joined');
+  assert.equal(zh.get('nested'), '', 'a nested object is not a string entry');
+  assert.equal(zh.get('after'), '后面的词条不能被吃掉', 'a nested object must not swallow the lines after it');
 });
 
-t('注释里的引号不会被当成值（并会在导入后清理）', () => {
+t('quotes inside comments are not treated as values (and get cleaned up after import)', () => {
   const sample = ['const STRINGS = {', '  zh: {', "    key: '值', // 备注里写 'x' 不算", '  },', '};'].join('\n');
   const { zh } = readDicts(sample);
   assert.equal(zh.get('key'), '值');
 });
 
-t('语言中立的词条（简中原文 = 英文）不浪费一次翻译调用', () => {
+t('language-neutral entries (zh source = en) must not waste a translation call', () => {
   assert.equal(isLanguageNeutral('LLM', 'LLM'), true);
   assert.equal(isLanguageNeutral('API Key', 'API Key'), true);
   assert.equal(isLanguageNeutral('保存', 'Save'), false);
-  assert.equal(isLanguageNeutral('', ''), false, '空值不算「中立」，那是没解析出来');
-  // 真实字典里确实存在这种词条（否则这条规则就是空转）
+  assert.equal(isLanguageNeutral('', ''), false, 'an empty value is not "neutral", it means parsing failed');
+  // Such entries really do exist in the shipped dictionaries (otherwise this rule would be a no-op)
   const { zh, en } = readDicts();
   const neutral = [...usedKeys()].filter((k) => isLanguageNeutral(zh.get(k), en.get(k)));
-  assert.ok(neutral.length >= 3, '真实字典里应当至少有 3 条语言中立词条，实际 ' + neutral.length);
+  assert.ok(neutral.length >= 3, 'the real dictionaries must hold at least 3 language-neutral entries, got ' + neutral.length);
 });
 
-t('保留原文的词条要「先剔长后剔短」', () => {
-  // 术语表里同时有「嘉然」与「嘉然今天吃什么」：先剔短词会把长词切成「今天吃什么」，
-  // 于是合法保留的专有名词被报成漏译（真实踩过：37 条里有 24 条是这么来的假警报）
+t('keep-as-is terms must be stripped longest-first', () => {
+  // The glossary holds a short term and a longer term that starts with it: stripping the short
+  // term first splits the long one apart, so legitimately preserved proper nouns were reported
+  // as untranslated (a real trap: 24 of the 37 reported items were false alarms from exactly this).
   const glossary = { 嘉然: { default: '嘉然' }, 嘉然今天吃什么: { default: '嘉然今天吃什么' } };
   assert.equal(
     looksUntranslated('Séparés par des virgules, ex. : 嘉然今天吃什么, Jia Ran', 'fr-FR', glossary),
     false,
-    '长词被正确剔除后不该判为未翻译',
+    'the long term was stripped correctly, so this must not count as untranslated',
   );
-  // 但真漏译仍要抓住
+  // But a genuine miss must still be caught
   assert.equal(looksUntranslated('同一件事被各소스分别报道的原文', 'ko-KR', glossary), true);
-  assert.equal(looksUntranslated('日本語の漢字は正常', 'ja-JP', glossary), false, '日语例外');
+  assert.equal(looksUntranslated('日本語の漢字は正常', 'ja-JP', glossary), false, 'Japanese is the exception');
 });
 
-process.stdout.write('\ni18n-translate: 端到端（假引擎）\n');
-t('假引擎跑通：只翻缺失的键、人工层不被覆盖、缓存能复用', () => {
-  // 沙箱：缓存与产物都指到临时目录 —— 否则真实翻译填满缓存之后，
-  // 「第一次应当新译 6 条」这种断言会被缓存命中打败（踩过：真翻译跑完后这条就红了）
+process.stdout.write('\ni18n-translate: end-to-end (fake engine)\n');
+t('fake engine end-to-end: only missing keys are translated, the human layer survives, the cache is reused', () => {
+  // Sandbox: point both the cache and the output at a temp dir - otherwise, once real
+  // translations fill the cache, assertions like "the first run translates 6 entries" are
+  // defeated by cache hits (a trap we hit: this check went red right after a real run)
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-'));
   const common = ['--engine', 'mock', '--locales', 'ja-JP', '--limit', '6', '--cache-dir', sandbox, '--out', path.join(sandbox, 'machine.json')];
   const out1 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), ...common], { cwd: ROOT, encoding: 'utf8' });
-  assert.ok(/新译 6/.test(out1), out1);
+  assert.ok(/translated 6/.test(out1), out1);
   const machine = JSON.parse(fs.readFileSync(path.join(sandbox, 'machine.json'), 'utf8'));
   const ja = machine['ja-JP'] ?? {};
-  assert.ok(Object.keys(ja).length >= 6, '应当写入条目');
-  assert.ok(Object.values(ja).some((v) => v.startsWith('【JA】')), '假引擎的标记应当在');
-  assert.ok(!('save' in ja), 'save 是人工词条，机器层不该有它（人工永远压过机器）');
+  assert.ok(Object.keys(ja).length >= 6, 'entries are expected to be written');
+  assert.ok(Object.values(ja).some((v) => v.startsWith('【JA】')), "the fake engine's marker must be there");
+  assert.ok(!('save' in ja), 'save is a human entry, the machine layer must not have it (human always beats machine)');
 
-  // 第二次：刚翻过的那批必须走缓存（「同一句永不重复花钱」），同时继续往下翻新的一批
+  // Second run: the batch just translated must come from the cache ("never pay twice for the same
+  // sentence"), while the next batch keeps getting translated
   const out2 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), ...common], { cwd: ROOT, encoding: 'utf8' });
-  const cached = Number(/缓存命中 (\d+)/.exec(out2)?.[1] ?? 0);
-  assert.ok(cached >= 6, `第二次应当至少命中 6 条缓存，实际 ${cached}`);
+  const cached = Number(/cache hits (\d+)/.exec(out2)?.[1] ?? 0);
+  assert.ok(cached >= 6, `the second run must hit at least 6 cache entries, got ${cached}`);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('模型原样回原文 → 补译一次，仍不合格就**不写入**（宁可回落英文）', () => {
-  // 这条对应真实事故：韩语界面里出现整句中文（ko-KR 的 6 条），而且因为「有值」，
-  // 覆盖度照样显示 100%。现在：补译（任务不同，所以模型不会原样再给一遍）
-  // 之后仍含汉字 → 丢弃并记账，界面回落英文。
+t('model echoes the source -> one retry, still invalid means it is NOT written (English fallback wins)', () => {
+  // This maps to a real incident: whole Chinese sentences showed up in the Korean UI (6 entries
+  // for ko-KR), and because they "had a value", coverage still reported 100%. Now: after one
+  // retry with a different prompt (so the model does not just repeat itself), any remaining Han
+  // characters are discarded and counted, and the UI falls back to English.
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-echo-'));
   const outFile = path.join(sandbox, 'machine.json');
   const out = execFileSync(
@@ -213,16 +222,17 @@ t('模型原样回原文 → 补译一次，仍不合格就**不写入**（宁�
     ],
     { cwd: ROOT, encoding: 'utf8' },
   );
-  assert.ok(/补译后仍含原文/.test(out), '应当报告「补译后仍含原文」: ' + out.slice(-300));
+  assert.ok(/retranslation still the source text/.test(out), 'it must report "retranslation still the source text": ' + out.slice(-300));
   const machine = JSON.parse(fs.readFileSync(outFile, 'utf8'))['ko-KR'] ?? {};
   const han = Object.values(machine).filter((v) => /[\u4e00-\u9fff]/.test(String(v)));
-  assert.equal(han.length, 0, '不合格的条目不该进机器层，实际 ' + JSON.stringify(han.slice(0, 3)));
+  assert.equal(han.length, 0, 'invalid entries must not reach the machine layer, got ' + JSON.stringify(han.slice(0, 3)));
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('模型凭空造哨兵（源串里根本没有占位符）→ 同样不写入', () => {
-  // 真实事故：zh「天后」没有占位符，模型自己写了个 ⟦0⟧，而 restore() 只查「发出的哨兵丢了没」，
-  // 不查「译文里多出来的哨兵」—— 于是「daqui a ⟦0⟧ dias」进了葡语界面。
+t('model invents a sentinel (the source has no placeholder at all) -> likewise not written', () => {
+  // Real incident: a zh entry with no placeholder came back with a ⟦0⟧ the model made up, and
+  // restore() only checked "did an emitted sentinel go missing", never "did extra sentinels
+  // appear in the translation" - so "daqui a ⟦0⟧ dias" landed in the Portuguese UI.
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-sent-'));
   const outFile = path.join(sandbox, 'machine.json');
   const out = execFileSync(
@@ -235,49 +245,49 @@ t('模型凭空造哨兵（源串里根本没有占位符）→ 同样不写入'
     ],
     { cwd: ROOT, encoding: 'utf8' },
   );
-  assert.ok(/残留哨兵/.test(out), '应当报告「残留哨兵」: ' + out.slice(-300));
+  assert.ok(/stray sentinel/.test(out), 'it must report "stray sentinel": ' + out.slice(-300));
   const machine = JSON.parse(fs.readFileSync(outFile, 'utf8'))['pt-PT'] ?? {};
   const stray = Object.entries(machine).filter(([, v]) => /⟦\d+⟧/.test(String(v)));
-  assert.equal(stray.length, 0, '残留哨兵的条目不该进机器层，实际 ' + JSON.stringify(stray.slice(0, 2)));
+  assert.equal(stray.length, 0, 'entries with stray sentinels must not reach the machine layer, got ' + JSON.stringify(stray.slice(0, 2)));
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('--bust terms 的判据：含专有名词才重译（纯逻辑，按单元测而不是跑命令行）', () => {  const glossary = { Telegram: { default: 'Telegram' } };
-  // none：永远走缓存
+t('--bust terms predicate: only entries with proper nouns are re-translated (pure logic, unit-tested instead of run as a CLI)', () => {  const glossary = { Telegram: { default: 'Telegram' } };
+  // none: always use the cache
   assert.equal(needsRetranslate('Telegram 推送失败', 'none', glossary), false);
-  // all：全部重译
+  // all: re-translate everything
   assert.equal(needsRetranslate('保存', 'all', glossary), true);
-  // terms：命中术语表 或 含「像品牌名的大写拉丁片段」才重译
+  // terms: re-translate only on a glossary hit or a capitalised Latin fragment that looks like a brand name
   assert.equal(needsRetranslate('Telegram 推送失败', 'terms', glossary), true);
   assert.equal(needsRetranslate('Bark 的 key', 'terms', glossary), true);
   assert.equal(needsRetranslate('SQLite 归档', 'terms', glossary), true);
-  assert.equal(needsRetranslate('保存', 'terms', glossary), false, '纯中文标签不该被重译');
+  assert.equal(needsRetranslate('保存', 'terms', glossary), false, 'a purely Chinese label must not be re-translated');
   assert.equal(needsRetranslate('今天', 'terms', glossary), false);
   assert.equal(needsRetranslate('把情报打成一个单文件发给朋友', 'terms', glossary), false);
 });
 
-t('缓存文件里没有密钥之类的东西（只有源串哈希 → 译文）', () => {
+t('the cache file carries no secrets (only source-string hashes -> translations)', () => {
   const cachePath = path.join(ROOT, 'web/src/locales/.cache/ja-JP.json');
   if (!fs.existsSync(cachePath)) return;
   const raw = fs.readFileSync(cachePath, 'utf8');
-  assert.ok(!/sk-|apiKey|Bearer/i.test(raw), '缓存不该含任何凭据');
+  assert.ok(!/sk-|apiKey|Bearer/i.test(raw), 'the cache must not contain any credentials');
   const obj = JSON.parse(raw);
   for (const k of Object.keys(obj)) assert.match(k, /^[0-9a-f]{20}$/);
 });
 
-t('没有 --locales 时给出用法并退出 2（不会误跑）', () => {
+t('without --locales it prints usage and exits 2 (no accidental run)', () => {
   try {
     execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), '--engine', 'mock'], { cwd: ROOT, encoding: 'utf8' });
-    assert.fail('应当以非零码退出');
+    assert.fail('it must exit with a non-zero code');
   } catch (e) {
-    assert.equal(e.status, 2, '退出码应为 2');
+    assert.equal(e.status, 2, 'the exit code must be 2');
   }
 });
 
-t('openai 引擎缺 url/key 时拒绝运行（不拿空 key 去调）', () => {
+t('the openai engine refuses to run without url/key (never calls out with an empty key)', () => {
   try {
     execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), '--engine', 'openai', '--locales', 'ja-JP'], { cwd: ROOT, encoding: 'utf8' });
-    assert.fail('应当以非零码退出');
+    assert.fail('it must exit with a non-zero code');
   } catch (e) {
     assert.equal(e.status, 2);
   }

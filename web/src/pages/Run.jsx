@@ -1,4 +1,4 @@
-// 运行页：立即运行 + 实时状态 / Run page with live state
+// Run page: run now + live state
 import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -46,9 +46,10 @@ export default function Run() {
             {t('runWatchOnly')}
           </button>
         </div>
-        {/* 观测模式：把「这一轮只看了这些」当场说清楚 ——
-            取样的意义就在于不留下「整箱被同时扫一遍」的模式，但也必须让人知道
-            「没出现」≠「没动静」，否则看报告的人会读错。 */}
+        {/* Observation mode: say up front what "this round only looked at these" means —
+            the whole point of sampling is to avoid leaving behind a "the entire agency was swept at
+            once" pattern, but people also have to know that "did not appear" is not the same as
+            "no activity", otherwise whoever reads the report reads it wrong. */}
         {state.sampling && (
           <div className="hint" style={{ marginTop: 10 }}>
             <b>{t('obsSampling')}</b>

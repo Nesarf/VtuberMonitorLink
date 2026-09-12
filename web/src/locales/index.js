@@ -1,27 +1,32 @@
-// locales/index.js — 语言与地区注册表 / locale registry
+// locales/index.js — locale registry
 //
-// 设计要点（这决定了后面加语言有多贵）：
+// Design points (these decide how expensive adding a language is later):
 //
-// 1. **地区方言是「覆盖」而不是「复制」**。zh-TW 和 zh-Hans 的差别只有用词，
-//    en-GB 和 en-US 的差别只有拼写/日期顺序，pt-BR 与 pt-PT 同理。
-//    所以每个 locale 只写自己**不一样**的键，其余沿 chain 逐级回落 →
-//    16 个语言的成本从「16 × 600 条」降到「2 套完整 + 14 套差异」。
+// 1. **A regional dialect is an override, not a copy**. zh-TW and zh-Hans differ only in wording,
+//    en-GB and en-US only in spelling / date order, and pt-BR vs pt-PT is the same story.
+//    So each locale writes only the keys where it **differs**, and everything else falls back level
+//    by level along its chain, which brings the cost of 16 languages down from "16 x 600 entries"
+//    to "2 complete sets + 14 sets of differences".
 //
-// 2. **回落链必须显式写出来**，不能靠猜：zh-HK → zh-Hant → zh-Hans；
-//    en-AU/GB/CA/NZ → en-US；es-MX/AR → es-419 → es-ES；pt-BR → pt-PT。
-//    注意方向是不对称的：pt-BR 继承 pt-PT，pt-PT **不**继承 pt-BR（工具侧
-//    tools/lib/locale-chain.mjs 与这里语义必须一致，别再各写一份）。
-//    注意 uk/sr/pl 是**独立语言**，把 ru 放进它们的 chain 只是「缺键时兜底」，
-//    不是「它们是俄语的方言」—— 这一点在界面上不能搞错。
+// 2. **The fallback chain must be written out explicitly**, never guessed: zh-HK -> zh-Hant -> zh-Hans;
+//    en-AU/GB/CA/NZ -> en-US; es-MX/AR -> es-419 -> es-ES; pt-BR -> pt-PT.
+//    Note the direction is asymmetric: pt-BR inherits pt-PT, but pt-PT does **not** inherit pt-BR
+//    (the tools-side tools/lib/locale-chain.mjs must agree with the semantics here - stop writing
+//    a second copy of it).
+//    Note also that uk/sr/pl are **independent languages**: putting ru in their chain is only
+//    "a fallback when a key is missing", not "they are dialects of Russian" - getting this wrong
+//    in the UI is not acceptable.
 //
-// 3. **区域差异不只体现在文案上**：日期顺序、一周起始日、数字/货币格式都不一样。
-//    这些交给 Intl + weekStart 字段，不要自己拼字符串。
+// 3. **Regional differences are not only in the copy**: date order, first day of the week and
+//    number/currency formats all differ.
+//    Leave those to Intl + the weekStart field; do not assemble strings by hand.
 //
-// 4. 阿拉伯语等 RTL 语言用 dir:'rtl' 驱动 <html dir>。
+// 4. RTL languages such as Arabic drive <html dir> through dir:'rtl'.
 //
-// 想加一个语言：往 LOCALES 里加一行，再写一份 dict。缺的键自动回落，不会白屏。
+// To add a language: add one line to LOCALES, then write one dict. Missing keys fall back
+// automatically, so it never goes blank.
 
-/** 一周起始日：0=周日（美/日/韩/港台…），1=周一（中/欧/俄/拉美…） */
+/** First day of the week: 0=Sunday (US / JP / KR / HK / TW ...), 1=Monday (CN / EU / RU / LatAm ...) */
 export const LOCALES = [
   { code: 'zh-Hans', name: '简体中文', chain: ['zh-Hans', 'zh'], weekStart: 1, lang: 'zh' },
   { code: 'zh-Hant', name: '繁體中文', chain: ['zh-Hant', 'zh-Hans'], weekStart: 1, lang: 'zh' },
@@ -52,14 +57,15 @@ export const LOCALES = [
 
 export const byCode = (code) => LOCALES.find((l) => l.code === code) ?? null;
 
-/** 从浏览器语言列表里挑一个我们支持的地区 */
+/** Pick one of the regions we support out of the browser's language list */
 export function negotiate(langs) {
   const list = (langs ?? []).map((s) => String(s).replace('_', '-'));
   for (const raw of list) {
     const exact = LOCALES.find((l) => l.code.toLowerCase() === raw.toLowerCase());
     if (exact) return exact.code;
     const base = raw.split('-')[0].toLowerCase();
-    // 先看同语言的完整地区有哪几个：有就把第一个（通常是「母国」）给它
+    // First look at which full regions exist for this same language: if any, give it the first one
+    // (usually the "home country")
     const sameLang = LOCALES.filter((l) => l.code.split('-')[0].toLowerCase() === base);
     if (sameLang.length) {
       const preferred = { zh: 'zh-Hans', en: 'en-US', es: 'es-ES', pt: 'pt-PT', fr: 'fr-FR' }[base];
@@ -70,11 +76,15 @@ export function negotiate(langs) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 覆盖词条：只写「和上一级不一样」的键。
-// 完整的 zh-Hans / en-US 两套在 i18n.jsx 里（它们已经有 600+ 条）。
+// Overlay entries: only the keys that differ from the level above.
+// The two complete sets, zh-Hans / en-US, live in i18n.jsx (they already have 600+ entries).
 // ─────────────────────────────────────────────────────────────
 
-// 简→繁的对照表**已删除**：手写表无法区分「简繁同形」与「漏字」，会产出混排界面。
-// 现在繁体由 tools/i18n-hant.mjs 在构建期用 OpenCC 词典整份生成（locales/generated.js），
-// 港繁/台繁用 hk / twp 词典，含用词差异（軟體/網路/資訊/預設/儲存…）。
-// 英式拼写在 locales/overlays.js 的 GB_SPELL / GB_STEMS 里。
+// The Simplified -> Traditional mapping table has been **removed**: a hand-written table cannot
+// tell "same glyph in both scripts" from "a character that was missed", and it produced mixed-script
+// UIs.
+// Traditional is now generated wholesale at build time by tools/i18n-hant.mjs from the OpenCC
+// dictionaries (locales/generated.js), with the hk / twp dictionaries for Hong Kong and Taiwan
+// Traditional, including wording differences (software / network / information / default /
+// storage all differ between zh-Hans and zh-Hant).
+// British spelling lives in GB_SPELL / GB_STEMS in locales/overlays.js.

@@ -1,14 +1,15 @@
-// office.js — 纯 Node 生成 Office 可读写文件（.docx / .xlsx）
+// office.js — generate Office-readable/writable files (.docx / .xlsx) in pure Node
 //
-// 为什么手写而不借力：发行版是**便携 exe**，不能假设目标机器装了 Office，
-// 也不能假设有 Python。而 .docx/.xlsx 本质上就是 ZIP 容器里的一堆 XML —— 
-// Node 自带 zlib，缺的只是一个 ZIP 打包器和 CRC32，加起来不到 150 行。
+// Why hand-rolled instead of a library: the release is a **portable exe**, so we cannot assume
+// the target machine has Office installed, nor that it has Python. And .docx/.xlsx are
+// essentially a bunch of XML inside a ZIP container — Node ships zlib, so all that is missing
+// is a ZIP packer and CRC32, which together come to under 150 lines.
 //
-// 生成的是**标准 OOXML**：Word / Excel / WPS / LibreOffice 都能打开并继续编辑，
-// 不是 CSV 改名那种假货。
+// What it generates is **standard OOXML**: Word / Excel / WPS / LibreOffice can all open it and
+// keep editing it, not the kind of fake you get by renaming a CSV.
 import zlib from 'node:zlib';
 
-// ───────────────────────────────────────── ZIP 容器
+// ───────────────────────────────────────── ZIP container
 
 const CRC_TABLE = (() => {
   const t = new Int32Array(256);
@@ -26,7 +27,7 @@ function crc32(buf) {
   return (c ^ -1) >>> 0;
 }
 
-/** DOS 时间：用一个固定的合法值即可，不需要真实时间 */
+/** DOS time: any fixed legal value will do, a real timestamp is not needed */
 function dosDateTime(d = new Date()) {
   const time = ((d.getHours() & 0x1f) << 11) | ((d.getMinutes() & 0x3f) << 5) | ((d.getSeconds() / 2) & 0x1f);
   const date = (((d.getFullYear() - 1980) & 0x7f) << 9) | (((d.getMonth() + 1) & 0x0f) << 5) | (d.getDate() & 0x1f);
@@ -34,7 +35,7 @@ function dosDateTime(d = new Date()) {
 }
 
 /**
- * 打一个 ZIP 包（deflate 压缩）。
+ * Build one ZIP archive (deflate compressed).
  * @param {{name:string, data:Buffer|string}[]} files
  * @returns {Buffer}
  */
@@ -56,7 +57,7 @@ export function makeZip(files) {
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4); // version needed
-    local.writeUInt16LE(0x0800, 6); // UTF-8 文件名标志
+    local.writeUInt16LE(0x0800, 6); // UTF-8 filename flag
     local.writeUInt16LE(method, 8);
     local.writeUInt16LE(time, 10);
     local.writeUInt16LE(date, 12);
@@ -105,7 +106,7 @@ export function makeZip(files) {
   return Buffer.concat([...chunks, centralBuf, eocd]);
 }
 
-// ───────────────────────────────────────── XML 工具
+// ───────────────────────────────────────── XML helpers
 
 export function xmlEscape(s) {
   return String(s ?? '')
@@ -114,11 +115,11 @@ export function xmlEscape(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;')
-    // XML 1.0 不允许的控制字符，直接剔掉，否则 Word 会拒绝打开
+    // Control characters XML 1.0 does not allow: strip them outright, or Word refuses to open the file
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
 }
 
-/** 判断字符是否适合放进 Excel 的列宽计算里（中日韩当两个宽度） */
+/** Decide whether a character belongs in Excel's column-width math (CJK counts as two widths) */
 function displayWidth(s) {
   let w = 0;
   for (const ch of String(s ?? '')) w += /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1;
@@ -128,13 +129,13 @@ function displayWidth(s) {
 // ───────────────────────────────────────── .xlsx
 
 /**
- * 生成 .xlsx（inline string，不需要 sharedStrings）。
+ * Generate .xlsx (inline strings, no sharedStrings needed).
  * @param {{name:string, rows:(string|number)[][]}[]} sheets
  */
 export function buildXlsx(sheets) {
   const sheetParts = sheets.map((sheet) => {
       const colCount = sheet.rows.reduce((m, r) => Math.max(m, r.length), 0);
-      // 按内容估一个列宽，别让中文挤成一坨
+      // Estimate a column width from the content, so CJK does not get squeezed into a lump
       const cols = [];
       for (let c = 0; c < colCount; c++) {
         let w = 8;
@@ -222,7 +223,7 @@ export function buildXlsx(sheets) {
         `</styleSheet>`,
     },
   ];
-  // 每个 sheet 一个文件
+  // One file per sheet
   sheetParts.forEach((part, i) => files.push({ name: `xl/worksheets/sheet${i + 1}.xml`, data: part }));
 
   return makeZip(files);
@@ -252,7 +253,7 @@ function para(text, { style, bold, bullet } = {}) {
   return `<w:p>${props.length ? `<w:pPr>${props.join('')}</w:pPr>` : ''}${runs}</w:p>`;
 }
 
-/** 行内：`code` 与 **粗体** 简单支持，其余按纯文本 */
+/** Inline: `code` and **bold** are supported in a simple way, everything else is plain text */
 function inlineRuns(text, forceBold) {
   const s = String(text ?? '');
   const parts = [];
@@ -297,7 +298,7 @@ function table(rows) {
 }
 
 /**
- * 生成 .docx。
+ * Generate .docx.
  * @param {{title?:string, markdown:string}} doc
  */
 export function buildDocx({ title, markdown }) {
@@ -310,7 +311,7 @@ export function buildDocx({ title, markdown }) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // 表格
+    // table
     if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? '')) {
       const rows = [line.trim().slice(1, -1).split('|').map((c) => c.trim())];
       i += 2;
@@ -372,7 +373,8 @@ export function buildDocx({ title, markdown }) {
     `<w:styles ${W_NS}>` +
     `<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Microsoft YaHei"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults>` +
     `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
-    // 注意：中文版 Word 不认英文样式名，样式名要给 name 而不是只给 styleId
+    // Note: Chinese Word does not recognise English style names, so every style has to carry
+    // w:name as well -- giving only styleId is not enough
     `<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>` +
     `<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>` +
     `<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="200" w:after="100"/></w:pPr><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style>` +
@@ -414,7 +416,7 @@ export function buildDocx({ title, markdown }) {
   ]);
 }
 
-/** 情报条目 → xlsx 行 / intel items to spreadsheet rows */
+/** intel items -> xlsx rows / intel items to spreadsheet rows */
 export function itemsToSheet(items, lang = 'zh') {
   const header = ['来源', '类型', '时间', '标题', '正文', '链接', '图片数', '互动', '标签'];
   const rows = [header];
@@ -434,7 +436,7 @@ export function itemsToSheet(items, lang = 'zh') {
   return rows;
 }
 
-/** 情报条目 → 便于 Word 阅读的 markdown / intel items as readable markdown */
+/** intel items -> Word-friendly markdown / intel items as readable markdown */
 export function itemsToMarkdown(items, { title, lang = 'zh' } = {}) {
   const out = [`# ${title ?? '情报集'}`, '', `生成时间：${new Date().toLocaleString()}　共 ${items.length} 条`, ''];
   for (const it of items) {

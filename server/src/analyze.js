@@ -1,6 +1,6 @@
-// analyze.js — 分析层：把抓取摘要交给 LLM，产出结构化情报报告
-// 直连 OpenAI 兼容的 /chat/completions，不依赖任何特定厂商 SDK。
-// 档位（提供商 / 模型 / Key）来自 llm.js 的 activeProvider()，网页里可多套切换。
+// analyze.js — analysis layer: hand the fetch digests to the LLM and get a structured intel report back
+// Talks to an OpenAI-compatible /chat/completions directly, with no vendor-specific SDK.
+// The profile (provider / model / key) comes from activeProvider() in llm.js; the web UI can switch between several.
 import { digestResult, digestWatch } from './digest.js';
 import { activeProvider, chatRequest } from './llm.js';
 import { netFetch } from './net.js';
@@ -94,7 +94,7 @@ export async function analyze({ cfg, results, watchResults = [], mode = 'daily',
     );
     const text = await res.text();
     if (!res.ok) {
-      // 常见可诊断错误：余额不足 / key 无效 / 限流
+      // Diagnosable errors seen in practice: insufficient balance / invalid key / rate limited
       let hint = '';
       try {
         const j = JSON.parse(text);
@@ -120,7 +120,7 @@ export async function analyze({ cfg, results, watchResults = [], mode = 'daily',
   }
 }
 
-/** 跑之前的轻量连通性/余额探测，避免白等一场 / preflight check */
+/** Lightweight connectivity/balance probe before a run, so a long run does not wait for nothing / preflight check */
 export async function preflight(cfg, provider) {
   const p = provider ?? activeProvider(cfg);
   if (!p.apiKey) return { ok: false, error: '未配置 API Key', provider: { id: p.id, name: p.name } };

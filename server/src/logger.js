@@ -1,4 +1,4 @@
-// logger.js — 轻量日志 / minimal logger (console + rotating-free file per run)
+// logger.js - minimal logger (console + a rotating-free file per run)
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -14,7 +14,7 @@ export function createLogger(file) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.appendFileSync(file, line + '\n', 'utf8');
       } catch {
-        /* 日志失败不影响主流程 / logging must never break the run */
+        /* logging must never break the run */
       }
     }
   };

@@ -1,37 +1,43 @@
-// cookies.js — 从浏览器 profile 读取登录态 cookie（只读、不改动、不锁定）
+// cookies.js — read logged-in cookies from a browser profile (read-only, no mutation, no locking)
 //
-// 为什么需要它：
-//   用 Playwright 复用登录态要求目标浏览器**完全关闭**（profile 被锁），
-//   而实际上我们往往只需要一个 Cookie 头去调站点的 JSON 接口。
-//   于是这里做一件更轻的事：把 cookie 库**复制一份**出来读，
-//   浏览器开着也无所谓，不会碰用户正在用的 profile。
+// Why it's needed:
+//   Reusing a login session with Playwright requires the target browser to be **fully closed**
+//   (the profile is locked), and in practice we often only need a Cookie header to call the
+//   site's JSON endpoint.
+//   So this does something lighter: **copy** the cookie store out and read the copy,
+//   which works with the browser open and never touches the profile the user is using.
 //
-// 实测（本机 Opera / Chromium 内核 130+）：
-//   • 库位置：<userData>/<Profile>/Network/Cookies（老版本可能是 <Profile>/Cookies）
-//   • 值的前缀 v10 = AES-256-GCM，密钥在 <userData>/Local State 的
-//     os_crypt.encrypted_key（base64，去掉 5 字节 "DPAPI" 前缀后由 DPAPI 解出，32 字节）
-//   • 明文前 32 字节是 Chromium 130+ 加的**域名绑定哈希**，要剥掉才是真正的 cookie 值
-//   • v20 前缀 + Local State 里的 app_bound_encrypted_key = App-Bound Encryption
-//     （Chrome 127+ 默认开启），这种读不出来，只能退回「关掉浏览器 + Playwright」
+// Measured (local Opera / Chromium engine 130+):
+//   • store location: <userData>/<Profile>/Network/Cookies (older versions may be <Profile>/Cookies)
+//   • value prefix v10 = AES-256-GCM, the key lives in <userData>/Local State as
+//     os_crypt.encrypted_key (base64; after stripping the 5-byte "DPAPI" prefix it is
+//     unwrapped by DPAPI into 32 bytes)
+//   • the first 32 plaintext bytes are the **domain-binding hash** added by Chromium 130+;
+//     they have to be stripped to get the real cookie value
+//   • v20 prefix + app_bound_encrypted_key in Local State = App-Bound Encryption
+//     (on by default since Chrome 127); those can't be read here, so the only fallback is
+//     "close the browser + Playwright"
 //
-// 隐私边界：
-//   • 只读，只取指定域名；不写日志、不落盘、不随报告/feeds 输出
-//   • 复制出来的临时库用完即删
-//   • 明文只在本进程内存里拼成 Cookie 头，直接发给对应站点
+// Privacy boundary:
+//   • read-only, only for the given domains; no logging, nothing written to disk, never emitted
+//     in reports/feeds
+//   • the copied temporary store is deleted as soon as it has been used
+//   • the plaintext is only assembled into a Cookie header inside this process's memory and sent
+//     straight to the matching site
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
-/** 浏览器 userData 根目录 → 可能的 profile 子目录 */
+/** browser userData root → the possible profile subdirectories */
 const PROFILE_SUBDIRS = ['Default', 'Profile 1', 'Profile 2', 'Profile 3', 'Profile 4'];
 
 export function isSupported() {
   return process.platform === 'win32';
 }
 
-/** 临时文件根目录：配置过就用配置的，否则系统临时目录 */
+/** Temp-file root: use the configured one if there is one, otherwise the system temp dir */
 function tempRoot() {
   const dir = String(process.env.VML_TEMP_DIR ?? '').trim();
   if (dir) {
@@ -39,23 +45,24 @@ function tempRoot() {
       fs.mkdirSync(dir, { recursive: true });
       return dir;
     } catch {
-      // 配的目录不可写就退回系统临时目录，不要因为清理策略把功能弄挂
+      // If the configured dir isn't writable, fall back to the system temp dir — a cleanup
+      // policy must not take the feature down with it
     }
   }
   return os.tmpdir();
 }
 
-/** profileDir 可能是 userData 根，也可能直接是 Default，两种都认 */
+/** profileDir may be the userData root, or directly a Default — both are accepted */
 function resolveProfile(profileDir) {
   const dir = path.resolve(profileDir);
   const hasCookies = (p) => fs.existsSync(path.join(p, 'Network', 'Cookies')) || fs.existsSync(path.join(p, 'Cookies'));
   if (hasCookies(dir)) return { root: path.dirname(dir), profile: dir };
-  // 传进来的是 userData 根：找第一个存在 cookie 库的 profile
+  // What was passed in is the userData root: find the first profile that has a cookie store
   for (const sub of PROFILE_SUBDIRS) {
     const p = path.join(dir, sub);
     if (hasCookies(p)) return { root: dir, profile: p };
   }
-  // 只有一个子目录时也认
+  // A single subdirectory is accepted too
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -76,7 +83,7 @@ function cookieDbPath(profile) {
   return null;
 }
 
-/** 连 -wal/-shm 一起复制，保证 SQLite 视图一致 */
+/** Copy -wal/-shm along with it so the SQLite view is consistent */
 function copyFamily(src, dstDir) {
   fs.mkdirSync(dstDir, { recursive: true });
   const dst = path.join(dstDir, 'Cookies');
@@ -96,10 +103,11 @@ async function loadSqlite() {
   }
 }
 
-/** DPAPI 解出 AES 密钥。Node 没有原生 DPAPI，走一次 PowerShell（本机、离线）。 */
+/** Unwrap the AES key with DPAPI. Node has no native DPAPI, so this goes through
+ *  one PowerShell call (local, offline). */
 function unprotectKey(encryptedKeyB64) {
   const raw = Buffer.from(encryptedKeyB64, 'base64');
-  // 前面固定是 ASCII "DPAPI"
+  // Always preceded by the ASCII bytes "DPAPI"
   if (raw.subarray(0, 5).toString('ascii') !== 'DPAPI') throw new Error('unexpected key prefix');
   const payload = raw.subarray(5);
   const script = [
@@ -124,7 +132,7 @@ function isPrintable(buf) {
   return true;
 }
 
-/** v10：AES-256-GCM；明文可能带 32 字节域名绑定前缀 */
+/** v10: AES-256-GCM; the plaintext may carry a 32-byte domain-binding prefix */
 function decryptV10(key, buf) {
   const nonce = buf.subarray(3, 15);
   const tag = buf.subarray(buf.length - 16);
@@ -137,9 +145,9 @@ function decryptV10(key, buf) {
 }
 
 /**
- * 读取指定域名下的 cookie。
- * @param {string} profileDir 浏览器 userData 根，或其中的某个 profile
- * @param {string[]} domains  例如 ['bilibili.com']
+ * Read the cookies for the given domains.
+ * @param {string} profileDir the browser userData root, or one profile inside it
+ * @param {string[]} domains  e.g. ['bilibili.com']
  * @returns {Promise<{ok:boolean, error?:string, warning?:string, cookieHeader?:string, names?:string[], profile?:string}>}
  */
 export async function readBrowserCookies(profileDir, domains) {
@@ -165,8 +173,9 @@ export async function readBrowserCookies(profileDir, domains) {
   const osCrypt = state?.os_crypt ?? {};
   const appBound = !!osCrypt.app_bound_encrypted_key;
 
-  // cookie 库副本的落地目录：优先 VML_TEMP_DIR（由 index.js 从 config.paths.tempDir 写入，
-  // 用于守「不往 C 盘写临时文件」这类红线），没配就退回系统临时目录。
+  // Where the cookie-store copy lands: VML_TEMP_DIR first (written by index.js from
+  // config.paths.tempDir, used to hold the "no temp files on the C: drive" red line),
+  // falling back to the system temp dir when unset.
   const tmpDir = fs.mkdtempSync(path.join(tempRoot(), 'vml-cookies-'));
   let rows = [];
   try {
@@ -219,12 +228,13 @@ export async function readBrowserCookies(profileDir, domains) {
       } else if (prefix === 'v20') {
         v20++;
       } else {
-        // 没有前缀的老格式：值本身就是明文
+        // Old format with no prefix: the value itself is plaintext
         value = buf.toString('utf8');
       }
     }
     if (!value) continue;
-    // 同名可能出现在多个 host_key 上，优先取域名以点开头的（对子域都生效）
+    // The same name may appear under several host_keys; prefer the one whose domain starts
+    // with a dot (it applies to subdomains too)
     const prev = byName.get(r.name);
     if (!prev || (r.host_key.startsWith('.') && !prev.host.startsWith('.'))) {
       byName.set(r.name, { value, host: r.host_key });

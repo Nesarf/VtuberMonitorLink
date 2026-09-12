@@ -1,14 +1,14 @@
-// features.js — 用 LLM 从情报条目里抽结构化特征 / structured feature extraction
+// features.js — use the LLM to extract structured features from intel items / structured feature extraction
 //
-// 这是 LLM 在本工具里最主要的用途之一：把「一段动态正文」变成**可检索的属性**
-// —— 人名、所属（大箱/个人势）、玩的游戏、事件类型、标签。
-// 抽出来之后，检索就不再只能靠字面命中：只记得「某个玩马车的大箱成员」也能捞到。
+// This is one of the main uses of the LLM in this tool: turn "a post body" into **searchable attributes**
+// -- names, affiliation (big agency / indie), games played, event type, tags.
+// Once extracted, search no longer has to rely on literal hits: remembering only "some big-agency member who plays Mario Kart" is enough to find them.
 //
-// 三条工程约束：
-//   1. **有缓存**（feeds/features.json，按条目 id）：同一条目永不重复花钱；
-//   2. **有上限**（run.featureLimit，默认 40 条/次）且分批（每批 10 条），
-//      不让一次运行把 token 烧光；
-//   3. **失败不影响主流程**：抽不出来就跳过，报告照出。
+// Three engineering constraints:
+//   1. **Cached** (feeds/features.json, keyed by item id): the same item never costs money twice;
+//   2. **Capped** (run.featureLimit, 40 items per run by default) and batched (10 per batch),
+//      so one run cannot burn through the tokens;
+//   3. **Failure does not block the main flow**: if extraction fails, skip it and still emit the report.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -37,7 +37,7 @@ function saveFeatureCache(cfg, cache) {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, JSON.stringify(cache, null, 1), 'utf8');
   } catch {
-    /* 缓存写不进也不该影响运行 */
+    /* a cache write failure must not affect the run */
   }
 }
 
@@ -74,7 +74,7 @@ function coerce(obj) {
 }
 
 /**
- * 对一批条目抽特征（带缓存与上限）。
+ * Extract features for a batch of items (with cache and cap).
  * @returns {Promise<{cache:object, extracted:number, skipped:number, error?:string}>}
  */
 export async function extractFeatures(cfg, items, log) {
@@ -86,11 +86,11 @@ export async function extractFeatures(cfg, items, log) {
   const todo = items.filter((it) => it.id && !cache[it.id]).slice(0, limit);
   const skipped = items.length - todo.length;
   if (!todo.length) {
-    log?.info(`特征抽取：全部命中缓存（${items.length} 条）/ all cached`);
+    log?.info(`feature extraction: all cached (${items.length} items) / all cached`);
     return { cache, extracted: 0, skipped };
   }
 
-  log?.info(`特征抽取：${todo.length} 条待抽（缓存命中 ${items.length - todo.length} 条）`);
+  log?.info(`feature extraction: ${todo.length} to extract (cache hits ${items.length - todo.length})`);
   let extracted = 0;
   for (let i = 0; i < todo.length; i += BATCH) {
     const batch = todo.slice(i, i + BATCH);
@@ -110,7 +110,7 @@ export async function extractFeatures(cfg, items, log) {
       );
       const text = await res.text();
       if (!res.ok) {
-        log?.warn(`特征抽取失败 / extract failed — HTTP ${res.status}`);
+        log?.warn(`feature extraction failed / extract failed — HTTP ${res.status}`);
         return { cache, extracted, skipped, error: `HTTP ${res.status}` };
       }
       const content = JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
@@ -123,19 +123,19 @@ export async function extractFeatures(cfg, items, log) {
         cache[item.id] = { ...coerce(row), at: new Date().toISOString() };
         extracted++;
       }
-      // 模型没回全的条目也标一下，免得每轮都重试同一批
+      // Also mark items the model did not answer for, so the same batch is not retried every round
       for (const item of batch) if (!cache[item.id]) cache[item.id] = { empty: true, at: new Date().toISOString() };
     } catch (err) {
-      log?.warn(`特征抽取异常 / extract error — ${err.message}`);
+      log?.warn(`feature extraction error / extract error — ${err.message}`);
       return { cache, extracted, skipped, error: err.message };
     }
   }
   saveFeatureCache(cfg, cache);
-  log?.info(`特征抽取完成：新增 ${extracted} 条 / extracted ${extracted}`);
+  log?.info(`feature extraction done: ${extracted} new / extracted ${extracted}`);
   return { cache, extracted, skipped };
 }
 
-/** 把特征贴回条目，并转成可检索的标签 */
+/** Attach features back onto items and turn them into searchable tags */
 export function applyFeatures(items, cache) {
   return items.map((it) => {
     const f = cache?.[it.id];
@@ -152,7 +152,7 @@ export function applyFeatures(items, cache) {
   });
 }
 
-/** 全局特征统计，给检索页做一栏「按特征找」 */
+/** Global feature stats, feeding the search page's "find by feature" column */
 export function featureStats(cfg) {
   const cache = loadFeatureCache(cfg);
   const count = (key) => {

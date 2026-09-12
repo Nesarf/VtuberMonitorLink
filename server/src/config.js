@@ -1,35 +1,34 @@
-// config.js — 配置读写 / Config load & save.
-// 所有路径都可配置：不写死任何机器专属路径。
-// All paths are configurable; no hard-coded machine-specific paths.
+// config.js — Config load & save.
+// Every path is configurable: no hard-coded machine-specific path.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-/** 项目根目录 / project root */
+/** Project root */
 export const APP_ROOT = path.resolve(__dirname, '..', '..');
 export const CONFIG_PATH = path.join(APP_ROOT, 'config.json');
 
 export const DEFAULT_CONFIG = {
   browser: {
-    // bundled: 随包分发的 Chromium | system: 系统已装浏览器 | custom: 用户指定路径
+    // bundled: Chromium shipped with the package | system: a browser already installed on the machine | custom: a user-given path
     mode: 'bundled',
     executablePath: '',
-    // 复用登录态时指向浏览器的 user-data-dir（留空则用临时干净配置）
+    // Points at the browser's user-data-dir when reusing a login session (empty = a temporary clean profile)
     profileDir: '',
     headless: true,
     waitMs: 6000,
     hardTimeoutMs: 90000,
   },
   llm: {
-    // 多档位：网页里可以存好几套（便宜的 / 出报告用的）随时切换
-    // 兼容旧格式：若只有扁平的 baseUrl/apiKey/model，会被 activeProvider() 当成单档位
+    // Multiple profiles: the web UI can hold several sets (a cheap one / one for reports) and switch at any time
+    // Backward compatible with the old shape: a flat baseUrl/apiKey/model is treated by activeProvider() as a single profile
     activeId: '',
     providers: [],
-    // 用量预算：dailyTokens = 0 表示不设限。默认只**警告**不拦；
-    // 想真拦就把 onExceed 设成 'stop'（使用者自己开的工具，拦之前得说清楚）。
+    // Usage budget: dailyTokens = 0 means no limit. By default it only **warns** and never blocks;
+    // set onExceed to 'stop' to actually block (this is the user's own tool, so blocking has to be spelled out first).
     budget: { dailyTokens: 0, onExceed: 'warn' },
-    // 以下为旧格式遗留字段，保留以便平滑迁移
+    // Legacy fields of the old flat shape, kept so migration stays smooth
     provider: 'deepseek',
     baseUrl: 'https://api.deepseek.com',
     apiKey: '',
@@ -39,8 +38,8 @@ export const DEFAULT_CONFIG = {
     temperature: 0.3,
   },
   schedule: {
-    // 多条计划任务；旧版的扁平写法（enabled/mode/dayOfWeek/time）会自动迁移成一条
-    enabled: false, // 兼容字段，实际以 tasks 为准
+    // Several scheduled tasks; the old flat shape (enabled/mode/dayOfWeek/time) is auto-migrated into one task
+    enabled: false, // compatibility field — `tasks` is what actually counts
     mode: 'weekly', // weekly | daily
     dayOfWeek: 2,
     time: '23:30',
@@ -48,57 +47,58 @@ export const DEFAULT_CONFIG = {
     tasks: [],
   },
   run: {
-    // 预抓取节流：Reddit 类站点按 IP 限流，主动拉开间隔比连击重试有效
+    // Pre-fetch throttling: Reddit-like sites rate-limit by IP, so spacing requests out beats retrying in bursts
     defaultGapSeconds: 2,
     maxParallel: 3,
-    // 连续失败到第 N 次就把这条来源隔离 M 小时（到点自动再试一次，不是永久拉黑）。
-    // 理由：抓不到的站点每轮都重试 = 白花的时间 + 白白多出来的请求，而请求本身就是足迹。
+    // After the Nth consecutive failure, quarantine this source for M hours (it is retried automatically once the time is up — not a permanent block).
+    // Reason: retrying an unreachable site every round = wasted time + extra requests nobody asked for, and those requests are themselves a footprint.
     quarantine: { failures: 3, hours: 6 },
-    // 每次运行是否顺带检查监视对象 / also run the watch targets
+    // Whether each run also checks the watch targets
     watchWithRun: true,
-    // 某个出口失败时，自动换另一个出口再试一次（来源没显式指定出口时才生效）
+    // When one exit fails, automatically try another exit (only takes effect when the source does not name an exit itself)
     autoFailover: true,
-    // 运行**最后**对出异常的来源做自检并生成诊断文件（连通正常的不打扰）
+    // At the **end** of a run, self-check the sources that errored and write a diagnostic file (sources that connect fine are left alone)
     diagnoseFailed: true,
-    // 用 LLM 抽结构化特征（人名/所属/游戏/事件），让检索能按属性命中；有缓存、有上限
+    // Use an LLM to extract structured features (person / affiliation / game / event) so search can match on attributes; cached, with a cap
     extractFeatures: true,
     featureLimit: 40,
   },
   proxy: {
-    // 重要：Node 的 fetch(undici) 默认**不读**系统代理；
-    // 本工具会按此配置显式走代理，抓取与浏览器渲染同时生效。
-    // 例外：部分站点（如 B 站）走代理反而被风控，可按来源设 direct。
+    // Important: Node's fetch (undici) does **not** read the system proxy by default;
+    // this tool proxies explicitly according to this config, for fetching and browser rendering alike.
+    // Exception: some sites (Bilibili, for one) get risk-controlled *because* of a proxy, so a source can be set to direct.
     enabled: false,
     url: '',
-    // 出口模式：http = 走下面的 HTTP 代理；tor = 走 Tor 的 SOCKS5（无痕化）
+    // Exit mode: http = use the HTTP proxy below; tor = use Tor's SOCKS5 (anonymizing)
     mode: 'http',
-    // Tor 的 SOCKS5 地址（Tor Browser 默认 9150，独立 tor 默认 9050）
+    // Tor's SOCKS5 address (Tor Browser defaults to 9150, a standalone tor to 9050)
     torSocks: 'socks5://127.0.0.1:9150',
-    // 可选：一键启动 tor 用的可执行文件路径（留空则不提供该按钮）
+    // Optional: path to the executable used by the one-click tor launch (empty = that button is not offered)
     torExe: '',
-    // mihomo / Clash.Meta 的控制接口（用于列节点、切节点、测每个节点到某站的延迟）
+    // mihomo / Clash.Meta control API (list nodes, switch nodes, measure each node's delay to a given site)
     controlUrl: '',
     controlSecret: '',
   },
 
-  // ── 报告 / report ─────────────────────────────────────────────────
-  // 停止活动 / 毕业：日报是「今天有什么新东西」，于是停了的人**永远不会出现** ——
-  // 哪怕他昨天刚发了一条（半年来唯一一条，恰恰最该被看见）。所以把「停止活动 ≥6 个月」
-  // 的人统一列在**日报最后**，每人附上最新内容；如果其中有人最近又动了，会单独标成「复出」。
+  // ── report ─────────────────────────────────────────────────
+  // Dormant / graduated: the daily report answers "what is new today", so people who went quiet **never appear** —
+  // even if they posted something yesterday (their only item in half a year, and exactly the one worth seeing). So everyone
+  // dormant for >= 6 months is listed together at the **very end of the daily report**, each with their latest content;
+  // if any of them moved again recently, that is flagged separately as a "comeback".
   report: {
     dormant: {
       enabled: true,
-      months: 6, // 使用者指定：半年
-      maxPeople: 12, // 一次最多列几个人（再多就成噪音）
-      maxItems: 2, // 每人最多几条
-      comebackDays: 3, // 最近这几天有动静 → 认为「可能复出」
+      months: 6, // user-specified: half a year
+      maxPeople: 12, // how many people to list at most in one report (more than that is just noise)
+      maxItems: 2, // how many items per person at most
+      comebackDays: 3, // activity within the last few days -> treat as a "possible comeback"
     },
   },
 
-  // ── 静默检测 / silence detection ───────────────────────────────────
-  // 「没动静」也是一条情报：内容告警看不见缺失。判据全部相对**个人自己的节奏**
-  // （见 server/src/silence.js），不拍固定天数 —— 日更的人和月更的人不该一个阈值。
-  // 只有在「关注对象」里填了 agency 的人，才会参与箱级（同箱多人同时安静）判断。
+  // ── silence detection ───────────────────────────────────
+  // "No activity" is intel too: content alerts are blind to absence. Every criterion is relative to **the person's own cadence**
+  // (see server/src/silence.js), never a fixed number of days — a daily poster and a monthly poster should not share one threshold.
+  // Only people with an agency set in "followed people" take part in the group-level judgement (several members of one group going quiet together).
   silence: {
     enabled: true,
     sampleDays: 20,
@@ -107,105 +107,105 @@ export const DEFAULT_CONFIG = {
     factor: 2.5,
     groupQuietDays: 5,
     minMembers: 3,
-    basisDays: 60, // 从归档里取多少天的历史来估节奏
+    basisDays: 60, // how many days of history to take from the archive when estimating the cadence
   },
 
-  // ── 观测模式 / observation mode ────────────────────────────────────
-  // 目的：既能看出一整个箱的状态，又不留下「有人在盯整箱」的痕迹。
-  // 四件事：取样（每轮只取一部分、轮转补齐）、抖动（间隔与起始随机）、
-  // 按「日志在谁手上」分配出口（只有箱自托管的站点走 Tor）、不跑需要登录态的来源。
-  // 详细判据与实测依据见 server/src/observe.js 顶部注释。
+  // ── observation mode ────────────────────────────────────
+  // Goal: see the state of a whole group without leaving the trace that "someone is watching the whole group".
+  // Four things: sampling (only part of the sources each round, filled in by rotation), jitter (random intervals and start),
+  // allocating exits by "whose log it is" (only group-self-hosted sites go through Tor), and skipping sources that need a login.
+  // Detailed criteria and the measured evidence are in the top comment of server/src/observe.js.
   observation: {
     enabled: false,
-    // 每轮取多少（比例）；配合轮转，几轮下来覆盖是完整的
+    // How much to take each round (ratio); combined with rotation, a few rounds add up to full coverage
     sampleRatio: 0.5,
     minSources: 2,
     minWatch: 1,
-    // 请求间隔抖动区间（秒）：观察模式下取代固定的 defaultGapSeconds
+    // Request-interval jitter range (seconds): replaces the fixed defaultGapSeconds in observation mode
     jitterSeconds: [3, 12],
-    // 箱自托管的站点走 Tor（那是唯一「日志在对方手上」的一类入口）
+    // Group-self-hosted sites go through Tor (that is the only kind of entry where "the log is in their hands")
     torForAgency: true,
-    // 需要登录态的来源在这一模式下不跑（避免把实名身份与观测行为绑在一起）
+    // Sources that need a login are not run in this mode (so a real identity is never tied to observation behaviour)
     skipLoginSources: true,
-    // 每次选取换一条 Tor 链路（SOCKS 用户名隔离 → 出口 IP 不同），避免整轮都从同一个出口出去
+    // Use a fresh Tor circuit for every selection (SOCKS username isolation -> a different exit IP), so a whole round does not leave through one exit
     rotateExit: true,
   },
   live: {
-    // 开播监测（功能来源见 docs/REVIEW-live.md；上游 dd-center/bilibili-dd-monitor 为 MIT）
+    // Live-stream monitoring (feature origin: docs/REVIEW-live.md; upstream dd-center/bilibili-dd-monitor is MIT)
     enabled: true,
-    // 额外要监测的 uid；B 站动态来源与监视对象里的 uid 会自动并入
+    // Extra uids to monitor; uids from Bilibili feed sources and from watch targets are merged in automatically
     uids: [],
-    // 每次运行顺带查一次开播状态
+    // Also check live status once per run
     checkWithRun: true,
-    // 有人从「未开播」变成「直播中」时推送（轮播不算，轮播会误报）
+    // Notify when someone goes from "not streaming" to "live" (reruns do not count — a rerun would be a false alarm)
     notifyOnLive: true,
-    // vtbs.moe 花名册缓存时长（小时）
+    // vtbs.moe roster cache TTL (hours)
     cacheRosterHours: 24,
   },
-  // 按「人」关注：名单本身就是配置（谁的名字、别名、账号在哪）
+  // Following by "person": the list itself is the config (whose name, aliases, where the accounts are)
   // [{ id, name, enName, agency, aliases[], tags[], notes, links{bilibili,twitter,youtube,twitch},
   //    enabled, notifyLevel: info|alert|urgent }]
   people: [],
   peopleOptions: {
-    // 情报页默认是否只看关注对象（默认关：先让人看到全量，再自己决定收窄）
+    // Whether the intel page shows followed people only by default (off by default: let people see the full stream first, then narrow it themselves)
     onlyFollowed: false,
-    // 命中关注对象时，按那个人的 notifyLevel 推送
+    // On a followed-person match, notify at that person's notifyLevel
     notifyOnMatch: true,
-    // 日报里列出关注对象的动态
+    // List followed people's activity in the daily report
     reportMatches: true,
   },
-  // 一键分享 / one-click sharing
+  // one-click sharing
   share: {
-    // 下载分享包时的默认格式
+    // Default format when downloading a share bundle
     defaultFormat: 'html',
-    // 已经用真实账号验证过、允许对外使用的发帖目标（第一次成功发布后会自动写进来）
-    // 之所以要有这个列表：对外发东西不可撤销，没验证过的代码路径不该被当成可用
+    // Post targets already verified with a real account and cleared for public use (written in automatically after the first successful publish)
+    // Why this list exists: posting outward is irreversible, and an unverified code path should not be treated as usable
     verifiedTargets: [],
   },
-  // 图片理解打标 / image understanding
-  // 注意：**默认关闭**。开启意味着把情报里的配图发送到你配置的模型服务 ——
-  // 这是隐私相关的动作，必须由使用者明确打开，不能默认偷偷发。
+  // image understanding tagging
+  // Note: **off by default**. Turning it on means sending the images attached to intel to the model service you configured —
+  // that is a privacy-relevant action, so the user has to enable it explicitly; it must never be sent quietly by default.
   vision: {
     enabled: false,
-    // 用哪个档位打标（留空 = 用当前激活档位）
+    // Which profile to tag with (empty = the currently active profile)
     providerId: '',
-    // 一次运行最多打多少张（按图 URL 缓存，重复的图不重复花钱）
+    // How many images to tag at most per run (cached by image URL, so a repeated image never costs twice)
     runLimit: 40,
     concurrency: 2,
     maxTokens: 300,
     timeoutMs: 60000,
-    // 自定义提示词（留空用内置的）
+    // Custom prompt (empty = the built-in one)
     prompt: '',
-    // 档位被标记为「不支持视觉」时是否仍然尝试
+    // Whether to keep trying when the profile is marked as "no vision support"
     requireVisionModel: true,
   },
-  // 多源同事件合并 / 相似度去重 / 来源权重
+  // Multi-source same-event merging / similarity dedupe / source weights
   cluster: {
     enabled: true,
-    // IDF 加权 Dice 阈值：太低会把不相干的事并起来（信息被吞），太高等于没合并
+    // IDF-weighted Dice threshold: too low merges unrelated events (information gets swallowed), too high means nothing is ever merged
     threshold: 0.52,
-    // 超过这个时间差就不算同一件事（防止把去年的同一活动并进来）
+    // Beyond this time gap it is not the same event (so last year's edition of the same event is not merged in)
     windowHours: 72,
   },
-  // 来源权重的静态基准（按分类给默认值），可在这里按来源 id 覆盖
-  // 例：{ "news-ann": 1.4, "community-reddit": 0.6 }
+  // Static baseline for source weights (defaults per category), overridable here per source id
+  // e.g. { "news-ann": 1.4, "community-reddit": 0.6 }
   sourceWeights: {},
   notify: {
     desktop: true,
-    // 同一条内容在 N 分钟内只推一次（0 = 不去重）。报告标题往往每次都一样，
-    // 不去重就是纯骚扰。
+    // The same content is pushed only once per N minutes (0 = no dedupe). Report titles tend to be identical every time,
+    // so without dedupe it is pure harassment.
     dedupeMinutes: 0,
-    // 静默时段：**不是丢弃，是入队补发**。
-    // 跨午夜（23:00→08:00）是最常见的形态，calendar.js / notify.js 里都按
-    // 「start > end 即跨午夜」处理。start === end 表示全天静默。
-    // bypassLevels 默认豁免 urgent（开播这类时间敏感的通知等不起）；
-    // 配置写坏时 fail-open（照常推送），因为「配错导致所有通知消失」严重得多。
+    // Quiet hours: **not dropped, but queued and delivered afterwards**.
+    // Crossing midnight (23:00 -> 08:00) is the most common shape, and calendar.js / notify.js both treat
+    // "start > end" as crossing midnight. start === end means quiet all day.
+    // bypassLevels exempts urgent by default (time-sensitive notifications like going live cannot wait);
+    // a broken config fails open (push as usual), because "a typo makes every notification disappear" is far worse.
     quietHours: {
       enabled: false,
       start: '23:00',
       end: '08:00',
       days: 'all', // all | weekdays | weekend
-      timeZone: '', // 留空 = 跟随 calendar.timeZone / 系统时区
+      timeZone: '', // empty = follow calendar.timeZone / the system time zone
       bypassLevels: ['urgent'],
     },
     // [{ id, kind, name, enabled, on: always|alerts|failures, quiet: inherit|bypass,
@@ -213,7 +213,7 @@ export const DEFAULT_CONFIG = {
     targets: [],
   },
   bilibili: {
-    // 免登录的图文动态每页 20 条，pages 控制翻几页
+    // Login-free image/text feeds return 20 items per page, `pages` controls how many pages are fetched
     pages: 1,
   },
   watch: {
@@ -231,14 +231,14 @@ export const DEFAULT_CONFIG = {
     },
   },
   ui: {
-    // 默认深色（使用者指定）。auto = 跟随系统；浅色只在显式选 light 时出现，
-    // 因为夜间看推送/情报流是主要场景，默认深色更不刺眼。
+    // Dark by default (user-specified). auto = follow the system; light only shows up when light is chosen explicitly,
+    // because reading pushes / the intel stream at night is the main scenario, and dark is easier on the eyes.
     theme: 'dark', // auto | light | dark
-    notify: true, // 兼容字段，实际看 notify.desktop
+    notify: true, // compatibility field — notify.desktop is the real one
     intelPerSource: 24,
     probeSamples: 3,
     probeTtlMinutes: 30,
-    // 报告 / 情报的呈现排版（网页里可 DIY，参考小鸡词典那种卡片罗列）
+    // Presentation layout for reports / intel (DIY-able in the web UI; think of the card listing on xiaojicidian)
     layout: {
       mode: 'cards', // cards | list | compact | timeline | table
       columns: 'auto', // auto | 1 | 2 | 3 | 4
@@ -248,23 +248,23 @@ export const DEFAULT_CONFIG = {
       showStats: true,
       showTime: true,
       showSource: true,
-      accent: '', // 留空用主题色
+      accent: '', // empty = use the theme accent colour
     },
   },
   privacy: {
-    // 匿名模式：完全不使用登录态（不读浏览器 cookie、不复用 profile），
-    // 发布前自检与「无痕化」场景下打开它最省心。
+    // Anonymous mode: never use a login session at all (no browser cookie reads, no profile reuse);
+    // turning it on is the easiest route for the pre-publish self-check and for "anonymizing" scenarios.
     anonymousMode: false,
-    // 抓取时是否发送 Referer / Origin 这类可能带上站点身份的请求头
+    // Whether to send request headers that may carry a site identity, such as Referer / Origin
     sendReferer: true,
   },
-  // 纪念日 / 生日 / 3D披露 / 周年 倒计时
+  // Anniversary / birthday / 3D debut / debut anniversary countdown
   calendar: {
-    // 留空 = 用系统时区。要盯日本箱就填 Asia/Tokyo，这样「今天」按对方的时间算。
+    // empty = the system time zone. To watch a Japanese group, set Asia/Tokyo so "today" follows their clock.
     timeZone: '',
-    // 默认提前几天提醒（条目自己还能覆盖）
+    // How many days ahead to remind by default (an entry can still override it)
     remindDaysBefore: 3,
-    // 日报里列出未来多少天内的纪念日
+    // How many days of upcoming anniversaries to list in the daily report
     reportDays: 30,
     entries: [],
   },
@@ -273,26 +273,26 @@ export const DEFAULT_CONFIG = {
     feedsDir: 'feeds',
     logsDir: 'logs',
     watchDir: 'watch',
-    // 临时文件目录。留空 = 系统临时目录（对便携发行的通用默认）。
-    // 这台机器有「不往 C 盘写临时文件」的红线，所以本机配置会指到 E 盘。
-    // 使用者：读浏览器 cookie 库时的副本、以及需要落临时文件的抓取。
+    // Temporary file directory. Empty = the system temp dir (a sane generic default for a portable build).
+    // This machine has a hard rule of "never write temp files to the C: drive", so the local config points at the E: drive.
+    // Used for: the copy made while reading the browser cookie database, and fetches that need to drop temp files.
     tempDir: '',
-    // Playwright 浏览器内核目录。留空 = Playwright 默认位置
-    // （Windows 上是 %LOCALAPPDATA%\ms-playwright，即 C 盘）。
-    // 守红线就指到 E 盘；启动时写进 PLAYWRIGHT_BROWSERS_PATH。
+    // Playwright browser engine directory. Empty = Playwright's default location
+    // (on Windows that is %LOCALAPPDATA%\ms-playwright, i.e. the C: drive).
+    // Point it at the E: drive to honour the rule; it is written into PLAYWRIGHT_BROWSERS_PATH at startup.
     browsersDir: '',
   },
   reports: {
-    // 每日情报输出格式。默认 html：VSCode 直接预览，不需要 Markdown 插件。
-    // html = 自带样式的单文件网页 / adoc = AsciiDoc / md = 旧行为 / json = 结构化
+    // Daily intel output format. html by default: VSCode previews it directly, no Markdown plugin needed.
+    // html = a self-styled single-file web page / adoc = AsciiDoc / md = the old behaviour / json = structured
+    // Besides the main file a .json source (with the raw markdown) is always written, for Word export / search / run-to-run comparison
     format: 'html',
-    // 除主文件外始终写一份 .json 源（含 markdown 原文），供导出 Word / 检索 / 逐次对比
     keepJsonSource: true,
   },
   sources: {
     // id -> { enabled: boolean, login: 'none'|'optional'|'required' }
   },
-  // 使用者自定义的来源（在网页「来源」页里可视化增删改）
+  // User-defined sources (added, edited and removed visually on the "sources" page)
   customSources: [],
 };
 
@@ -300,7 +300,7 @@ function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-/** 深合并：用 defaults 补齐用户配置缺失项 / deep-merge user config over defaults */
+/** Deep-merge: fill in whatever the user config is missing from defaults */
 export function mergeDefaults(user, defaults = DEFAULT_CONFIG) {
   const out = Array.isArray(defaults) ? [...defaults] : { ...defaults };
   if (!isPlainObject(user)) return out;
@@ -316,7 +316,7 @@ export function loadConfig() {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     return mergeDefaults(raw);
   } catch (err) {
-    console.error('[config] 读取失败 / load failed:', err.message);
+    console.error('[config] load failed:', err.message);
     return structuredClone(DEFAULT_CONFIG);
   }
 }
@@ -328,20 +328,20 @@ export function saveConfig(cfg) {
   return merged;
 }
 
-/** 把配置里的相对路径解析成绝对路径 / resolve a configured dir to an absolute path */
+/** Resolve a configured dir to an absolute path */
 export function resolveDir(cfg, key) {
   const rel = cfg?.paths?.[key] ?? DEFAULT_CONFIG.paths[key] ?? key;
   return path.isAbsolute(rel) ? rel : path.join(APP_ROOT, rel);
 }
 
 /**
- * 首次保存时把旧的扁平配置升级成新结构。
- * 只在真正写盘时调用，读配置时不动文件。
+ * Upgrade the old flat config into the new shape on first save.
+ * Only called when actually writing to disk; reading config never touches the file.
  */
 export function migrateConfig(cfg) {
   const next = mergeDefaults(cfg);
 
-  // ── LLM：扁平 → 档位列表
+  // ── LLM: flat -> profile list
   const llm = next.llm ?? {};
   if (!Array.isArray(llm.providers) || llm.providers.length === 0) {
     if (llm.apiKey || (llm.baseUrl && llm.baseUrl !== DEFAULT_CONFIG.llm.baseUrl)) {
@@ -369,7 +369,7 @@ export function migrateConfig(cfg) {
     next.llm.activeId = next.llm.providers[0].id;
   }
 
-  // ── 定时：扁平 → 任务列表
+  // ── schedule: flat -> task list
   const sched = next.schedule ?? {};
   if (!Array.isArray(sched.tasks) || sched.tasks.length === 0) {
     if (sched.enabled) {
@@ -391,7 +391,7 @@ export function migrateConfig(cfg) {
     }
   }
 
-  // ── 桌面通知开关搬家：ui.notify → notify.desktop
+  // ── desktop notification switch moved: ui.notify -> notify.desktop
   if (next.notify && next.ui && next.ui.notify === false && next.notify.desktop === DEFAULT_CONFIG.notify.desktop) {
     next.notify = { ...next.notify, desktop: false };
   }

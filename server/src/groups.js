@@ -1,20 +1,20 @@
-// groups.js — 箱视角：把「按人关注」聚成「按团体看」
+// groups.js — group view: aggregate "follow people" into "look at a whole agency"
 //
-// 为什么需要：逐条情报流适合「今天有什么新闻」，不适合回答「这个箱现在怎么样」。
-// 判断一个箱的状态，要看的是**一组人**在时间上的形状：
-//   · 谁在动、谁停了（缺失也是情报）
-//   · 是不是**同时**动（同一天多人活跃 = 企划/联动，而不是 N 条互不相关的新闻）
-//   · 是不是**同时**停（整箱安静 = 值得看一眼的信号）
-//   · 每个人相对**自己**的节奏是否异常（日更的人停 3 天 vs 月更的人停 3 天，其实不是一回事）
+// Why this is needed: a per-item intel stream suits "what is in the news today" but not "how is this agency doing right now".
+// Judging the state of an agency means looking at the shape of **a group of people** over time:
+//   · who is moving and who stopped (absence is information too)
+//   · whether they move **at the same time** (several people active on the same day = a project/collab, not N unrelated news items)
+//   · whether they stop **at the same time** (a whole agency going quiet = a signal worth a look)
+//   · whether each person is off their **own** rhythm (a daily poster silent for 3 days vs a monthly poster silent for 3 days are really not the same thing)
 //
-// 这里只做聚合，不做判断：把上面四件事算成结构化数据交给人看。
-// 纯函数（输入 byDay + people + 日期轴），所以自检能把形状钉住。
+// This module only aggregates, it does not judge: it turns those four things into structured data for a human to read.
+// Pure functions (input byDay + people + a date axis), so the self-test can pin the shape down.
 import { baselineOf, toleranceDays, SILENCE_DEFAULTS } from './silence.js';
 
 const DAY_MS = 86400000;
 const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
 
-/** 生成日期轴（含今天），升序 */
+/** Build a date axis (including today), ascending */
 export function dayAxis(days, endDay = null) {
   const end = endDay ?? dayOf(new Date());
   const out = [];
@@ -23,13 +23,13 @@ export function dayAxis(days, endDay = null) {
 }
 
 /**
- * 把一个 agency 的成员聚成一块。
+ * Aggregate the members of one agency into a single block.
  *
  * @param {object} o
- * @param {Array}  o.members   成员（people 里同 agency 的那些）
- * @param {object} o.byDay     archive.peopleSeries().byDay：{ personId: { day: n } }
- * @param {string[]} o.axis    日期轴（升序）
- * @param {object} o.rules     config.silence（复用同一套节奏判据）
+ * @param {Array}  o.members   members (the people in people with the same agency)
+ * @param {object} o.byDay     archive.peopleSeries().byDay: { personId: { day: n } }
+ * @param {string[]} o.axis    date axis (ascending)
+ * @param {object} o.rules     config.silence (reuses the same rhythm criteria)
  * @param {Date}   o.now
  */
 export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules = {}, now = new Date() } = {}) {
@@ -46,7 +46,7 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
       name: p.name ?? String(p.id),
       aliases: p.aliases ?? [],
       tags: p.tags ?? [],
-      counts, // 与 axis 一一对应的每日条数（热力图直接用）
+      counts, // per-day item counts aligned one-to-one with axis (used directly by the heatmap)
       activeDays: active,
       items: counts.reduce((a, b) => a + b, 0),
       lastDay: baseline.lastDay,
@@ -57,10 +57,10 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
     };
   });
 
-  // 每日合计（箱级节奏）
+  // Daily totals (agency-level rhythm)
   const perDay = axis.map((_, i) => rows.reduce((a, row) => a + row.counts[i], 0));
 
-  // 同刻出现：同一天有 ≥2 人活跃 → 多半是企划/联动，而不是 N 条独立新闻
+  // Co-occurrence: >=2 people active on the same day -> most likely a project/collab, not N independent news items
   const coActive = [];
   let allActiveDays = 0;
   for (let i = 0; i < axis.length; i++) {
@@ -69,7 +69,7 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
     if (rows.length >= 2 && who.length === rows.length) allActiveDays++;
   }
 
-  // 共同沉默：从轴尾往前数，连续多少天**一个成员都没动**
+  // Shared silence: counting back from the end of the axis, how many consecutive days **not a single member moved**
   let quietStreak = 0;
   for (let i = axis.length - 1; i >= 0; i--) {
     if (perDay[i] > 0) break;
@@ -79,9 +79,9 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
   const silent = rows.filter((row) => row.level === 'warn' || row.level === 'high').sort((a, b) => (b.quietDays ?? 0) - (a.quietDays ?? 0));
   const activeLast7 = rows.filter((row) => row.counts.slice(-7).some((n) => n > 0)).length;
 
-  // 箱级信号：整箱安静（一个都没动），或多数人同时安静。
-  // 两条都要求成员数 ≥ minMembers —— 「1~2 个人也算一个箱」会一直刷信号，
-  // 那是噪音而不是情报（真在意两人组的人可以把 minMembers 调成 2）。
+  // Agency-level signal: the whole agency is quiet (nobody moved), or most people are silent at once.
+  // Both require >= minMembers -- counting "1~2 people as an agency" would fire the signal constantly,
+  // which is noise rather than information (anyone who really cares about a duo can set minMembers to 2).
   const minMembers = Number(r.minMembers) || SILENCE_DEFAULTS.minMembers;
   const groupSignal =
     rows.length < minMembers
@@ -98,18 +98,18 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
     totals: { items: rows.reduce((a, r2) => a + r2.items, 0), members: rows.length, activeMembers: rows.filter((r2) => r2.items > 0).length },
     activeLast7,
     coActiveDays: coActive.length,
-    coActive: coActive.slice(-8).reverse(), // 最近几次「多人同时出现」
+    coActive: coActive.slice(-8).reverse(), // the most recent "several people appearing at once"
     fullHouseDays: allActiveDays,
     quietStreak,
     silent,
-    // quietStreak 仍然是数字：成员太少时不出「信号」，但数据照样给界面显示
+    // quietStreak stays a number: no "signal" is emitted when there are too few members, but the data is still given to the UI
     groupSignal,
   };
 }
 
 /**
- * 按 agency 聚合全部关注对象。
- * 没填 agency 的人归入一个显式的「未分组」块（而不是被悄悄丢掉）。
+ * Aggregate all followed people by agency.
+ * People with no agency go into an explicit "ungrouped" block (rather than being silently dropped).
  */
 export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now = new Date(), endDay = null } = {}) {
   const axis = dayAxis(days, endDay);

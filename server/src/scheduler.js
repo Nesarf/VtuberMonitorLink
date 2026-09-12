@@ -1,8 +1,9 @@
-// scheduler.js — 内置调度器（不依赖系统计划任务）/ built-in scheduler
+// scheduler.js — built-in scheduler (does not depend on OS scheduled tasks)
 //
-// 支持多个计划任务：每条有名称、模式（daily / merch / watch）、频率（weekly / daily）、
-// 时间、是否补跑。除了「下一次」之外还能预览接下来几次，并记录执行历史。
-// 旧版单条 schedule（enabled/mode/dayOfWeek/time）会在读取配置时自动迁移成一条任务。
+// Supports several scheduled tasks: each one has a name, a mode (daily / merch / watch), a frequency
+// (weekly / daily), a time and a catch-up flag. Besides "the next fire" it can preview the coming few
+// and it keeps a run history.
+// The old single-schedule shape (enabled/mode/dayOfWeek/time) is migrated into one task automatically when the config is read.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -33,7 +34,7 @@ export function normalizeTask(t, i = 0) {
   };
 }
 
-/** 计算某条任务的下一次触发时间 / next fire time of one task */
+/** next fire time of one task */
 export function computeTaskNextFire(task, from = new Date()) {
   if (!task?.enabled) return null;
   const { h, m } = parseTime(task.time);
@@ -52,7 +53,7 @@ export function computeTaskNextFire(task, from = new Date()) {
   return next;
 }
 
-/** 预览接下来 n 次 / preview the next n fire times */
+/** preview the next n fire times */
 export function previewTask(task, n = 5, from = new Date()) {
   const out = [];
   let cursor = new Date(from);
@@ -65,7 +66,7 @@ export function previewTask(task, n = 5, from = new Date()) {
   return out;
 }
 
-/** 所有任务里最近的一次 / the soonest fire across every task */
+/** the soonest fire across every task */
 export function nextFire() {
   let best = null;
   for (const d of lastFires.values()) {
@@ -78,7 +79,7 @@ export function nextFires() {
   return Object.fromEntries([...lastFires].map(([k, v]) => [k, v ? v.toISOString() : null]));
 }
 
-// ───────────────────────────────────────── 执行历史 / run history
+// ───────────────────────────────────────── run history
 
 function historyPath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), 'schedule-history.jsonl');
@@ -90,7 +91,7 @@ export function appendHistory(cfg, entry) {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
   } catch {
-    /* 记不上也不该影响运行 */
+    /* an unwritable entry must not affect the run either */
   }
 }
 
@@ -118,29 +119,29 @@ export function readHistory(cfg, limit = 50) {
   }
 }
 
-/** 上次执行时间（用于补跑判断）/ last fire per task id */
+/** last fire per task id (used by the catch-up decision) */
 function lastFireOf(cfg, taskId) {
   const h = readHistory(cfg, 200).find((x) => x.taskId === taskId && !x.catchUp);
   return h ? new Date(h.at) : null;
 }
 
 /**
- * 已经为「哪个任务、哪个时间点」补跑过。
+ * Which "task + fire time" pairs have already been caught up.
  *
- * 为什么必须有这个：scheduler.start() 会在**每次保存配置**时被调用（onConfigChanged 里），
- * 而补跑判断原本只看「上次执行时间 < 上一个应触发时间」，于是：
- *   • 每保存一次就重排一次补跑 —— 实测在任务名输入框里敲 10 个字符就排了 10 次补跑；
- *   • 新建的任务没有任何历史，也会立刻被判为「错过」而马上跑一次。
- * 这里用「任务 + 时间点」去重，并且要求任务确实跑过至少一次。
+ * Why this is mandatory: scheduler.start() is called on **every config save** (inside onConfigChanged),
+ * while the catch-up decision originally only looked at "last fire < previous due time", so:
+ *   • every save rescheduled a catch-up — measured: typing 10 characters into the task-name box queued 10 catch-ups;
+ *   • a brand-new task with no history at all was instantly judged "missed" and run right away.
+ * Here dedup is keyed on "task + fire time", and a task must have actually run at least once.
  */
 const catchUpDone = new Set();
 
-/** 仅供测试：重置去重状态 */
+/** for tests only: reset the dedup state */
 export function resetCatchUpState() {
   catchUpDone.clear();
 }
 
-// ───────────────────────────────────────── 生命周期 / lifecycle
+// ───────────────────────────────────────── lifecycle
 
 export function stop() {
   for (const t of timers.values()) clearTimeout(t);
@@ -148,7 +149,7 @@ export function stop() {
 }
 
 /**
- * 按配置重排所有任务。
+ * Reschedule every task from the config.
  * @param {object} cfg
  * @param {(task:object, meta:{catchUp:boolean}) => Promise<any>} onFire
  */
@@ -159,7 +160,7 @@ export function start(cfg, onFire, log) {
   lastFires = new Map();
 
   if (!tasks.length) {
-    log?.info('调度器未启用 / scheduler disabled');
+    log?.info('scheduler disabled');
     return null;
   }
 
@@ -170,13 +171,13 @@ export function start(cfg, onFire, log) {
     lastFires.set(task.id, next);
 
     const delay = Math.max(1000, next.getTime() - Date.now());
-    log?.info(`任务「${task.name}」下次运行 / next run: ${next.toLocaleString()}（${Math.round(delay / 60000)} 分钟后）`);
+    log?.info(`task "${task.name}" next run: ${next.toLocaleString()} (in ${Math.round(delay / 60000)} min)`);
 
     const timer = setTimeout(async () => {
       try {
         await onFire(task, { catchUp: false });
       } catch (err) {
-        log?.error(`调度触发失败 / scheduled run failed — ${err.message}`);
+        log?.error(`scheduled run failed — ${err.message}`);
       } finally {
         start(cfg, onFire, log);
       }
@@ -184,27 +185,27 @@ export function start(cfg, onFire, log) {
     timer.unref?.();
     timers.set(task.id, timer);
 
-    // 补跑：程序没开的时候错过了，启动后补一次。
-    // 三道闸门（缺一条就会变成「一存配置就乱跑」）：
-    //   1. 必须**确实跑过至少一次** —— 新建的任务没有历史，谈不上「错过」；
-    //   2. 同一个「任务 + 时间点」只补一次 —— 否则每次保存配置都会重排；
-    //   3. 只补最近 7 天内的，再久就不追了。
+    // Catch-up: the run was missed while the program was not running, so it is made up once after start.
+    // Three gates (drop any one of them and this becomes "every config save runs things at random"):
+    //   1. it must have **actually run at least once** — a newly created task has no history, so there is nothing to "miss";
+    //   2. the same "task + fire time" is caught up only once — otherwise every config save reschedules it;
+    //   3. only the last 7 days are caught up; anything older is not chased.
     if (task.catchUp) {
       const last = lastFireOf(cfg, task.id);
       const prevDue = previousFire(task, now);
       const key = `${task.id}|${prevDue ? prevDue.toISOString() : ''}`;
       if (!last) {
-        log?.info(`任务「${task.name}」还没有执行记录，不做补跑（只排下一次）/ no history, no catch-up`);
+        log?.info(`task "${task.name}" has no run history yet, no catch-up (only the next fire is scheduled)`);
       } else if (catchUpDone.has(key)) {
-        /* 这个时间点已经补过了，保存配置不该再补一次 */
+        /* this fire time has been caught up already; saving the config must not catch it up a second time */
       } else if (prevDue && last < prevDue && now - prevDue < 7 * 24 * 3600 * 1000) {
         catchUpDone.add(key);
-        log?.info(`任务「${task.name}」错过 ${prevDue.toLocaleString()}，启动后补跑一次 / catching up`);
+        log?.info(`task "${task.name}" missed ${prevDue.toLocaleString()}, catching up once after start`);
         setTimeout(async () => {
           try {
             await onFire(task, { catchUp: true });
           } catch (err) {
-            log?.error(`补跑失败 / catch-up failed — ${err.message}`);
+            log?.error(`catch-up failed — ${err.message}`);
           }
         }, 5000 + Math.random() * 2000).unref?.();
       }
@@ -213,7 +214,7 @@ export function start(cfg, onFire, log) {
   return nextFire();
 }
 
-/** 某任务在 from 之前最近的一次应触发时间 */
+/** the most recent due time of a task before from */
 export function previousFire(task, from = new Date()) {
   const { h, m } = parseTime(task.time);
   const t = new Date(from);

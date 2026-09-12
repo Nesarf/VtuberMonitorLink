@@ -1,34 +1,38 @@
-// observe.js — 观测模式：稀疏取样、时序抖动、按「日志在谁手上」分配出口
+// observe.js — observation mode: sparse sampling, temporal jitter, assigning egress by "who holds the logs"
 //
-// 背景（为什么需要这个模块，而不只是「加个 Tor 开关」）：
-// 想判断一个箱（团队）的真实状态，就得同时看箱内多人的行动；但「把整箱在同一时刻
-// 扫一遍」这件事本身就是最显眼的痕迹 —— 它不依赖你是从哪个 IP 来的。
-// Tor 只能换掉「谁在看」的网络身份，换不掉「在看什么、什么时候看、一次看多少」这个模式。
+// Background (why this module is needed rather than just "add a Tor switch"):
+// To judge the real state of an agency (team) you have to look at what several of its members are
+// doing at the same time; but "sweeping the whole agency at one instant" is itself the most
+// conspicuous trace —— and it does not depend on which IP you come from.
+// Tor only swaps the network identity of "who is watching"; it cannot swap "what is being watched,
+// when it is watched, how much is watched at once".
 //
-// 所以这里的四件事，前两件与 Tor 无关：
-//   1. **取样**：每轮只随机取一部分对象，轮转让覆盖慢慢补齐（本地是增量归档，
-//      几天下来画像照样完整，但任何单次观察都不指向「有人在盯整箱」）；
-//   2. **抖动**：间隔与起始时刻随机，避免固定节奏这种机器特征；
-//   3. **按日志归属分配出口**：箱自托管的站点（official-*）是**唯一日志在对方手上**的一类，
-//      走 Tor；平台源（bilibili / Reddit / Fandom）那边箱看不到你的 IP，走直连或自建代理
-//      —— 而且实测 B 站经 Tor 慢 8 倍、还有接口直接 -799 限流；
-//   4. **不发身份**：需要登录态的来源在这个模式下不跑（把实名身份和观测行为绑在一起
-//      是最强的关联信号，比 IP 严重得多）。
+// So the four things below, the first two unrelated to Tor:
+//   1. **Sampling**: each round takes only a random subset, and rotation fills the coverage in slowly
+//      (locally it is an incremental archive, so the profile ends up complete after a few days, yet no
+//      single observation points to "someone is watching the whole agency");
+//   2. **Jitter**: the interval and the start instant are random, avoiding the machine signature of a fixed rhythm;
+//   3. **Egress by log ownership**: an agency self-hosted site (official-*) is **the only class where the logs are on their side**,
+//      so it goes over Tor; for platform sources (bilibili / Reddit / Fandom) the agency cannot see your IP,
+//      so it goes direct or through a self-built proxy
+//      —— and bilibili measured 8x slower over Tor, with some endpoints rate-limiting straight to -799;
+//   4. **No identity sent**: sources that need a login session do not run in this mode (binding a real
+//      identity to observation behaviour is the strongest correlation signal, far worse than an IP).
 //
-// 实测依据（2026-09-12，见 docs/LIVE.md）：
-//   · B 站动态：direct 321ms / tor 2521ms，都是 20 条（用本项目带签名的 fetcher 测的）；
-//   · 换出口：SOCKS 用户名不同 → 出口 IP 不同（Tor 的 IsolateSOCKSAuth）；
-//   · 箱自托管站点经 Tor：hololivepro 200 / vspo 200 / cover-corp 200、
-//     anycolor **403（Cloudflare 拦 Tor）**、brave-group 超时。
+// Measurement basis (2026-09-12, see docs/LIVE.md):
+//   · bilibili dynamics: direct 321ms / tor 2521ms, 20 items each (measured with this project's signed fetcher);
+//   · swapping egress: a different SOCKS user name → a different exit IP (Tor's IsolateSOCKSAuth);
+//   · agency self-hosted sites over Tor: hololivepro 200 / vspo 200 / cover-corp 200,
+//     anycolor **403 (Cloudflare blocks Tor)**, brave-group timeout.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
 /**
- * 「日志在对方手上」的域名 —— 也就是**箱自己托管**的入口。
- * 只有这一类，Tor 才是真正有意义的：你抓平台（B 站/Reddit/Fandom），
- * 箱拿不到那份日志；你抓它自己的站点，日志就躺在它的服务器上。
- * 这份清单是白名单式的：没列进来的按平台处理（宁可少用 Tor，也不乱套）。
+ * Domains where "the logs are on their side" —— that is, entry points **the agency hosts itself**.
+ * Only for this class does Tor really make sense: when you scrape a platform (bilibili/Reddit/Fandom)
+ * the agency cannot obtain that log; when you scrape its own site the log is sitting on its server.
+ * This list is a whitelist: anything not listed is treated as a platform (better to use Tor too little than to apply it wrongly).
  */
 export const AGENCY_HOSTS = [
   'hololivepro.com',
@@ -50,47 +54,49 @@ export function urlHost(url) {
   }
 }
 
-/** 这个来源的日志在谁手上：'agency'（箱自己） / 'platform'（第三方平台） */
+/** Who holds the logs of this source: 'agency' (the agency itself) / 'platform' (a third-party platform) */
 export function logOwnerOf(source) {
   const host = urlHost(source?.url);
   if (!host) return 'platform';
   return AGENCY_HOSTS.some((h) => host === h || host.endsWith('.' + h)) ? 'agency' : 'platform';
 }
 
-/** 需要登录态吗（login: required）—— 观测模式下这类不跑 */
+/** Does it need a login session (login: required) —— this class does not run under observation mode */
 export function isLoginRequired(source) {
   return String(source?.login ?? '').toLowerCase() === 'required';
 }
 
 /**
- * 该来源这一轮用什么出口。
- * 返回 null 表示「不动它」——沿用来源自己的设置（source.proxy）与全局代理。
+ * Which egress this source uses this round.
+ * Returning null means "leave it alone" —— follow the source's own setting (source.proxy) and the global proxy.
  */
 export function resolveEgress(source, cfg, { observation } = {}) {
   const obs = observation ?? cfg?.observation ?? {};
   if (!obs.enabled) return null;
   if (isLoginRequired(source) && obs.skipLoginSources !== false) {
-    return { skip: true, reason: '需要登录态：观测模式下不跑（避免把实名身份和观测行为绑在一起）' };
+    return { skip: true, reason: 'login required: not run under observation mode (so a real identity is not bound to observation behaviour)' };
   }
-  // 使用者显式钉过出口就尊重它（per-source 那一列）
+  // Respect an egress the user explicitly pinned (that per-source column)
   if (source?.proxy === 'direct' || source?.proxy === 'proxy' || source?.proxy === 'tor') {
-    return { mode: source.proxy, why: '来源自己钉的出口' };
+    return { mode: source.proxy, why: 'egress pinned by the source itself' };
   }
   if (obs.torForAgency !== false && logOwnerOf(source) === 'agency') {
-    return { mode: 'tor', why: '日志在对方（箱）手上 → 走 Tor' };
+    return { mode: 'tor', why: 'the logs are on the other side (the agency) -> go over Tor' };
   }
   return null;
 }
 
-// ───────────────────────────────────────────── 取样
+// ───────────────────────────────────────────── sampling
 
 /**
- * 每轮取一部分。
+ * Take a subset each round.
  *
- * 不能纯随机：纯随机会让某个对象连着好几轮都没被看过（覆盖补齐得很慢）。
- * 也不能纯 LRU：最久没看的一批总是同一批，模式又变得可预测。
- * 所以：**先按「最久没看过」排出候选池，再从池里随机取** —— 既保证公平轮转，
- * 又让「这一轮到底取了谁」不可预测；取完再打乱顺序。
+ * Purely random will not do: it lets some object go several rounds unseen (coverage fills in very slowly).
+ * Purely LRU will not do either: the least recently seen batch is always the same batch, so the pattern
+ * becomes predictable again.
+ * So: **first rank a candidate pool by "least recently seen", then pick randomly from the pool** —— this
+ * keeps the rotation fair while making "who exactly was picked this round" unpredictable; the result is
+ * shuffled again afterwards.
  */
 export function pickSample(items, { ratio = 0.5, min = 2, history = {}, rng = Math.random, keyOf = (x) => x.id } = {}) {
   const list = Array.isArray(items) ? items.slice() : [];
@@ -103,7 +109,7 @@ export function pickSample(items, { ratio = 0.5, min = 2, history = {}, rng = Ma
   const ranked = list
     .map((x) => ({ x, at: Date.parse(history[keyOf(x)] ?? '') || 0 }))
     .sort((a, b) => a.at - b.at);
-  // 候选池要比 k 大一点，池内才有真正的随机空间
+  // The candidate pool has to be a little larger than k for there to be real random room inside it
   const poolSize = Math.min(n, Math.max(k, Math.ceil(n * 0.6) + 1));
   const pool = ranked.slice(0, poolSize).map((r) => r.x);
   const picked = shuffle(pool, rng).slice(0, k);
@@ -121,11 +127,11 @@ function shuffle(arr, rng) {
 }
 
 /**
- * 间隔抖动。
+ * Interval jitter.
  *
- * `base <= 0` 时**直接返回 0**：显式的「不要等」优先于抖动 ——
- * 诊断路径（`diagnose.js`）就是靠 `rateLimit.gapSeconds = 0` 跳过限流等待的，
- * 抖动不该把那段等待偷偷塞回去。
+ * When `base <= 0` it **returns 0 directly**: an explicit "do not wait" outranks jitter ——
+ * the diagnostic path (`diagnose.js`) skips the rate-limit wait precisely via `rateLimit.gapSeconds = 0`,
+ * and jitter must not sneak that wait back in.
  */
 export function gapWithJitter(baseSeconds, jitter, rng = Math.random) {
   const base = Math.max(0, Number(baseSeconds) || 0);
@@ -142,7 +148,7 @@ export function gapWithJitter(baseSeconds, jitter, rng = Math.random) {
   return base;
 }
 
-// ───────────────────────────────────────────── 轮转状态（记住「上次看它是什么时候」）
+// ───────────────────────────────────────────── rotation state (remember "when it was last seen")
 
 function statePath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), 'observation.json');
@@ -153,7 +159,7 @@ export function loadObservationState(cfg) {
     const raw = JSON.parse(fs.readFileSync(statePath(cfg), 'utf8'));
     if (raw && typeof raw === 'object') return { rounds: raw.rounds ?? 0, lastPicked: raw.lastPicked ?? {} };
   } catch {
-    /* 没有就从空开始 */
+    /* start empty when there is none */
   }
   return { rounds: 0, lastPicked: {} };
 }
@@ -164,15 +170,16 @@ export function saveObservationState(cfg, state) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify(state, null, 2) + '\n', 'utf8');
   } catch {
-    /* 记不上不影响这一轮 */
+    /* failing to record does not affect this round */
   }
 }
 
-// ───────────────────────────────────────────── 一轮的计划
+// ───────────────────────────────────────────── the plan for one round
 
 /**
- * 把「这一轮抓谁、用什么出口、间隔多少」一次算清。
- * 纯函数（除了读不到状态时的兜底）：给测试留了 rng 与 history 两个注入口。
+ * Work out "whom to fetch this round, over which egress, with what interval" in one go.
+ * Pure function (apart from the fallback when the state cannot be read): rng and history are the two
+ * injection points left for tests.
  *
  * @returns {{
  *   enabled:boolean, ratio:number,
@@ -194,11 +201,13 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   };
   if (!plan.enabled) return plan;
 
-  // 0) Tor 断了就先说话：本轮不走 Tor 的来源直接跳过，而不是让它们一个个失败。
-  //    失败会被记成「这条来源坏了」并触发自检 —— 那是假故障（snowflake 会瞬时断链）。
+  // 0) Speak up first when Tor is down: sources that would not go over Tor this round are skipped
+  //    outright rather than being left to fail one by one.
+  //    A failure would be recorded as "this source is broken" and trigger the self-check —— that would
+  //    be a false fault (snowflake drops connections momentarily).
   const torDown = torReachable === false && obs.torForAgency !== false;
 
-  // 1) 按日志归属决定出口 + 需要登录态的直接不跑
+  // 1) Decide the egress by log ownership + skip outright whatever needs a login session
   const kept = [];
   for (const s of plan.sources) {
     const e = resolveEgress(s, cfg, { observation: obs });
@@ -208,7 +217,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
     }
     if (e?.mode === 'tor') {
       if (torDown) {
-        plan.skippedTor.push({ id: s.id, reason: '本机 Tor 端口不通，本轮跳过（不计为来源失败，下次再试）' });
+        plan.skippedTor.push({ id: s.id, reason: 'the local Tor port is unreachable, skipped this round (not counted as a source failure, retry next time)' });
         continue;
       }
       plan.egress[s.id] = e.mode;
@@ -221,7 +230,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
     }
   }
 
-  // 2) 取样（来源与监视对象各取一份）
+  // 2) Sampling (one draw for sources and one for watch targets)
   const sSample = pickSample(kept, { ratio: plan.ratio, min: obs.minSources ?? 2, history: history.lastPicked, rng });
   const wSample = pickSample(plan.watchTargets, { ratio: plan.ratio, min: obs.minWatch ?? 1, history: history.lastPicked, rng, keyOf: (t) => t.id ?? t.url });
 
@@ -229,7 +238,8 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   plan.watchTargets = wSample.picked;
   plan.sampling.sources = { picked: sSample.picked.map((x) => x.id), skipped: sSample.skipped.map((x) => x.id), k: sSample.k, n: sSample.n };
   plan.sampling.watch = { picked: wSample.picked.map((x) => x.id ?? x.url), skipped: wSample.skipped.map((x) => x.id ?? x.url), k: wSample.k, n: wSample.n };
-  // 只报**本轮真的会走 Tor 的**那几条（egress 里那些没被取样取到的，这一轮根本不会请求）
+  // Report only **the ones that really go over Tor this round** (anything in egress that the sampling
+  // did not pick is not requested at all this round)
   plan.sampling.tor = sSample.picked.filter((s) => s.proxy === 'tor').map((s) => s.id);
   plan.sampling.skippedLogin = plan.skippedLogin.map((x) => x.id);
   plan.sampling.skippedTor = plan.skippedTor.map((x) => x.id);
@@ -237,7 +247,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   return plan;
 }
 
-/** 这一轮取过的对象记上时间，下一轮优先取「最久没看过」的 */
+/** Timestamp the objects drawn this round so the next round prefers "least recently seen" */
 export function recordPicked(state, ids, at = new Date()) {
   const next = { rounds: (state?.rounds ?? 0) + 1, lastPicked: { ...(state?.lastPicked ?? {}) } };
   for (const id of ids) next.lastPicked[id] = at.toISOString();

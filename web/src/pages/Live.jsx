@@ -1,11 +1,16 @@
-// Live.jsx — 开播监测 + 多屏观看 / live status + multi-player grid
+// Live.jsx - live status + multi-player grid
 //
-// 功能来源：dd-center/bilibili-dd-monitor（MIT, (c) 2020 wdpm）——「专为 DD 设计的多屏直播观看工具」。
-// 这里按本项目栈（React）重新实现，**没有复制上游代码或资源**：
-//   • 播放器用 B 站官方内嵌页 /blanc/<roomId>（实测无 X-Frame-Options，可直接 iframe，
-//     不需要任何转发、代理或本地服务，也就不涉及任何登录态）；
-//   • 开播数据用本项目实测可用的批量接口，并区分「直播中」(1) 与「轮播」(2) ——
-//     轮播当成开播会误报，这是上游那套数据源失效后最需要小心的地方。
+// Feature provenance: dd-center/bilibili-dd-monitor (MIT, (c) 2020 wdpm) - "a multi-screen live
+// viewing tool designed for DD".
+// Reimplemented here on this project's stack (React), **without copying any upstream code or
+// assets**:
+//   • the player uses bilibili's official embed page /blanc/<roomId> (measured: no
+//     X-Frame-Options, so it can be iframed directly, needing no forwarding, proxy or local
+//     service, and therefore involving no login state);
+//   • live data comes from the batch endpoint this project measured as working, and "live" (1)
+//     is kept apart from "round/loop" (2) - treating a loop as live produces false alarms, which
+//     is the thing to be most careful about now that the upstream data source has stopped
+//     working.
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -15,11 +20,12 @@ const LS_KEY = 'vml-live-grid';
 const LS_COLS = 'vml-live-cols';
 
 /**
- * 多屏格子的地址规则。三家都实测可嵌（2026-09-11）：
- *   bilibili  live.bilibili.com/blanc/<roomId>      无 frame 限制
- *   twitch    player.twitch.tv/?channel=&parent=    CSP frame-ancestors 明确放行 127.0.0.1
- *   youtube   youtube.com/embed/...                 无 frame-ancestors
- * Twitch 的 parent 必须等于**嵌入页的域名**，否则拒绝；本工具跑在 127.0.0.1，所以就是它。
+ * URL rules for the multi-screen grid tiles. All three measured embeddable (2026-09-11):
+ *   bilibili  live.bilibili.com/blanc/<roomId>      no frame restriction
+ *   twitch    player.twitch.tv/?channel=&parent=    CSP frame-ancestors explicitly allows 127.0.0.1
+ *   youtube   youtube.com/embed/...                 no frame-ancestors
+ * Twitch's parent must equal **the domain of the embedding page**, or it refuses; this tool runs
+ * on 127.0.0.1, so that is what it is.
  */
 export const PLATFORMS = [
   { id: 'bilibili', label: 'bilibili', hint: '直播间号，如 22637261', needsProxy: false },
@@ -33,7 +39,8 @@ export function tileSrc(tile) {
     return `https://player.twitch.tv/?channel=${encodeURIComponent(id)}&parent=127.0.0.1&muted=true&autoplay=true`;
   }
   if (tile.platform === 'youtube') {
-    // UC 开头是频道（用 live_stream 取当前直播），否则当成视频 ID
+    // A leading UC means a channel (use live_stream to fetch the current live), otherwise treat
+    // it as a video ID
     return id.startsWith('UC')
       ? `https://www.youtube.com/embed/live_stream?channel=${encodeURIComponent(id)}`
       : `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
@@ -55,7 +62,7 @@ function statusOf(s) {
 }
 
 export default function Live() {
-  const { t, lang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const [data, setData] = useState(null);
   const [grid, setGrid] = useState(() => {
     try {
@@ -75,7 +82,7 @@ export default function Live() {
   const [manualPlatform, setManualPlatform] = useState('twitch');
   const [manualId, setManualId] = useState('');
   const [manualLabel, setManualLabel] = useState('');
-  // 发弹幕（写操作）相关状态
+  // State related to sending danmaku (a write operation)
   const [accounts, setAccounts] = useState(null);
   const [acctId, setAcctId] = useState('');
   const [sendRoom, setSendRoom] = useState('');
@@ -139,10 +146,10 @@ export default function Live() {
       const have = new Set(g.filter((x) => x.platform === 'bilibili').map((x) => x.id));
       return [...g, ...live.filter((x) => !have.has(String(x.roomId))).map((x) => ({ platform: 'bilibili', id: String(x.roomId), label: x.name || x.uname || String(x.roomId) }))];
     });
-    setMsg(`${live.length} ${t('items')}`);
+    setMsg(tn('items', live.length));
   };
 
-  /** 网络层测速：第三方页面能诚实测到的只有这一层（延迟 / 失败率） */
+  /** Network-layer probing: this layer (latency / failure rate) is the only one a third-party page can honestly measure */
   const probeRoom = async (r) => {
     setProbing(r.uid);
     try {
@@ -178,11 +185,14 @@ export default function Live() {
   };
 
   useEffect(() => {
-    // 故意**不在挂载时**读登录态。两个原因：
-    // ① 读它要同步解 DPAPI（实测 3~4 秒），而这期间整个 Node 事件循环是停的 ——
-    //    打开直播页会让**别的页面**一起卡在「加载中」（实测：点完直播页再点设置，设置页 4 秒白屏）；
-    // ② 它读的是浏览器的 cookie 库。使用者还没打算发弹幕时，本来就不该去碰它（隐私闸门）。
-    // 需要时点「检查登录态」即可，服务端那边也加了 60 秒缓存。
+    // Deliberately does **not** read the login state on mount. Two reasons:
+    // 1) reading it decrypts DPAPI synchronously (measured 3-4 seconds), and the whole Node
+    //    event loop is stopped for that long - opening the live page would make **other pages**
+    //    sit on "loading" too (measured: click the live page, then settings, and settings is
+    //    blank for 4 seconds);
+    // 2) it reads the browser's cookie store. While the user has no intention of sending
+    //    danmaku, it should not be touched at all (a privacy gate).
+    // Click "check login state" when needed; the server side also caches it for 60 seconds.
     api
       .getDanmakuAudit()
       .then((r) => setAudit(r.entries ?? []))
@@ -190,7 +200,7 @@ export default function Live() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 发送：把「确认」这件事传成参数，服务端也会再检查一次 */
+  /** Send: "confirmed" is passed along as a parameter, and the server checks it once more */
   const doSend = async () => {
     if (!confirmed) return;
     setBusy('danmaku');
@@ -204,7 +214,7 @@ export default function Live() {
         setAudit((await api.getDanmakuAudit()).entries ?? []);
       }
     } catch (e) {
-      // 后端拒绝时（400）也是正常的护栏行为，把 body 里的说明取出来
+      // A backend rejection (400) is normal guard-rail behaviour; pull the explanation out of the body
       try {
         setSent(JSON.parse(e.message));
       } catch {
@@ -290,7 +300,7 @@ export default function Live() {
         {err && <p style={{ color: 'var(--err)' }}>❌ {err}</p>}
       </section>
 
-      {/* 多屏网格：iframe 直接嵌 B 站官方播放器 */}
+      {/* Multi-screen grid: iframe bilibili's official player directly */}
       {grid.length > 0 && (
         <section className="panel">
           <h2>
@@ -335,7 +345,7 @@ export default function Live() {
               </header>
               {r.cover ? <img className="thumb big" src={r.cover} alt="" referrerPolicy="no-referrer" loading="lazy" /> : null}
               <p>{r.title || <span className="muted">{t('liveNoTitle')}</span>}</p>
-              {/* 网络层实测延迟/丢包：这是第三方页面**能**诚实测到的部分 */}
+              {/* Measured network-layer latency / packet loss: the part a third-party page **can** honestly measure */}
               <div className="row" style={{ gap: 6, alignItems: 'center' }}>
                 <button className="ghost tiny" onClick={() => probeRoom(r)} disabled={!!probing}>
                   {probing === r.uid ? t('probingOne') : t('liveProbe')}
@@ -355,7 +365,7 @@ export default function Live() {
                   </>
                 ) : null}
               </div>
-              {/* 码率/帧数是**测不到**的，如实说明而不是编一个数字 */}
+              {/* Bitrate / frame rate are **not measurable**: say so honestly instead of inventing a number */}
               <div className="muted small" title={t('liveQualityWhy')}>
                 {t('liveQualityUnavailable')}
               </div>
@@ -373,7 +383,7 @@ export default function Live() {
       </section>
       {all.length === 0 && <p className="muted">{t('liveNoTargets')}</p>}
 
-      {/* 手动添加其他平台的直播源 —— Twitch / YouTube 都实测可嵌（见 docs/LIVE.md） */}
+      {/* Manually add live sources from other platforms - Twitch / YouTube both measured embeddable (see docs/LIVE.md) */}
       <section className="panel">
         <h2>{t('liveAddOther')}</h2>
         <div className="hint">{t('liveAddOtherHint')}</div>
@@ -411,7 +421,7 @@ export default function Live() {
         <div className="hint" style={{ margin: 0 }}><Inline text={t('liveProxyCaveat')} /></div>
       </section>
 
-      {/* 发评论 —— 用使用者本人身份公开发言，所以必须手动确认 */}
+      {/* Posting a comment - it speaks publicly as the user themselves, so manual confirmation is required */}
       <section className="panel">
         <h2>{t('danmakuTitle')}</h2>
         <div className="problems" style={{ marginBottom: 10 }}>
@@ -434,7 +444,7 @@ export default function Live() {
               </button>
               {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}
             </div>
-            {/* 还没主动去读登录态时，把「要去读浏览器 cookie 库」这件事说清楚（复用人写过的文案，不新增词条） */}
+            {/* When the login state has not been read yet, spell out that this would read the browser cookie store (reusing existing copy, adding no new entries) */}
             {accounts === null ? <div className="hint" style={{ margin: '4px 0 0' }}><Inline text={t('loginHint')} /></div> : null}
           </div>
           <div className="field" style={{ flex: '0 0 140px' }}>

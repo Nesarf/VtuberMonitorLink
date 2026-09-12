@@ -1,13 +1,15 @@
-// Calendar.jsx — 纪念日 / 生日 / 3D披露 / 周年 倒计时
+// Calendar.jsx — anniversary / birthday / 3D debut / debut anniversary countdown
 //
-// 时间算术全部在服务端（server/src/calendar.js，有独立自检），
-// 界面只负责呈现与录入 —— 闰日顺延、时区、夏令时这些不该在渲染层重算一遍。
+// All the time arithmetic lives on the server (server/src/calendar.js, with a self-test of its own);
+// the UI only presents and records - leap-day shifting, time zones and DST should not be recomputed in
+// the render layer.
 //
-// 两个细节特意做了：
-//   1) 一周起始日跟着地区走：美国/日本/韩国/港台是周日，中国/欧洲/俄是周一。
-//      直接吃上一轮建的 locale 信息（useI18n().weekdays 已经按 weekStart 轮转过）。
-//   2) 「从情报里找线索」是**本地正则**抽取，不联网不用 LLM；
-//      而且只给建议、不自动落库 —— 猜测不能污染日历。
+// Two details were deliberate:
+//   1) The week start day follows the region: US / Japan / Korea / HK-Taiwan start on Sunday, China /
+//      Europe / Russia on Monday. It consumes the locale info built in the previous round directly
+//      (useI18n().weekdays is already rotated by weekStart).
+//   2) "Find clues in the intel" is a **local regex** extraction: no network, no LLM; and it only
+//      suggests, it never writes to the store by itself - a guess must not pollute the calendar.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -49,7 +51,7 @@ export default function Calendar() {
   const all = data?.all ?? [];
   const grid = data?.grid;
 
-  // 月历表头：按地区的一周起始日轮转
+  // Month calendar header: rotated by the region's week start day
   const header = useMemo(() => {
     const start = data?.grid?.weekStart ?? 1;
     return weekdaysSunFirst.slice(start).concat(weekdaysSunFirst.slice(0, start));
@@ -136,10 +138,12 @@ export default function Calendar() {
     if (m === 1) setYear((y) => y + 1);
   };
 
-  // 天数必须进句子，不能拼在后面：「天后」这种后缀式标签在别的语言里位置不一样
-  // （pt「daqui a 3 dias」/ ru「через 3 дня」/ ar「بعد 3 أيام」都在前面），
-  // 而且「天后」单独看还有歧义 —— 模型把它当成「歌后」，翻出了 Diva / Королева。
-  // 所以源串写成带占位符的整句（{n} 会被管线保护起来，模型不能动它）。
+  // The day count must go inside the sentence; it cannot be appended. A suffix-style label like "days later"
+  // sits elsewhere in other languages (pt "daqui a 3 dias" / ru "через 3 дня" / ar "بعد 3 أيام" all put it
+  // in front), and the suffix on its own is ambiguous - the model read the two-character CJK suffix as
+  // "diva" and produced Diva / Королева.
+  // So the source string is written as a whole sentence with a placeholder ({n} is protected by the
+  // pipeline, so the model cannot touch it).
   const when = (d) =>
     d === 0 ? t('calToday') : d === 1 ? t('calTomorrow') : t('calDaysLater').replace('{n}', String(d));
 

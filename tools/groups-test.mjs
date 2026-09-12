@@ -1,6 +1,7 @@
-// groups-test.mjs — 箱视角聚合的自检
-// 聚合最怕「看起来对」：日期轴错位一格、同一天算重复、没填 agency 的人被悄悄丢掉，
-// 都会让热力图与信号变成假的。用构造出来的时间线把这些钉死。
+// groups-test.mjs — self-test for box-level (agency) aggregation
+// Aggregation is most afraid of "looking right": the day axis shifted by one slot, the same day
+// counted twice, people without an agency quietly dropped — any of those turns the heatmap and the
+// signals into fakes. Constructed timelines pin all of that down.
 import assert from 'node:assert/strict';
 import { agencyBlock, dayAxis, groupView } from '../server/src/groups.js';
 
@@ -35,77 +36,77 @@ const people = [
   { id: 'u1', name: '己', agency: '' },
 ];
 
-process.stdout.write('\ngroups: 日期轴\n');
+process.stdout.write('\ngroups: day axis\n');
 
-t('日期轴升序、含今天、长度正确', () => {
+t('day axis is ascending, includes today, and has the correct length', () => {
   const axis = dayAxis(5, '2026-03-30');
   assert.deepEqual(axis, ['2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29', '2026-03-30']);
   assert.equal(dayAxis(1, '2026-03-30').length, 1);
 });
 
-process.stdout.write('\ngroups: 单个箱\n');
+process.stdout.write('\ngroups: a single box\n');
 
 const byDay = {
-  a1: span('2026-03-01', '2026-03-30'), // 日更
-  a2: span('2026-03-01', '2026-03-26'), // 停了 4 天
-  a3: { '2026-03-02': 2, '2026-03-09': 1, '2026-03-16': 1, '2026-03-23': 1 }, // 周更
-  a4: { '2026-03-15': 1 }, // 只有一天记录 → 没基线
+  a1: span('2026-03-01', '2026-03-30'), // posts daily
+  a2: span('2026-03-01', '2026-03-26'), // stopped for 4 days
+  a3: { '2026-03-02': 2, '2026-03-09': 1, '2026-03-16': 1, '2026-03-23': 1 }, // posts weekly
+  a4: { '2026-03-15': 1 }, // only one day of records -> no baseline
   b1: span('2026-03-25', '2026-03-30'),
   u1: span('2026-03-28', '2026-03-30'),
 };
 
-t('成员的每日条数与日期轴一一对应（错位一格热力图就全错了）', () => {
+t('each member daily count corresponds one-to-one with the day axis (one slot off and the whole heatmap is wrong)', () => {
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(10, '2026-03-30'), now: NOW });
   const a1 = block.members.find((m) => m.id === 'a1');
-  assert.equal(a1.counts.length, 10, 'counts 长度必须等于轴长度');
-  assert.deepEqual(a1.counts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], '日更的人最后 10 天都该是 1');
+  assert.equal(a1.counts.length, 10, 'counts length must equal the axis length');
+  assert.deepEqual(a1.counts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 'a daily poster should be 1 on each of the last 10 days');
   const a2 = block.members.find((m) => m.id === 'a2');
-  assert.deepEqual(a2.counts.slice(-4), [0, 0, 0, 0], '停更的 4 天应当是 0');
+  assert.deepEqual(a2.counts.slice(-4), [0, 0, 0, 0], 'the 4 quiet days should be 0');
   assert.equal(a2.quietDays, 4);
 });
 
-t('等级跟着个人节奏：日更的人停 4 天 warn；只有一天记录的人 unknown', () => {
+t('levels follow each person own cadence: a daily poster quiet for 4 days is warn; someone with only one day of records is unknown', () => {
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
   assert.equal(block.members.find((m) => m.id === 'a2').level, 'warn');
   assert.equal(block.members.find((m) => m.id === 'a1').level, 'ok');
   const a4 = block.members.find((m) => m.id === 'a4');
-  assert.equal(a4.level, 'unknown', '没有基线就不该给等级');
+  assert.equal(a4.level, 'unknown', 'with no baseline no level should be assigned');
   assert.equal(a4.toleranceDays, null);
 });
 
-t('周更的人停 7 天不算异常（他自己的节奏就是 7 天）', () => {
+t('a weekly poster quiet for 7 days is not anomalous (their own cadence is 7 days)', () => {
   const block = agencyBlock({ agency: 'BOX', members: [people[2]], byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
   const a3 = block.members[0];
-  assert.ok(a3.gapDays >= 6.5 && a3.gapDays <= 7.5, '节奏应约 7 天，实际 ' + a3.gapDays);
-  assert.equal(a3.level, 'ok', '周更的人停 7 天不该报警');
+  assert.ok(a3.gapDays >= 6.5 && a3.gapDays <= 7.5, 'the cadence should be about 7 days, actual ' + a3.gapDays);
+  assert.equal(a3.level, 'ok', 'a weekly poster quiet for 7 days should not raise an alarm');
 });
 
-t('同刻出现：同一天 ≥2 人活跃才计入，并带上是哪几个人', () => {
+t('co-active days: only days with >= 2 active people count, and they name which people', () => {
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
   assert.ok(block.coActiveDays > 0);
   for (const c of block.coActive) {
     assert.ok(c.count >= 2, JSON.stringify(c));
     assert.equal(c.members.length, c.count);
   }
-  // 3-30 之后没人动：最后几天不该有同刻出现
+  // nobody moves after 3-30: the last few days should have no co-active day
   const last = block.coActive[0];
-  assert.ok(last.day <= '2026-03-26', '最近的同刻出现应当不晚于 3-26，实际 ' + last.day);
+  assert.ok(last.day <= '2026-03-26', 'the most recent co-active day should be no later than 3-26, actual ' + last.day);
 });
 
-t('整箱安静：轴尾连续没人动的天数（成员够多时才是「信号」）', () => {
+t('whole box quiet: the number of consecutive dead days at the tail of the axis (only a "signal" when there are enough members)', () => {
   const onlyOld = {
     a1: span('2026-03-01', '2026-03-20'),
     a2: span('2026-03-01', '2026-03-18'),
     a3: span('2026-03-01', '2026-03-19'),
   };
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 3), byDay: onlyOld, axis: dayAxis(30, '2026-03-30'), now: NOW });
-  assert.equal(block.quietStreak, 10, '3-21 到 3-30 共 10 天没人动');
+  assert.equal(block.quietStreak, 10, '3-21 through 3-30 is 10 days with nobody moving');
   assert.equal(block.groupSignal.kind, 'all-quiet');
   assert.equal(block.groupSignal.level, 'high');
   assert.match(block.groupSignal.reason, /整箱 3 人已经 10 天/);
 });
 
-t('多数人安静（但不是全员）→ warn 级箱信号；只有一两个人安静 → 没有箱信号', () => {
+t('most people quiet (but not everyone) -> a warn-level box signal; only one or two quiet -> no box signal', () => {
   const most = agencyBlock({
     agency: 'BOX',
     members: people.slice(0, 4),
@@ -114,7 +115,7 @@ t('多数人安静（但不是全员）→ warn 级箱信号；只有一两个�
     now: NOW,
   });
   assert.equal(most.silent.length, 3);
-  assert.ok(most.groupSignal, '3/4 人同时安静应当有信号');
+  assert.ok(most.groupSignal, '3/4 people quiet at the same time should produce a signal');
   assert.equal(most.groupSignal.kind, 'most-quiet');
   assert.equal(most.groupSignal.level, 'warn');
 
@@ -125,10 +126,10 @@ t('多数人安静（但不是全员）→ warn 级箱信号；只有一两个�
     axis: dayAxis(30, '2026-03-30'),
     now: NOW,
   });
-  assert.equal(few.groupSignal, null, '一个人安静是常态，不该出箱信号');
+  assert.equal(few.groupSignal, null, 'one person being quiet is normal; no box signal should appear');
 });
 
-t('成员太少（<minMembers）不出箱信号', () => {
+t('too few members (<minMembers) -> no box signal', () => {
   const block = agencyBlock({
     agency: 'BOX',
     members: people.slice(0, 2),
@@ -137,34 +138,34 @@ t('成员太少（<minMembers）不出箱信号', () => {
     now: NOW,
   });
   assert.equal(block.groupSignal, null);
-  assert.equal(block.silent.length, 2, '个人静默照报');
+  assert.equal(block.silent.length, 2, 'per-person silence is still reported');
 });
 
-process.stdout.write('\ngroups: 多个箱\n');
+process.stdout.write('\ngroups: multiple boxes\n');
 
-t('按 agency 分块，按条数排序；没填 agency 的进「未分组」而不是消失', () => {
+t('blocked by agency, sorted by item count; people with no agency land in "ungrouped" instead of disappearing', () => {
   const view = groupView({ byDay, people, days: 30, now: NOW, endDay: '2026-03-30' });
   assert.deepEqual(view.groups.map((g) => g.agency), ['BOX', 'Other']);
-  assert.ok(view.groups[0].totals.items >= view.groups[1].totals.items, '按条数降序');
-  assert.ok(view.ungrouped, '未分组块必须存在');
+  assert.ok(view.groups[0].totals.items >= view.groups[1].totals.items, 'sorted by item count descending');
+  assert.ok(view.ungrouped, 'the ungrouped block must exist');
   assert.deepEqual(view.ungrouped.members.map((m) => m.name), ['己']);
-  assert.equal(view.people, 6, '总数要等于全部关注对象');
+  assert.equal(view.people, 6, 'the total must equal every watch target');
   const accounted = view.groups.reduce((a, g) => a + g.totals.members, 0) + view.ungrouped.totals.members;
-  assert.equal(accounted, 6, '每个人都要被算进去（不能漏）');
+  assert.equal(accounted, 6, 'everyone must be accounted for (nobody may be dropped)');
 });
 
-t('空配置不炸：0 个关注对象 → 空视图', () => {
+t('an empty config does not blow up: 0 watch targets -> an empty view', () => {
   const view = groupView({ byDay: {}, people: [], days: 7, now: NOW, endDay: '2026-03-30' });
   assert.deepEqual(view.groups, []);
   assert.equal(view.ungrouped, null);
   assert.equal(view.axis.length, 7);
 });
 
-t('箱级聚合的每日合计 = 成员当日之和', () => {
+t('the box-level per-day total equals the sum of its members for that day', () => {
   const view = groupView({ byDay, people, days: 10, now: NOW, endDay: '2026-03-30' });
   const box = view.groups.find((g) => g.agency === 'BOX');
   for (let i = 0; i < box.perDay.length; i++) {
-    assert.equal(box.perDay[i], box.members.reduce((a, m) => a + m.counts[i], 0), '第 ' + i + ' 天合计不符');
+    assert.equal(box.perDay[i], box.members.reduce((a, m) => a + m.counts[i], 0), 'day ' + i + ' total mismatch');
   }
   assert.equal(box.activeLast7, box.members.filter((m) => m.counts.slice(-7).some((n) => n > 0)).length);
 });

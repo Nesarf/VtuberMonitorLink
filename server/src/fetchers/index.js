@@ -1,4 +1,4 @@
-// fetchers/index.js — 按 source.fetch 分派 / dispatch by adapter kind
+// fetchers/index.js — dispatch by adapter kind (source.fetch)
 import { fetchRss } from './rss.js';
 import { fetchMediaWiki } from './mediawiki.js';
 import { fetchBrowser } from './browser.js';
@@ -18,7 +18,7 @@ const TABLE = {
   'bili-dynamic': fetchBilibiliDynamic,
 };
 
-/** 网页里可选的抓取方式（自定义来源编辑器用） */
+/** the fetch kinds offered on the web page (used by the custom-source editor) */
 export const FETCH_KINDS = [
   { id: 'rss', zh: 'RSS / Atom 订阅', en: 'RSS / Atom feed' },
   { id: 'mediawiki-api', zh: 'MediaWiki API（最近更改）', en: 'MediaWiki API (recent changes)' },
@@ -29,30 +29,32 @@ export const FETCH_KINDS = [
 ];
 
 /**
- * 该不该在失败后换另一个出口重试。
- * 只在来源**没有显式指定出口**时才换 —— 像 B 站这种「显式 direct 否则被风控」的来源，
- * 自动改成走代理只会更糟。
+ * Whether a failure should be retried over the other egress.
+ * Only switch when the source **has no explicitly pinned egress** — for a source like bilibili,
+ * where "pin it to direct or you get rate-limited", auto-switching to the proxy only makes it worse.
  */
 function otherEgress(cfg, source) {
   if (cfg?.run?.autoFailover === false) return null;
-  if (source?.proxy) return null; // 已显式指定，尊重它
+  if (source?.proxy) return null; // already pinned explicitly, respect it
   return cfg?.proxy?.enabled && cfg?.proxy?.url ? 'direct' : 'proxy';
 }
 
 /**
- * 抓取选中的来源。
+ * Fetch the selected sources.
  *
- * 三条策略（纯逻辑在 fetchplan.js，自检 fetchplan-test.mjs）：
- *   1. **按出口分组的并行**：串行原本要保护的是「同一个出口不要连着敲」（同一张脸），
- *      而不同出口之间没有这个约束 —— 所以按出口分几队，**队间并行、队内串行**。
- *      队内仍然按 rateLimit 主动间隔。
- *   2. **连续失败隔离**：抓不到的来源（Cloudflare、失效站点）不再每轮白试，
- *      连续失败到阈值先安静几小时，之后自动再试。
- *   3. **降级阶梯**：失败不只是「换出口」，也可能是「这个抓取方式不行」——
- *      按 fetchLadder 依次尝试（来源也可以自己声明 fallbacks）。
+ * Three policies (the pure logic lives in fetchplan.js, self-tested by fetchplan-test.mjs):
+ *   1. **Parallelism grouped by egress**: what serialization used to protect was "do not hammer the
+ *      same egress back to back" (one and the same face), and different egresses carry no such
+ *      constraint — so split into one queue per egress, **parallel across queues, serial within one**.
+ *      Inside a queue the rateLimit gap is still applied on purpose.
+ *   2. **Quarantine after repeated failures**: sources we cannot fetch (Cloudflare, dead sites) stop
+ *      being retried for nothing every round; once failures hit the threshold they go quiet for a few
+ *      hours and are then retried automatically.
+ *   3. **Degradation ladder**: a failure is not only "switch egress", it can also be "this fetch kind
+ *      does not work" — walk fetchLadder in order (a source may also declare its own fallbacks).
  *
- * @param {Array} sources 生效来源（enabled = true）
- * @param {{cfg:object, log:object, fetchTable?:object}} ctx fetchTable 是测试接缝（默认用真实分派表）
+ * @param {Array} sources effective sources (enabled = true)
+ * @param {{cfg:object, log:object, fetchTable?:object}} ctx fetchTable is the test seam (the real dispatch table by default)
  */
 export async function fetchAll(sources, ctx) {
   const cfg = ctx.cfg;
@@ -62,17 +64,19 @@ export async function fetchAll(sources, ctx) {
 
   const plan = planFetch(sources, (s) => resolveProxyMode(cfg, s), { quarantine, now: new Date(), rules });
   if (plan.quarantined.length) {
-    const detail = plan.quarantined.map((q) => `${q.id}(还需 ${q.minutesLeft} 分钟)`).join(', ');
-    ctx.log?.warn(`已隔离 ${plan.quarantined.length} 条连续失败的来源：${detail} —— 隔离期间不发请求，到点自动重试`);
+    const detail = plan.quarantined.map((q) => `${q.id} (${q.minutesLeft} min left)`).join(', ');
+    ctx.log?.warn(
+      `quarantined ${plan.quarantined.length} sources with repeated failures: ${detail} — no requests go out while quarantined, they are retried automatically once it expires`
+    );
   }
   if (plan.groups.length > 1) {
     ctx.log?.info(
-      `抓取并发分组：${plan.groups.map((g) => `${g.mode}×${g.sources.length}`).join('、')}` +
-        `（队间并行、队内串行：同一个出口不连着敲，但不同出口不必互相等）`,
+      `fetch concurrency groups: ${plan.groups.map((g) => `${g.mode}x${g.sources.length}`).join(', ')}` +
+        ` (parallel across queues, serial within one: the same egress is never hammered back to back, but different egresses need not wait for each other)`,
     );
   }
 
-  /** 用某种抓取方式试一次 */
+  /** try one fetch kind once */
   const attempt = async (src, kind, overrideUrl) => {
     const fn = table[kind];
     if (!fn) return { ok: false, error: `unknown fetch kind: ${kind}` };
@@ -88,21 +92,21 @@ export async function fetchAll(sources, ctx) {
     let first = true;
     for (const s of group.sources) {
       const gapSeconds = s.rateLimit?.gapSeconds ?? cfg?.run?.defaultGapSeconds ?? 2;
-      // 观测模式下间隔随机化：固定节奏（每次都精确 2 秒）本身就是机器特征。
-      // base=0 时不抖（显式的「不要等」优先，诊断路径靠它）。
+      // In observation mode the gap is randomized: a fixed rhythm (exactly 2 seconds every time) is itself a machine fingerprint.
+      // No jitter at base=0 (an explicit "do not wait" wins, and the diagnostic path relies on it).
       const gap = gapWithJitter(gapSeconds, cfg?.observation?.enabled ? cfg?.observation?.jitterSeconds : null);
       if (!first && gap > 0) await sleep(gap * 1000);
       first = false;
 
       let usedEgress = s.proxy ?? (cfg?.proxy?.enabled ? 'proxy' : 'direct');
       let r = await attempt(s, s.fetch);
-      if (!r.ok) ctx.log?.warn(`${s.id}: ${r.error ?? '抓取失败'}`);
+      if (!r.ok) ctx.log?.warn(`${s.id}: ${r.error ?? 'fetch failed'}`);
 
-      // ① 换出口重试一次（只在来源没显式指定出口时）
+      // ① retry once over the other egress (only when the source did not pin one)
       if (!r?.ok) {
         const alt = otherEgress(cfg, s);
         if (alt) {
-          ctx.log?.warn(`${s.id}: 失败，自动改用「${alt}」重试一次 / retrying via ${alt}`);
+          ctx.log?.warn(`${s.id}: failed, retrying once over "${alt}"`);
           const r2 = await attempt({ ...s, proxy: alt }, s.fetch);
           if (r2?.ok) {
             r2.failover = { from: usedEgress, to: alt, firstError: r?.error ?? null };
@@ -114,11 +118,11 @@ export async function fetchAll(sources, ctx) {
         }
       }
 
-      // ② 换抓取方式（降级阶梯）
+      // ② switch fetch kind (degradation ladder)
       if (!r?.ok) {
         const ladder = fetchLadder(s);
         for (const step of ladder) {
-          ctx.log?.warn(`${s.id}: 「${s.fetch}」不行，按阶梯改用「${step.fetch}」再试一次`);
+          ctx.log?.warn(`${s.id}: "${s.fetch}" did not work, stepping down the ladder to "${step.fetch}" and trying once more`);
           const r3 = await attempt(s, step.fetch, step.url);
           if (r3?.ok) {
             r3.ladder = { from: s.fetch, to: step.fetch, firstError: r?.error ?? null };
@@ -135,7 +139,7 @@ export async function fetchAll(sources, ctx) {
     return out;
   };
 
-  // 队间并行；结果回到**输入顺序**，报告与断言才稳定
+  // parallel across queues; results come back in **input order** so reports and assertions stay stable
   const grouped = await Promise.all(plan.groups.map(runGroup));
   saveQuarantine(cfg, quarantine);
 

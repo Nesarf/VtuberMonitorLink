@@ -150,7 +150,7 @@ async function main() {
 
     const del = JSON.parse(JSON.stringify(exported.config));
     del.ui = { ...(del.ui ?? {}), layout: { ...(del.ui?.layout ?? {}), mode: 'timeline', fontScale: 1.2 } };
-    del.llm.providers[0].apiKey = ''; // 脱敏导出后再导入，不该把已有 Key 抹掉
+    del.llm.providers[0].apiKey = ''; // a sanitised export that is re-imported must not wipe the stored key
     del.sources = { 'bili-opus-jaran': { enabled: false } };
     const imp = await api('POST', '/api/config/import', { config: del });
     check('POST /api/config/import accepts the document', imp.status === 200 && imp.json?.ok === true, `status ${imp.status}`);

@@ -1,15 +1,18 @@
-// probe.js — 站点连通性探测 / per-site reachability probing
+// probe.js — per-site reachability probing
 //
-// 网页里每个来源下方要显示「直连延迟、丢包」与「走代理延迟、丢包」，就是这里算的。
+// The "direct latency and loss" and "proxy latency and loss" shown under every source in the web UI
+// are computed here.
 //
-// 两种出口测的不是同一层，这一点必须诚实：
-//   direct —— 对目标主机做 N 次 **TCP 握手**，取握手耗时当 RTT。
-//             这是最接近 ping 的量，也能真实反映「这个站直连到底通不通」。
-//   proxy  —— 通过本机代理发 N 次 **HTTP 请求**，取首字节时间（TTFB）。
-//             因为 TCP 握手到代理 ≠ 能连上目标站，只有真发一次请求才说明问题。
+// The two egresses do not measure the same layer, and that has to be stated honestly:
+//   direct —— N **TCP handshakes** to the target host, with the handshake time taken as the RTT.
+//             This is the quantity closest to ping, and it also honestly reflects "can this site be
+//             reached on a direct connection at all".
+//   proxy  —— N **HTTP requests** through the local proxy, taking the time to first byte (TTFB).
+//             Because a TCP handshake to the proxy does not equal reaching the target site, only
+//             actually sending a request proves anything.
 //
-// 两者的「丢包率」都是**失败次数 / 总次数**（超时、连不上、非 2xx/3xx 都算失败），
-// 不是 ICMP 丢包 —— 界面上的措辞与提示都按这个来，不冒充 ping。
+// The "loss rate" of both is **failures / total attempts** (timeouts, unreachable, non-2xx/3xx all
+// count as failures), not ICMP loss —— the wording and hints in the UI follow that and do not pretend to be ping.
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,7 +23,7 @@ import { recordProbe } from './egress.js';
 export const DEFAULT_SAMPLES = 3;
 const DEFAULT_TIMEOUT = 6000;
 
-/** 单次 TCP 握手耗时 */
+/** Latency of a single TCP handshake */
 function tcpPing(host, port, timeoutMs) {
   return new Promise((resolve) => {
     const t0 = process.hrtime.bigint();
@@ -45,7 +48,7 @@ function tcpPing(host, port, timeoutMs) {
   });
 }
 
-/** 单次 HTTP 首字节耗时（走哪个出口由 netFetch 决定） */
+/** Time to first byte of a single HTTP request (which egress is used is decided by netFetch) */
 async function httpTtfb(url, cfg, mode, timeoutMs) {
   const t0 = process.hrtime.bigint();
   try {
@@ -63,7 +66,7 @@ async function httpTtfb(url, cfg, mode, timeoutMs) {
       { cfg, mode }
     );
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    // 只要首字节，正文立刻丢掉
+    // Only the first byte is wanted, so the body is dropped immediately
     try {
       await res.body?.cancel();
     } catch {
@@ -116,7 +119,7 @@ function hostPortOf(url) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 测一个 URL 的两个出口。
+ * Probe both egresses of one URL.
  * @param {string} url
  * @param {{cfg:object, samples?:number, timeoutMs?:number|number, modes?:('direct'|'proxy')[]}} opts
  */
@@ -150,9 +153,10 @@ export async function probeUrl(url, opts = {}) {
     }
   }
 
-  // Tor 出口：界面上每个来源都能把出口设成 Tor（Sources 页那个下拉里就有），
-  // 但探测这边原先**没有这一档** —— 于是选了 Tor 的来源，测出来的却是直连/代理的数字，
-  // 等于拿错出口的延迟去判断该用哪个出口。走 SOCKS 是 TCP 隧道，指标仍是「首字节时间」。
+  // Tor egress: in the UI every source can have its egress set to Tor (the dropdown on the Sources page has it),
+  // but probing previously had **no such tier** —— so for a source set to Tor the numbers measured were the
+  // direct/proxy ones, meaning the latency of the wrong egress was used to decide which egress to use.
+  // Going over SOCKS is a TCP tunnel, but the metric is still "time to first byte".
   if (modes.includes('tor')) {
     if (!cfg?.proxy?.torSocks) {
       out.tor = { mode: 'tor', method: 'socks-ttfb', skipped: true, error: '未配置 Tor SOCKS（设置 → 网络代理）' };
@@ -166,15 +170,18 @@ export async function probeUrl(url, opts = {}) {
     }
   }
 
-  // 给出「哪个出口更合适」的结论，界面直接拿来提示。
-  // 现在可能有 2~3 个出口（直连 / 代理 / Tor），所以改成「在所有测到的出口里挑最快的」，
-  // 并把不通的那些说出来 —— 只对比两个出口的老写法在加了 Tor 之后会漏掉一路。
+  // Produce a "which egress fits better" conclusion that the UI can turn straight into a hint.
+  // There can now be 2~3 egresses (direct / proxy / Tor), so this was changed to "pick the fastest of
+  // every egress actually measured" and to name the ones that do not work —— the old two-way comparison
+  // would miss one route once Tor was added.
   const d = out.direct;
   const p = out.proxy;
   const tor = out.tor;
   const usable = [d, p, tor].filter((x) => x && x.ok && !x.skipped);
   const blocked = [d, p, tor].filter((x) => x && !x.ok && !x.skipped).map((x) => x.mode);
   let verdict = 'unknown';
+  // The hint is shown verbatim in the Sources page (a toast after "probe now" and the auto-egress
+  // tooltip), so it is product copy and stays in the product's language — see docs/ENGLISH-LOGIC.md.
   let hint = '';
   if (usable.length) {
     const best = usable.slice().sort((a, b) => a.avg - b.avg)[0];
@@ -199,7 +206,7 @@ export async function probeUrl(url, opts = {}) {
   return { url, host, at: new Date().toISOString(), modes: out, verdict, hint };
 }
 
-// ───────────────────────────────────────── 缓存 / cache
+// ───────────────────────────────────────── cache
 
 function cachePath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), 'probe.json');
@@ -229,16 +236,16 @@ export function updateCache(cfg, entries) {
   const cache = loadCache(cfg);
   for (const e of entries) cache[e.id] = e;
   saveCache(cfg, cache);
-  // 探测结果同时喂给「自动出口」判定：这样每个站点都会自己长出最合适的出口
+  // Probe results are fed to the "automatic egress" verdict too, so every site grows the most suitable egress on its own
   try {
     for (const e of entries) recordProbe(cfg, { subject: e.subject ?? { id: e.id, name: e.name, url: e.url }, probe: e });
   } catch {
-    // 判定失败不该让探测接口跟着失败
+    // A failed verdict must not make the probe endpoint fail along with it
   }
   return cache;
 }
 
-/** 判断缓存是否还算新鲜 / is the cached result still fresh */
+/** Is the cached result still fresh */
 export function isFresh(entry, ttlMinutes = 30) {
   if (!entry?.at) return false;
   return Date.now() - Date.parse(entry.at) < ttlMinutes * 60_000;

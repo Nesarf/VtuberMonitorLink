@@ -1,36 +1,39 @@
-// wbi.js — B 站 WBI 签名 / bilibili WBI request signing
+// wbi.js — bilibili WBI request signing
 //
-// 背景（实测）：不带签名的 `x/v1/dm/getDanmuInfo` 稳定返回 **-352**（风控），
-// 带着登录态也一样 —— 也就是说「有 cookie」并不够，**还得有签名**。
-// 这就是弹幕功能一直卡住的原因。
+// Background (measured): unsigned, `x/v1/dm/getDanmuInfo` reliably returns **-352** (risk control),
+// and it does so even with a login session — that is, "having a cookie" is not enough,
+// **a signature is also required**. This is why the danmaku feature was stuck for so long.
 //
-// WBI 的算法是三段：
-//   1) 从 nav 接口拿 img_url / sub_url，各取文件名（去掉扩展名）拼成 64 字符的原始 key
-//   2) 按一张固定的 64 位置换表重排，取**前 32 位**作为 mixin key
-//   3) 参数按 key 排序 → 过滤掉值里的 !'()* → 拼 query + mixin key → md5 = w_rid；
-//      同时带上 wts（秒级时间戳）
+// The WBI algorithm has three parts:
+//   1) take img_url / sub_url from the nav endpoint, keep each filename (minus extension) and
+//      concatenate them into the 64-character raw key
+//   2) reorder it through a fixed 64-slot permutation table and take the **first 32 characters**
+//      as the mixin key
+//   3) sort the parameters by key → filter !'()* out of the values → append the query to the
+//      mixin key → md5 = w_rid; and carry wts (a second-resolution timestamp) along
 //
-// 三个容易写错的地方，这里都处理了：
-//   · 排序必须按**参数名**的字典序（不是插入顺序）
-//   · 过滤字符是 `!'()*` 这五个，不是「去掉所有标点」
-//   · key 每天会换 —— 所以要有缓存 + 遇到签名类错误时**强制刷新重试一次**
+// Three things that are easy to get wrong, all handled here:
+//   · the sort must be lexicographic by **parameter name** (not insertion order)
+//   · the filtered characters are exactly `!'()*`, it is not "strip all punctuation"
+//   · the key rotates daily — hence the cache plus **one forced refresh-and-retry** on
+//     signature-class errors
 import crypto from 'node:crypto';
 import { netFetch } from './net.js';
 
-/** 固定的 64 位置换表（公开且恒定） */
+/** The fixed 64-slot permutation table (public and constant) */
 export const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39,
   12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63,
   57, 62, 11, 36, 20, 34, 44, 52,
 ];
 
-/** 从 URL 里取 key（`.../7cd084941338484aae1ad9425b84077c.png` → `7cd084941338484aae1ad9425b84077c`） */
+/** Take the key out of a URL (`.../7cd084941338484aae1ad9425b84077c.png` → `7cd084941338484aae1ad9425b84077c`) */
 export function keyFromUrl(url) {
   const m = /([0-9a-fA-F]{32})\.(?:png|jpg|jpeg|webp)$/.exec(String(url ?? ''));
   return m ? m[1] : '';
 }
 
-/** 从 img_key + sub_key 推导 mixin key（前 32 位） */
+/** Derive the mixin key from img_key + sub_key (first 32 characters) */
 export function mixinKey(imgKey, subKey) {
   const raw = `${imgKey}${subKey}`;
   if (raw.length < 64) return '';
@@ -39,10 +42,10 @@ export function mixinKey(imgKey, subKey) {
   return out;
 }
 
-/** 值里要过滤掉的字符（官方实现如此，不是「去掉所有标点」） */
+/** Characters to filter out of the values (the official implementation does this; it is not "strip all punctuation") */
 const FILTER = /[!'()*]/g;
 
-/** 把参数签名后拼成 query string */
+/** Sign the parameters and assemble them into a query string */
 export function signQuery(params, mixin, wts = Math.floor(Date.now() / 1000)) {
   const withWts = { ...params, wts: String(wts) };
   const sorted = Object.keys(withWts)
@@ -56,7 +59,7 @@ export function signQuery(params, mixin, wts = Math.floor(Date.now() / 1000)) {
   return { query: `${sorted}&w_rid=${wRid}`, w_rid: wRid, wts };
 }
 
-/** 给一个 URL 加上签名（保留原有 query） */
+/** Add a signature to a URL (keeping the existing query) */
 export function signUrl(url, mixin, wts) {
   const u = new URL(url);
   const params = {};
@@ -65,10 +68,10 @@ export function signUrl(url, mixin, wts) {
   return `${u.origin}${u.pathname}?${query}`;
 }
 
-// ───────────────────────────────────────────── key 获取与缓存
+// ───────────────────────────────────────────── key acquisition and caching
 
 const cache = { img: '', sub: '', mixin: '', at: 0 };
-export const KEY_TTL_MS = 6 * 3600 * 1000; // key 每天轮换，缓存 6 小时足够
+export const KEY_TTL_MS = 6 * 3600 * 1000; // the key rotates daily; a 6-hour cache is plenty
 
 export function clearWbiCache() {
   cache.img = '';
@@ -78,9 +81,10 @@ export function clearWbiCache() {
 }
 
 /**
- * 取 WBI key（带缓存）。
- * nav 接口**匿名也能拿到 wbi_img**，所以签名不依赖登录态 —— 这点很重要：
- * 它意味着签名能力可以先独立验证，不必先有账号。
+ * Fetch the WBI key (with caching).
+ * The nav endpoint **returns wbi_img even anonymously**, so signing does not depend on a login
+ * session — and that matters: it means the signing capability can be verified on its own,
+ * without an account first.
  */
 export async function getWbiKeys(cfg, { force = false, log = null, headers = {} } = {}) {
   if (!force && cache.mixin && Date.now() - cache.at < KEY_TTL_MS) {
@@ -103,7 +107,7 @@ export async function getWbiKeys(cfg, { force = false, log = null, headers = {} 
     cache.sub = sub;
     cache.mixin = mixinKey(img, sub);
     cache.at = Date.now();
-    log?.info?.(`WBI key 已更新 / wbi keys refreshed (img=${img.slice(0, 8)}… sub=${sub.slice(0, 8)}…)`);
+    log?.info?.(`wbi keys refreshed (img=${img.slice(0, 8)}… sub=${sub.slice(0, 8)}…)`);
     return { ok: true, ...cache, cached: false };
   } catch (e) {
     const cause = e?.cause?.code ?? e?.cause?.message ?? '';
@@ -111,15 +115,16 @@ export async function getWbiKeys(cfg, { force = false, log = null, headers = {} 
   }
 }
 
-/** 需要重新取 key 的错误码（风控 / 签名失效） */
+/** Error codes that require re-fetching the key (risk control / invalid signature) */
 export const SIGN_ERROR_CODES = new Set([-352, -403, -412]);
 
 /**
- * 带签名的 POST（表单体）。
+ * Signed POST (form body).
  *
- * 为什么要单独一个：B 站的很多写操作是 POST + 表单体，而签名要加在 **query** 上
- * （`w_rid`/`wts` 进 URL），体保持原样。把两者混在一起是很容易写错的地方 ——
- * 体里塞了签名参数，服务端反而会认为签名不对。
+ * Why a separate one: many bilibili write operations are POST + form body, while the signature
+ * belongs on the **query** (`w_rid`/`wts` go into the URL) and the body stays as it is.
+ * Mixing the two is a very easy mistake to make — if signature parameters end up in the body,
+ * the server decides the signature is wrong.
  */
 export async function wbiPost(cfg, url, { params = {}, body = '', headers = {}, log = null, mode = 'direct', retry = true } = {}) {
   const k = await getWbiKeys(cfg, { log, headers });
@@ -159,8 +164,9 @@ export async function wbiPost(cfg, url, { params = {}, body = '', headers = {}, 
 
 
 /**
- * 带签名的请求：先签名，遇到签名类错误就**强制换 key 重试一次**。
- * 这是必须的 —— key 每天轮换，长期运行的程序一定会碰到「key 过期」这一刻。
+ * Signed request: sign first, and on a signature-class error **force a key refresh and retry once**.
+ * This is mandatory — the key rotates daily, so a long-running process is guaranteed to hit
+ * the moment when "the key has expired".
  */
 export async function wbiFetch(cfg, url, { params = {}, headers = {}, log = null, mode = 'direct', retry = true } = {}) {
   const k = await getWbiKeys(cfg, { log, headers });
@@ -179,7 +185,7 @@ export async function wbiFetch(cfg, url, { params = {}, headers = {}, log = null
     let res = await doFetch(signed);
     let j = await res.json().catch(() => null);
     if (retry && j && SIGN_ERROR_CODES.has(Number(j.code))) {
-      // key 可能已经轮换 → 强制刷新后再试一次
+      // The key may already have rotated → force a refresh and try once more
       const fresh = await getWbiKeys(cfg, { force: true, log, headers });
       if (fresh.ok) {
         const retryUrl = signUrl(u.toString(), fresh.mixin);

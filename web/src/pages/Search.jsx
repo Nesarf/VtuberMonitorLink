@@ -1,7 +1,9 @@
-// Search.jsx — 情报检索 / local search
+// Search.jsx - local search
 //
-// 立场：**检索本身不需要 LLM、不需要联网**。就是一个本地索引 + 关键词/标签/时间区间匹配。
-// 左上角那个「帮我认人」是可选助手，只在「只记得特征、忘了名字」时用，没配 LLM 就直接说用不了。
+// Stance: **search itself needs no LLM and no network**. It is a local index plus
+// keyword/tag/time-range matching. The "help me identify people" box in the top left is an
+// optional assistant, used only for "I remember the traits but forgot the name"; with no LLM
+// configured it simply says it cannot be used.
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -22,7 +24,7 @@ function iso(d) {
 }
 
 export default function Search({ layout }) {
-  const { t, lang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const L = normalizeLayout(layout);
 
   const [q, setQ] = useState('');
@@ -152,7 +154,7 @@ export default function Search({ layout }) {
           </div>
         </div>
 
-        {/* 时间区间：像查论文那样限定范围 */}
+        {/* Time range: narrow the scope the way a paper search does */}
         <div className="row">
           <div className="field" style={{ flex: '0 0 170px' }}>
             <label>{t('timeRange')}</label>
@@ -203,7 +205,7 @@ export default function Search({ layout }) {
           </div>
         </div>
 
-        {/* 已选标签 */}
+        {/* Selected tags */}
         <div className="row" style={{ alignItems: 'center', gap: 6 }}>
           <span className="muted small">{t('tagsInUse')}:</span>
           {tags.length === 0 ? <span className="muted small">{t('noTags')}</span> : null}
@@ -214,7 +216,7 @@ export default function Search({ layout }) {
           ))}
         </div>
 
-        {/* 标签云：论文检索里那种可点的面 */}
+        {/* Tag cloud: the clickable facets you get in a paper search */}
         <div className="tagcloud">
           <div className="muted small" style={{ marginBottom: 4 }}>
             {t('tagCloud')} · {t('vocabHint')}
@@ -242,8 +244,8 @@ export default function Search({ layout }) {
 
         <div className="hint" style={{ margin: 0 }}>
           {res
-            ? `${res.total} ${t('items')} · ${res.took}ms · ${t('corpus')}: ${res.corpus.items} ${t('items')} / ${res.corpus.runs} runs` +
-              (res.outsideTimeRange ? ` · ${res.outsideTimeRange} ${t('outsideRange')}` : '')
+            ? `${tn('items', res.total)} · ${res.took}ms · ${t('corpus')}: ${tn('items', res.corpus.items)} / ${res.corpus.runs} runs` +
+              (res.outsideTimeRange ? ` · ${tn('outsideRange', res.outsideTimeRange)}` : '')
             : t('loading')}
           {res?.expanded?.length ? (
             <>
@@ -255,7 +257,7 @@ export default function Search({ layout }) {
         {err && <p style={{ color: 'var(--err)' }}>❌ {err}</p>}
       </section>
 
-      {/* 人物档案：由特征抽取聚合出来的对象，点一下就是一次检索 */}
+      {/* People profiles: objects aggregated by feature extraction, one click runs a search */}
       {entities?.top?.length > 0 && (
         <section className="panel">
           <h2>
@@ -281,7 +283,7 @@ export default function Search({ layout }) {
         </section>
       )}
 
-      {/* 可选助手：需要 LLM，用得少 */}
+      {/* Optional assistant: needs an LLM, rarely used */}
       <section className="panel">
         <h2>
           {t('assistTitle')} <span className="badge optional">{t('needsLlm')}</span>

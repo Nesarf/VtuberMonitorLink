@@ -1,28 +1,31 @@
-// egress.js — 每个站点自动挑「最合适的出口」（直连 / 代理 / Tor）
+// egress.js — automatically pick the "most suitable egress" per site (direct / proxy / Tor)
 //
-// 为什么不能只比 avg：实测里「直连 380ms 但丢包 20%」和「代理 120ms 零丢包」
-// 不是同一个量级的问题 —— 丢包要重试，重试的代价远大于多等 200ms。
-// 所以打分把丢包换算成等效延迟：effective = avg × (1 + loss × LOSS_COST)。
+// Why comparing avg alone is not enough: in measured runs "direct at 380ms but 20% packet loss" and
+// "proxy at 120ms with zero loss" are not problems of the same magnitude — packet loss means retries,
+// and the cost of a retry is far greater than waiting 200ms longer.
+// So the score converts loss into an equivalent latency: effective = avg × (1 + loss × LOSS_COST).
 //
-// 为什么要有粘滞（hysteresis）：两次探测之间 20~30ms 的抖动毫无意义，
-// 按它切换出口只会让「本来就偶发失败」的站点更不稳定。挑战者必须**明显**更好
-// （默认便宜 20% 以上）才允许改判；当前出口一旦不健康就立刻换。
+// Why hysteresis is needed: a 20~30ms wobble between two probes means nothing, and switching egress
+// over it only makes a site that "already fails every now and then" less stable. A challenger must be
+// **clearly** better (20% cheaper by default) before it is allowed to take over; the current egress is
+// swapped out at once as soon as it turns unhealthy.
 //
-// 还要有**保守兜底**：样本不足、从没探测过、两种都不通时，不猜 ——
-// 回落到来源上显式写的值，再回落到全局配置。自动模式是优化，不是赌。
+// There is also a **conservative fallback**: with too few samples, never probed at all, or neither
+// mode reachable, it does not guess — it falls back to the value written explicitly on the source, and
+// then to the global config. Automatic mode is an optimization, not a gamble.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
-/** 一次失败 ≈ 4 次正常请求的代价（超时 + 重试 + 降速） */
+/** one failure costs about as much as 4 normal requests (timeout + retry + slowdown) */
 export const LOSS_COST = 4;
-/** 挑战者要比现任便宜 20% 才换，避免抖动 */
+/** a challenger must be 20% cheaper than the incumbent before it takes over, to avoid flapping */
 export const SWITCH_MARGIN = 0.2;
-/** 少于这么多样本时不给高置信度判断 */
+/** below this many samples no high-confidence verdict is given */
 const MIN_SAMPLES = 3;
-/** 判定结果保鲜期（分钟）：过期就等下一次探测，不拿旧数据硬撑 */
+/** freshness window of a verdict (minutes): once expired, wait for the next probe instead of propping it up with stale data */
 const DECISION_TTL_MIN = 180;
-/** 记录多少条真实抓取结果用于「稳定性」 */
+/** how many real fetch outcomes are kept for the "stability" signal */
 const HISTORY_KEEP = 20;
 
 const memory = { loadedAt: 0, data: null };
@@ -41,7 +44,7 @@ export function load(cfg) {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (raw && typeof raw === 'object' && raw.decisions) return raw;
   } catch {
-    // 文件不存在/坏了都当空库，功能不能因为缓存坏了就停
+    // a missing or corrupt file is treated as an empty store; the feature must not stop because a cache broke
   }
   return empty();
 }
@@ -52,11 +55,11 @@ function save(cfg, data) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
   } catch {
-    // 写不进去也不能让抓取失败
+    // an unwritable file must not make fetching fail either
   }
 }
 
-/** 进程内缓存：resolveProxyMode 是同步的热路径，不能每次去读盘 */
+/** in-process cache: resolveProxyMode is a synchronous hot path, it cannot read from disk every time */
 function db(cfg) {
   const now = Date.now();
   if (!memory.data || now - memory.loadedAt > 15000) {
@@ -71,7 +74,7 @@ export function invalidate() {
   memory.data = null;
 }
 
-/** 站点标识：优先来源 id，其次 host */
+/** site identity: the source id first, then the host */
 export function siteKey(subject) {
   if (!subject) return '';
   if (subject.id) return String(subject.id);
@@ -85,7 +88,7 @@ export function siteKey(subject) {
 }
 
 /**
- * 单个出口的得分。
+ * Score of a single egress.
  * @returns {{usable:boolean, effective:number, avg:number, loss:number, samples:number, why:string}}
  */
 export function scoreMode(m) {
@@ -97,7 +100,7 @@ export function scoreMode(m) {
   return { usable: true, effective, avg, loss, samples: Number(m.sent ?? 0), why: '' };
 }
 
-/** 真实抓取结果的稳定性修正：连续失败会把分数拉高，长期成功略微加分 */
+/** stability correction from real fetch outcomes: repeated failures raise the score, long-running success earns a small bonus */
 function historyPenalty(hist) {
   if (!hist || !hist.length) return { factor: 1, note: '暂无抓取记录' };
   const recent = hist.slice(-HISTORY_KEEP);
@@ -108,11 +111,11 @@ function historyPenalty(hist) {
 }
 
 /**
- * 决定一个站点该走哪个出口。
+ * Decide which egress a site should use.
  * @param {object} o
- * @param {object} o.probe   探测结果（probe.js 的返回：{modes:{direct,proxy}, ...}）
+ * @param {object} o.probe   probe results (what probe.js returns: {modes:{direct,proxy}, ...})
  * @param {object} o.history {mode: [{ok, at}]}
- * @param {string} o.current 当前在用的出口（用于粘滞）
+ * @param {string} o.current the egress currently in use (for hysteresis)
  * @returns {{mode:string, reason:string, scores:object, changed:boolean, confidence:string}}
  */
 export function decide({ probe, history = {}, current = null, fallback = 'direct' }) {
@@ -135,7 +138,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   const usable = candidates.map((c) => c.name);
 
   if (!candidates.length) {
-    // 两个都不通 —— 不编造结论，回落并把原因写清楚
+    // neither of the two is reachable — do not invent a verdict, fall back and state the reason plainly
     return {
       mode: fallback,
       reason: `直连与代理都不通，暂用 ${fallback}（探测：直连 ${direct.why || '—'} / 代理 ${proxy.why || '—'}）`,
@@ -145,7 +148,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
     };
   }
 
-  // 只探测到一个能用的 → 直接用它（这就是「必须走代理」的场景）
+  // only one probed as usable → use it directly (this is the "the proxy is mandatory" case)
   if (candidates.length === 1) {
     const only = candidates[0];
     return {
@@ -164,7 +167,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   const detail = (c) =>
     `${c.name} ${c.raw.avg}ms${c.raw.loss ? ` 丢包${Math.round(c.raw.loss * 100)}%` : ''}→等效${Math.round(c.effective)}ms`;
 
-  // 粘滞：现任只要没有明显更差，就不动 —— 出口换来换去才是真的不稳定
+  // hysteresis: as long as the incumbent is not clearly worse, do not move — egress swapping back and forth is the real instability
   if (incumbent && incumbent.name !== best.name && incumbent.effective <= best.effective * (1 + SWITCH_MARGIN)) {
     return {
       mode: incumbent.name,
@@ -185,7 +188,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   };
 }
 
-/** 探测完成后更新判定（server.js / runner 的 preflight 都会调） */
+/** update the verdict once probing finished (called by both server.js and the runner's preflight) */
 export function recordProbe(cfg, { subject, probe, fallback }) {
   const key = siteKey(subject) || (probe?.host ?? probe?.url ?? '');
   if (!key) return null;
@@ -210,7 +213,7 @@ export function recordProbe(cfg, { subject, probe, fallback }) {
   return data.decisions[key];
 }
 
-/** 真实抓取结果 → 稳定性信号（这才是「稳」的第一手证据，比 3 次 ping 可靠） */
+/** real fetch outcome → stability signal (this is the first-hand evidence of "stable", far more reliable than 3 pings) */
 export function recordOutcome(cfg, subject, { ok, ms = null, mode = null }) {
   const key = siteKey(subject);
   if (!key) return;
@@ -226,7 +229,7 @@ export function recordOutcome(cfg, subject, { ok, ms = null, mode = null }) {
   save(cfg, data);
 }
 
-/** 同步取判定，供热路径（resolveProxyMode）使用 */
+/** fetch the verdict synchronously, for the hot path (resolveProxyMode) */
 export function decision(cfg, subject) {
   const key = siteKey(subject);
   if (!key) return null;
@@ -236,7 +239,7 @@ export function decision(cfg, subject) {
   return d;
 }
 
-/** 给界面用的完整视图 */
+/** the full view handed to the web UI */
 export function snapshot(cfg) {
   const data = db(cfg);
   const decisions = Object.values(data.decisions ?? {}).sort((a, b) => String(a.key).localeCompare(String(b.key)));

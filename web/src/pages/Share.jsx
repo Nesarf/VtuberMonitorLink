@@ -1,11 +1,13 @@
-// Share.jsx — 一键分享 / one-click sharing
+// Share.jsx — one-click sharing
 //
-// 界面要老实回答一个问题：**哪些分享方式需要登录、我现在缺什么**。
-// 所以目标列表直接展示每个目标的登录需求与就绪状态，缺登录就明说缺什么，
-// 做不到的直接标成「不支持」而不是给一个点了没反应的按钮。
+// The UI has to answer one question honestly: **which sharing methods need a login, and what am I missing
+// right now**. So the target list shows each target's login requirement and readiness state directly, says
+// plainly what is missing when a login is absent, and marks what cannot be done as "unsupported" instead
+// of offering a button that does nothing when clicked.
 //
-// 对外发声（发到 B 站动态）永远需要两次确认，且未验证的功能默认点不动 ——
-// 与弹幕发送同一套纪律：发出去就收不回来了。
+// Posting publicly (to the bilibili feed) always requires two confirmations, and an unverified feature is
+// not clickable by default - the same discipline as sending a danmaku comment: once it is out, it cannot
+// be taken back.
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';

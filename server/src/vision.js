@@ -1,16 +1,18 @@
-// vision.js — 图片理解打标 / image understanding & tagging
+// vision.js — image understanding and tagging / image understanding & tagging
 //
-// 用途：把情报里的配图变成**可搜索的标签**。文字特征抽取解决不了「这张图里是什么」——
-// 而 VTuber 情报里配图往往就是信息本身（3D 模型截图、周边实物、联动海报、活动合影）。
+// Purpose: turn the images attached to intel into **searchable tags**. Text feature extraction cannot
+// answer "what is in this picture" -- while in VTuber intel an attached image often *is* the
+// information (3D model screenshots, physical merch, collab posters, event group photos).
 //
-// 需要支持视觉的模型（OpenAI 兼容接口的 image_url 形式）。没有配置时**整块功能不启用**，
-// 而不是「调用失败再兜底」—— 因为把图片发到外部服务是隐私相关的动作，必须由使用者明确打开。
+// Needs a vision-capable model (the OpenAI-compatible `image_url` form). With nothing configured the
+// **whole feature stays off**, rather than "call it and fall back when it fails" -- because sending
+// images to an external service is a privacy-relevant act and has to be switched on explicitly by the user.
 //
-// 三个工程要点：
-//   1) **按图片 URL 缓存**：同一张图不重复花钱（情报会反复出现在多次运行里）
-//   2) **解析要宽容**：模型经常在 JSON 外面裹一段解释、或者把数组写成字符串 ——
-//      这些都当成「可恢复」处理并记下来，而不是整批失败
-//   3) **并发受限**：一次运行几十张图不能同时打出去（既慢又容易被限流）
+// Three engineering points:
+//   1) **Cache by image URL**: the same image is never paid for twice (intel repeats across runs)
+//   2) **Parse tolerantly**: models often wrap the JSON in a paragraph of prose, or write an array as a
+//      string -- all of that counts as "recoverable" and gets recorded, instead of failing the whole batch
+//   3) **Bounded concurrency**: dozens of images in one run must not be fired all at once (slow, and easily rate-limited)
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -18,7 +20,7 @@ import { resolveDir } from './config.js';
 import { activeProvider, chatRequest } from './llm.js';
 import { netFetch } from './net.js';
 
-/** 允许的图片类型（模型能看的东西就这几种） */
+/** Allowed image kinds (these are the only things a model can see) */
 export const IMAGE_KINDS = ['illustration', 'screenshot', 'photo', 'meme', 'merch', 'poster', 'event', 'other'];
 
 export const DEFAULT_PROMPT = [
@@ -37,7 +39,7 @@ export function loadVisionCache(cfg) {
     const raw = JSON.parse(fs.readFileSync(visionPath(cfg), 'utf8'));
     if (raw && typeof raw === 'object') return raw;
   } catch {
-    /* 没有缓存就从空开始 */
+    /* start from empty when there is no cache */
   }
   return {};
 }
@@ -48,11 +50,11 @@ export function saveVisionCache(cfg, cache) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify(cache, null, 2), 'utf8');
   } catch {
-    // 落盘失败不该让打标流程崩
+    // A failed write to disk must not bring the tagging run down
   }
 }
 
-/** 同一张图的缓存键：URL 归一化后的哈希（去掉会变的查询参数里的签名段） */
+/** Cache key for one image: hash of the normalized URL (dropping the signature segment in the query string, which keeps changing) */
 export function imageKey(url) {
   const s = String(url ?? '').trim();
   if (!s) return '';
@@ -60,7 +62,7 @@ export function imageKey(url) {
 }
 
 /**
- * 是否具备打标条件。
+ * Whether tagging is available at all.
  * @returns {{ok:boolean, reason?:string, provider?:object}}
  */
 export function visionReady(cfg) {
@@ -69,7 +71,7 @@ export function visionReady(cfg) {
   }
   const providers = (cfg?.llm?.providers ?? []).filter((p) => p?.apiKey);
   if (!providers.length) {
-    // 兼容旧的平铺格式（llm.apiKey）
+    // Tolerate the old flat format (llm.apiKey)
     if (!cfg?.llm?.apiKey) return { ok: false, reason: '没有配置带 API Key 的模型档位' };
   }
   const picked = activeProvider(cfg);
@@ -81,16 +83,17 @@ export function visionReady(cfg) {
 }
 
 /**
- * 从模型回复里抠出结构化标签。
- * 宽容处理：外面裹解释、```json 围栏、标签写成逗号串、confidence 写成字符串 —— 都当可恢复。
+ * Dig structured tags out of a model reply.
+ * Tolerant handling: wrapped in prose, a ```json fence, tags written as a comma string, confidence
+ * written as a string -- all of it counts as recoverable.
  */
 export function parseTags(text) {
   const raw = String(text ?? '').trim();
   if (!raw) return { ok: false, error: '空回复' };
-  // 先剥掉 ``` 围栏
+  // strip the ``` fence first
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
   const body = fenced ? fenced[1] : raw;
-  // 再取第一个平衡的花括号片段
+  // then take the first balanced brace segment
   let candidate = body.trim();
   const start = candidate.indexOf('{');
   if (start >= 0) {
@@ -137,14 +140,14 @@ export function parseTags(text) {
   };
 }
 
-/** 传输层错误（连接被对端关掉、复用到的 socket 刚好死掉…）—— 只有这类才值得原样重试一次 */
+/** Transport-layer errors (connection closed by the peer, a pooled socket that happened to be dead...) -- only these deserve a retry as-is */
 export function isTransportError(error) {
   return /ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET|UND_ERR_CONNECT|socket hang up|other side closed|terminated|fetch failed|ECONNABORTED|ETIMEDOUT/i.test(
     String(error ?? '')
   );
 }
 
-/** 给一张图打标（不缓存；传输层错误重试一次，HTTP/解析错误不重试） */
+/** Tag one image (no caching; one retry on transport errors, none on HTTP/parse errors) */
 export async function tagOneImage(cfg, { url, provider, context = '', prompt = null, log = null }) {
   const model = provider?.model ?? '';
   const messages = [
@@ -157,7 +160,7 @@ export async function tagOneImage(cfg, { url, provider, context = '', prompt = n
       ],
     },
   ];
-  // 与 features.js 同一套调用方式：chatRequest 只组装请求描述，抓取自己做
+  // Same calling convention as features.js: chatRequest only assembles the request description, the fetching is ours
   const req = chatRequest(provider, messages, {
     max_tokens: Number(cfg?.vision?.maxTokens ?? 300),
     temperature: 0,
@@ -186,18 +189,19 @@ export async function tagOneImage(cfg, { url, provider, context = '', prompt = n
     }
   };
   let out = await attempt();
-  // 只在**传输层**失败时重试一次，且把重试记在返回值里（`retried: 1`），
-  // 这样「偶尔要重试」这件事在报告与自检里看得见，而不是被悄悄抹平。
-  // HTTP 错误（401/429/500…）与解析失败**不**重试：那些重试也不会有不同结果。
+  // Retry only on a **transport-layer** failure, and record the retry in the return value (`retried: 1`),
+  // so that "it occasionally has to retry" stays visible in the report and in the self-check instead of
+  // being quietly smoothed over.
+  // HTTP errors (401/429/500...) and parse failures are **not** retried: retrying those changes nothing.
   if (!out.ok && isTransportError(out.error)) {
-    if (log) log(`vision: 传输层失败，重试一次（${out.error}）`);
+    if (log) log(`vision: transport failure, retrying once (${out.error})`);
     const again = await attempt();
     out = { ...again, retried: 1, firstError: out.error };
   }
   return out;
 }
 
-/** 简单并发池：一次运行几十张图不能同时打出去 */
+/** A simple concurrency pool: dozens of images in one run must not all be fired at once */
 async function pool(items, limit, worker) {
   const out = new Array(items.length);
   let next = 0;
@@ -213,11 +217,11 @@ async function pool(items, limit, worker) {
 }
 
 /**
- * 给一批情报里的配图打标。
+ * Tag the images of a batch of intel items.
  * @param {object} o
- * @param {object[]} o.items 情报条目（每条可有 images: string[]）
- * @param {number} o.limit 本次最多处理多少张图
- * @param {boolean} o.force 忽略缓存
+ * @param {object[]} o.items intel items (each may carry images: string[])
+ * @param {number} o.limit how many images to process at most in this run
+ * @param {boolean} o.force ignore the cache
  */
 export async function tagItems(cfg, { items = [], limit = 40, force = false, concurrency = null, log = null } = {}) {
   const ready = visionReady(cfg);
@@ -276,11 +280,12 @@ export async function tagItems(cfg, { items = [], limit = 40, force = false, con
       tagged++;
     } else {
       failed++;
-      // 失败也记一笔（但标记 ok:false，下次仍会重试）—— 免得每轮都对同一张坏图反复花钱
+      // Record the failure too (but mark it ok:false, so the next run still retries) -- otherwise every
+      // round pays again for the same broken image
       const err = row.result?.error ?? 'unknown';
       cache[row.key] = { ok: false, url: row.url, error: err, at: new Date().toISOString() };
-      // 把**为什么**失败带出来（最多 5 条）：只报一个数字的话，
-      // 端到端自检挂掉时只能看到 `failed:1`，根本不知道是网络、鉴权还是解析（踩过）
+      // Carry out **why** it failed (at most 5): with only a number, a failing end-to-end self-check
+      // shows `failed:1` and you cannot tell network from auth from parsing (learnt the hard way)
       if (errors.length < 5) errors.push({ url: row.url, error: err });
     }
   }
@@ -289,8 +294,8 @@ export async function tagItems(cfg, { items = [], limit = 40, force = false, con
 }
 
 /**
- * 把缓存里的标签贴回情报条目（读时合并，和特征抽取一样）。
- * 这样界面与检索都不需要知道缓存机制。
+ * Paste the cached tags back onto the intel items (merged at read time, same as feature extraction).
+ * That way neither the UI nor search has to know about the caching mechanism.
  */
 export function applyVisionTags(items, cache, { inheritKeywords = true } = {}) {
   const out = [];
@@ -308,7 +313,7 @@ export function applyVisionTags(items, cache, { inheritKeywords = true } = {}) {
     const tags = [...new Set(hits.flatMap((h) => h.tags ?? []))];
     const kinds = [...new Set(hits.map((h) => h.kind).filter(Boolean))];
     for (const t of tags) tagCount[t] = (tagCount[t] ?? 0) + 1;
-    // 图片标签也能被检索命中（和文字关键词同一套检索路径）
+    // Image tags are hit by search as well (the same search path as text keywords)
     const keywords = inheritKeywords ? [...new Set([...(it.keywords ?? []), ...tags])] : it.keywords ?? [];
     out.push({
       ...it,
@@ -321,7 +326,7 @@ export function applyVisionTags(items, cache, { inheritKeywords = true } = {}) {
   return { items: out, tagCount };
 }
 
-/** 打标统计（界面用） */
+/** Tagging statistics (for the UI) */
 export function visionStats(cfg) {
   const cache = loadVisionCache(cfg);
   const entries = Object.values(cache);

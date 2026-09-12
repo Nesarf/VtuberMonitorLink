@@ -1,15 +1,19 @@
-// locales/overlays.js — 地区覆盖词条
+// locales/overlays.js — regional overlay entries
 //
-// 两类内容：
-//  A. **可推导的**：繁体字形（简→繁）、英式拼写（-ize→-ise、color→colour…）。
-//     这类不靠人肉翻译 —— 由 i18n.jsx 在运行时从 zh / en 两套基础词条推导，
-//     所以是**完整覆盖**，不会缺键。
-//  B. **不可推导的**：日语、韩语、西语、葡语、法语、德语、意大利语、俄语、阿拉伯语。
-//     这些必须真翻译。下面是各语言的**界面核心词条**（标签页、常用动作、状态），
-//     其余键按 chain 回落到英文 —— 宁可显示英文，也不显示机翻垃圾。
-//     批量补全走 tools/i18n-translate.mjs（用你自己的 LLM Key，逐条可审）。
+// Two kinds of content:
+//  A. **Derivable**: Traditional character forms (Simplified -> Traditional), British spelling
+//     (-ize -> -ise, color -> colour, ...).
+//     These do not rely on hand translation - i18n.jsx derives them at runtime from the two base
+//     dictionaries zh and en, so they are **complete coverage** and can never be missing a key.
+//  B. **Not derivable**: Japanese, Korean, Spanish, Portuguese, French, German, Italian, Russian,
+//     Arabic.
+//     These genuinely have to be translated. Below are each language's **core UI entries**
+//     (tabs, common actions, states); the remaining keys fall back to English along the chain -
+//     showing English is preferable to showing machine-translation garbage.
+//     Bulk completion goes through tools/i18n-translate.mjs (with your own LLM key, reviewable
+//     entry by entry).
 
-/** 英式拼写：整词替换，绝不碰子串（meter 不能把 parameter 变成 parametre） */
+/** British spelling: whole-word replacement, never a substring (meter must not turn parameter into parametre) */
 export const GB_SPELL = [
   ['color', 'colour'],
   ['colors', 'colours'],
@@ -24,10 +28,10 @@ export const GB_SPELL = [
   ['defense', 'defence'],
   ['gray', 'grey'],
   ['aluminum', 'aluminium'],
-  ['check', 'check'], // 保留：check 在英式里也常用
+  ['check', 'check'], // keep it: check is also common in British English
 ];
 
-/** 有明确屈折拼写差异的动词词干（organize→organise 这一族） */
+/** Verb stems with a clear inflectional spelling difference (the organize -> organise family) */
 export const GB_STEMS = [
   'organiz', 'recogniz', 'optimiz', 'normaliz', 'serializ', 'summariz', 'localiz',
   'customiz', 'synchroniz', 'categoriz', 'initializ', 'specializ', 'standardiz',
@@ -36,12 +40,14 @@ export const GB_STEMS = [
 ];
 
 /**
- * 后加入的界面元素（新标签页、新面板）单独一张小表。
+ * UI elements added later (new tabs, new panels) get their own small table.
  *
- * 为什么这么做：功能是持续加的，每次加一个标签页就要回头改十处语言块，
- * 一定会漏（阿拉伯语界面里就露过英文的 People / Calendar）。
- * 合并逻辑在本文件**末尾**统一执行 —— 必须放在 HAND_COMMON 声明之后，
- * 否则会撞上 TDZ（`Cannot access 'HAND_COMMON' before initialization`，自检当场抓到）。
+ * Why it is done this way: features keep getting added, and every new tab used to mean going back
+ * and editing ten language blocks, which is guaranteed to miss one (the Arabic UI leaked the
+ * English People / Calendar).
+ * The merge runs at the **end** of this file - it has to sit after the HAND_COMMON declaration,
+ * otherwise it hits the TDZ (`Cannot access 'HAND_COMMON' before initialization`, caught by the
+ * self-check on the spot).
  */
 const LATE_KEYS = {
   'ja-JP': { tab_people: 'ピープル', tab_calendar: 'カレンダー' },
@@ -61,14 +67,16 @@ const LATE_KEYS = {
 };
 
 /**
- * 高可见度词条（各语言第二批）/ high-visibility strings
+ * High-visibility entries (each language's second batch) / high-visibility strings
  *
- * 这 40 个键是使用者一打开界面就会看到的：常用动作、状态、字段名、主要面板标题。
- * 先翻译它们，比翻译 400 个「自检建议」之类的长句更值 —— 界面的可读性主要由
- * 这些高频短词决定。
+ * These 40 keys are what a user sees as soon as the UI opens: common actions, states, field names,
+ * main panel titles.
+ * Translating them first is worth more than translating 400 long sentences such as the self-check
+ * advice - how readable the UI is depends mainly on these frequent short words.
  *
- * 覆盖度是可测量的：`node tools/locale-coverage.mjs` 会算出每个语言实际覆盖了多少
- * （只算自己提供的，回落到英文的不算），并把结果写成基线卡住下限。
+ * Coverage is measurable: `node tools/locale-coverage.mjs` computes how much each language actually
+ * covers (counting only what it provides itself, not what falls back to English) and writes the
+ * result into a baseline that pins the floor.
  */
 export const HAND_COMMON = {
   'ja-JP': {
@@ -154,9 +162,11 @@ export const HAND_COMMON = {
     time: '시간',
     language: '언어',
     latency: '지연',
-    // 手写：这句机翻救不回来。模型对这条长句**确定性**地回中文（换了提示词、改用
-    // 「把半成品翻完」的任务都试过，仍是同一份中韩混排），于是按分层规则由人工层接管 ——
-    // 人工永远压过机器，且这类长提示句本来就该人工过一遍。
+    // Hand-written: machine translation cannot rescue this sentence. The model **deterministically**
+    // answers in Chinese for this long sentence (I tried changing the prompt and switching to a
+    // "finish this half-done translation" task, and it still produced the same Chinese-Korean
+    // mixture), so by the layering rule the hand-written layer takes over - hand-written always
+    // beats machine, and a long prompt sentence like this should go through a human once anyway.
     liveHint:
       '방송 시작은 가장 시의성이 높은 정보입니다 — 어떤 키워드보다 먼저 알아야 할 일이죠. ' +
       '여기서는 모니터링 대상의 방송 상태를 보여 주고, 여러 방송을 격자로 펼쳐 동시에 볼 수 있습니다' +
@@ -460,8 +470,9 @@ export const HAND_COMMON = {
 };
 
 /**
- * 各语言的界面核心词条。
- * 只放「一眼就会看到」的键：用英文兜底时界面依然可用，但核心动作用母语。
+ * Each language's core UI entries.
+ * Only the keys that are "visible at a glance": the UI is still usable with the English fallback,
+ * but the core actions should be in the user's own language.
  */
 export const HAND = {
   'ja-JP': {
@@ -584,7 +595,7 @@ export const HAND = {
     fastest: 'más rápido',
   },
   'es-419': {
-    // 拉美用词差异（真正的差异，不是机械替换）
+    // Latin-American wording differences (real differences, not a mechanical replacement)
     save: 'Guardar',
     delete: 'Borrar',
     add: 'Agregar',
@@ -635,7 +646,7 @@ export const HAND = {
     packetLoss: 'Perda de pacotes',
   },
   'pt-BR': {
-    // 巴葡真正的差异
+    // Brazilian Portuguese's real differences
     tab_settings: 'Configurações',
     tab_live: 'Ao vivo',
     tab_search: 'Pesquisar',
@@ -796,8 +807,9 @@ export const HAND = {
     packetLoss: 'Потери пакетов',
   },
   'uk-UA': {
-    // 乌克兰语是独立语言，不是俄语方言 —— 跨语言兜底已经在 i18n.jsx 的 usableChain 里
-    // 禁掉了（否则界面会显示俄语）。所以这里必须有自己的那一层。
+    // Ukrainian is an independent language, not a dialect of Russian - cross-language fallback is
+    // already disabled in i18n.jsx's usableChain (otherwise the UI would show Russian). So this
+    // level has to exist on its own here.
     saveStateIdle: 'Змін поки немає',
     saveStateDirty: 'Є незбережені зміни',
     cancel: 'Скасувати',
@@ -1033,7 +1045,7 @@ export const HAND = {
     latency: 'Latência',
   },
   'ar-SA': {
-    // RTL：整页方向由 LOCALES 的 dir:'rtl' 驱动
+    // RTL: the whole-page direction is driven by dir:'rtl' in LOCALES
     appSub: 'استخبارات VTuber محلية',
     tab_intel: 'المعلومات',
     tab_run: 'تشغيل',
@@ -1071,7 +1083,8 @@ export const HAND = {
   },
 };
 
-// 末尾统一合并「后加入的界面元素」词条（必须放在 HAND_COMMON 声明之后，见上面注释）
+// Merge the "UI elements added later" entries in one place at the end (it must sit after the
+// HAND_COMMON declaration, see the comment above)
 for (const [code, dict] of Object.entries(LATE_KEYS)) {
   HAND_COMMON[code] = { ...(HAND_COMMON[code] ?? {}), ...dict };
 }

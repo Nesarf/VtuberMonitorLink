@@ -1,15 +1,16 @@
-// sources.js — 内置来源适配器目录 / built-in source adapters.
-// 每条来源都是声明式的：抓取方式、登录要求、限流参数都在这里定义，
-// UI 只负责展示与勾选。用户也可以在 config.json 的 sources 里覆盖 enabled/login，
-// 或直接在网页「来源」页里新增自定义来源（存进 config.customSources）。
+// sources.js — built-in source adapters.
+// Every source is declarative: the fetch method, login requirement and rate-limit parameters are all
+// defined here, and the UI only displays and checks them. Users can also override enabled/login in the
+// sources map of config.json, or add a custom source straight from the Sources page in the web UI
+// (stored in config.customSources).
 //
-// fetch 取值：rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
-// login 取值：none | optional | required
-//   none     —— 公开数据
-//   optional —— 登录更全（如 Twitch 的关注列表）
-//   required —— 不登录拿不到（如 X 推文正文 / B 站带图动态），UI 需标红并在跑前检查
-// proxy 取值：direct | proxy | 省略（跟随全局）
-//   B 站是必须写 direct 的典型：实测经代理会稳定 412 / -352 风控
+// fetch values: rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
+// login values: none | optional | required
+//   none     —— public data
+//   optional —— logging in gives more (e.g. the Twitch following list)
+//   required —— unavailable without login (e.g. the body of an X post / bilibili dynamics with images); the UI must flag it and check before a run
+// proxy values: direct | proxy | omitted (follow the global setting)
+//   bilibili is the classic case that must say direct: measured to hit a steady 412 / -352 risk control through a proxy
 
 export const CATEGORIES = {
   community: { zh: '社区', en: 'Community' },
@@ -23,10 +24,10 @@ export const CATEGORIES = {
   bili: { zh: 'B 站', en: 'bilibili' },
 };
 
-const R = (names) => names; // 仅作可读性标注
+const R = (names) => names; // readability annotation only
 
 export const BUILTIN_SOURCES = [
-  // ── 社区 / Community（走 RSS，Reddit 限流需主动拉开间隔）
+  // ── community (via RSS; Reddit rate limits need the gap opened up deliberately)
   ...R(['VirtualYoutubers', 'Hololive', 'Nijisanji', 'VShojo']).map((sub) => ({
     id: `reddit-${sub}`,
     name: { zh: `Reddit r/${sub}`, en: `Reddit r/${sub}` },
@@ -39,7 +40,7 @@ export const BUILTIN_SOURCES = [
     note: { zh: '浏览器与 .json 均被拦，仅 .rss 可用', en: 'Browser & .json blocked; .rss only' },
   })),
 
-  // ── 百科 / Wiki
+  // ── wiki
   {
     id: 'fandom-vtuber-wiki',
     name: { zh: 'Fandom「Virtual YouTuber Wiki」', en: 'Fandom Virtual YouTuber Wiki' },
@@ -62,7 +63,7 @@ export const BUILTIN_SOURCES = [
     note: { zh: 'web_fetch 被 403，需浏览器渲染；仅作背景与考据', en: 'web_fetch gets 403; needs browser render' },
   },
 
-  // ── 直播 / Live
+  // ── live
   {
     id: 'twitch-vtuber',
     name: { zh: 'Twitch「vtuber」标签直播目录', en: 'Twitch VTuber directory' },
@@ -74,7 +75,7 @@ export const BUILTIN_SOURCES = [
     note: { zh: '登录后额外含「正在关注」', en: 'Login adds your following list' },
   },
 
-  // ── 社交 / Social（不登录只有登录墙）
+  // ── social (without a login there is only the login wall)
   {
     id: 'x-twitter',
     name: { zh: 'X / Twitter（官方与爆料账号）', en: 'X / Twitter' },
@@ -86,7 +87,7 @@ export const BUILTIN_SOURCES = [
     note: { zh: '未登录只显示登录墙，必须复用浏览器登录态', en: 'Login wall without session' },
   },
 
-  // ── 视频 / Video
+  // ── video
   {
     id: 'youtube-official',
     name: { zh: 'YouTube 官方频道公告', en: 'YouTube official channels' },
@@ -96,7 +97,7 @@ export const BUILTIN_SOURCES = [
     defaultEnabled: true,
   },
 
-  // ── 新闻 / News
+  // ── news
   ...R([
     ['ann', 'Anime News Network', 'https://www.animenewsnetwork.com/'],
     ['kaiyou', 'KAI-YOU', 'https://kai-you.net/'],
@@ -114,7 +115,7 @@ export const BUILTIN_SOURCES = [
     defaultEnabled: true,
   })),
 
-  // ── 官方 / Official（纯 HTTP 只返回 JS 骨架）
+  // ── official (plain HTTP returns only the JS shell)
   ...R([
     ['anycolor', 'ANYCOLOR（にじさんじ）', 'https://www.anycolor.co.jp/news'],
     ['hololive', 'hololive production', 'https://hololive.hololivepro.com/en/news'],
@@ -132,7 +133,7 @@ export const BUILTIN_SOURCES = [
     note: { zh: '纯 HTTP 只返回 JS 骨架，需浏览器渲染', en: 'Plain HTTP returns JS shell only' },
   })),
 
-  // ── 资源 / 通贩（默认按 14 天节奏）
+  // ── resource (merch, default cadence of 14 days)
   ...R([
     ['fanbox', 'Pixiv FANBOX', 'https://www.fanbox.cc/'],
     ['cien', 'Ci-en', 'https://ci-en.dlsite.com/'],
@@ -146,15 +147,15 @@ export const BUILTIN_SOURCES = [
     url,
     login: 'optional',
     defaultEnabled: true,
-    cadence: 'merch', // 归入 14 天一次的第二次运行
+    cadence: 'merch', // folded into the second run of the 14-day cycle
   })),
 ];
 
-// ── B 站 / bilibili
-// 实测要点：
-//   • api.bilibili.com 直连可用，走代理反而稳定 412 / -352，所以 proxy 一律 'direct'
-//   • opus/feed/space 这个端点无需登录、无需 wbi 签名，稳定返回图文动态（正文+点赞数）
-//   • feed/space（带配图的完整动态）风控极严，只有复用登录态才拿得到 → login: 'required'
+// ── bilibili
+// Measured points:
+//   • api.bilibili.com works on a direct connection while a proxy gives a steady 412 / -352, so proxy is always 'direct'
+//   • the opus/feed/space endpoint needs no login and no wbi signature, and reliably returns text/image dynamics (body plus like count)
+//   • feed/space (full dynamics with attached images) is under very strict risk control and is only obtainable by reusing a login session → login: 'required'
 const BILI_OPUS = [
   ['jaran', '嘉然今天吃什么（A-SOUL）', '672328094'],
   ['asoul', 'A-SOUL 官方', '703007996'],
@@ -184,7 +185,7 @@ export const BILIBILI_SOURCES = [
     name: { zh: 'B站完整动态（含配图，需登录）', en: 'bilibili full dynamics with pictures (login required)' },
     category: 'bili',
     fetch: 'bili-dynamic',
-    // 默认指向一个确实会发图的 UP，这样「含配图」开箱就能看到；uid 可在网页里改
+    // by default it points at an UP who really does post images, so "with images" is visible out of the box; the uid can be changed in the web UI
     url: 'https://space.bilibili.com/282994/dynamic',
     uid: '282994',
     proxy: 'direct',
@@ -199,7 +200,7 @@ export const BILIBILI_SOURCES = [
 
 BUILTIN_SOURCES.push(...BILIBILI_SOURCES);
 
-/** 与用户配置合并，得到「生效来源」 / merge catalog with user config */
+/** Merge catalog with user config to get the "effective sources" / merge catalog with user config */
 export function effectiveSources(config) {
   const overrides = config?.sources ?? {};
   const custom = Array.isArray(config?.customSources) ? config.customSources : [];
@@ -208,8 +209,7 @@ export function effectiveSources(config) {
     const o = overrides[s.id] ?? {};
     const merged = {
       ...s,
-      // cadence 始终显式给出，避免消费方（UI / selectSources）去猜缺省值
-      // Always state the cadence so consumers never have to infer a default.
+      // Always state the cadence explicitly so consumers (UI / selectSources) never have to guess the default.
       cadence: s.cadence === 'merch' ? 'merch' : 'daily',
       enabled: o.enabled ?? s.defaultEnabled ?? true,
       login: o.login ?? s.login ?? 'none',
@@ -224,7 +224,7 @@ export function findSource(id) {
   return BUILTIN_SOURCES.find((s) => s.id === id) ?? null;
 }
 
-/** 自定义来源的字段白名单（新增/编辑时清洗，避免往配置里塞任意东西） */
+/** Field whitelist for custom sources (cleaned on create/edit so arbitrary values cannot be stuffed into the config) */
 export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'uid', 'proxy', 'enabled'];
 
 export function sanitizeCustomSource(input) {

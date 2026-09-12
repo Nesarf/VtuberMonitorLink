@@ -1,14 +1,15 @@
-// danmaku.js — 发弹幕 / post a live comment
+// danmaku.js — post a live comment
 //
-// ⚠ 与本项目其它模块的性质区别，必须先看清楚：
-//   其它一切都是**只读抓取**；这个模块会**用使用者本人的账号身份向直播间写内容**。
-//   因此这里刻意做成一堆「必须手动通过」的关卡：
-//     1. 必须显式传 confirm=true（缺了就 400，不会「默认帮你发」）；
-//     2. 必须指定账号（不允许「用第一个能用的」这种便利）；
-//     3. 发送前重新读一次 cookie（不缓存、不落盘、不进日志）；
-//     4. 保守的本地限速（同一账号最小间隔），避免误触连发被平台判定刷屏；
-//     5. 每次发送都记一条审计日志（只记谁/发到哪/发了什么/结果，绝不记 cookie）；
-//     6. **不接入任何自动流程** —— 定时任务、收集流程都不会调用它。
+// ⚠ This differs in kind from every other module in this project, so read it first:
+//   everything else is **read-only fetching**; this module **writes content into a live room under
+//   the user's own account identity**.
+//   That is why it is deliberately built as a stack of gates that must be passed by hand:
+//     1. confirm=true must be passed explicitly (missing it is a 400, it never "sends for you by default");
+//     2. the account must be named (the convenience of "just use the first usable one" is not allowed);
+//     3. the cookie is read once more right before sending (not cached, not written to disk, not logged);
+//     4. a conservative local rate limit (minimum gap per account), so an accidental double-fire is not judged as flooding by the platform;
+//     5. every send records one audit line (only who / to where / what / result, never the cookie);
+//     6. **it is wired into no automatic flow at all** — neither the scheduler nor the collection run ever calls it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -18,13 +19,13 @@ import { listAccounts, ACCOUNT_UA } from './accounts.js';
 import { wbiPost } from './wbi.js';
 
 const SEND_URL = 'https://api.live.bilibili.com/msg/send';
-const MAX_LEN = 20; // B 站直播间弹幕长度上限
-const MIN_INTERVAL_MS = 5000; // 同一账号两次发送的最小间隔（本地限速，比平台更保守）
+const MAX_LEN = 20; // bilibili live-room danmaku length cap
+const MIN_INTERVAL_MS = 5000; // minimum gap between two sends from the same account (local rate limit, more conservative than the platform)
 
-/** 同一进程内按账号记最后发送时间 */
+/** last send time per account, tracked inside this process */
 const lastSent = new Map();
 
-/** 把 B 站返回码翻成人话 */
+/** turn a bilibili return code into words a human can read */
 const CODE_HINT = {
   0: '发送成功',
   '-101': '账号未登录（登录态可能已失效，重新登录该浏览器即可）',
@@ -44,10 +45,10 @@ function audit(cfg, entry) {
   try {
     const f = logPath(cfg);
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    // 只写：时间 / 账号 mid / 房间 / 内容 / 结果 —— 没有任何凭据
+    // only time / account mid / room / content / result are written — never any credential
     fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
   } catch {
-    /* 审计写不进去不该影响发送结果，但要在返回值里说明 */
+    /* an unwritable audit must not change the send result, but the return value has to say so */
     return false;
   }
   return true;
@@ -80,23 +81,23 @@ export function readAudit(cfg, limit = 50) {
 export function validateText(text) {
   const t = String(text ?? '').replace(/[\r\n\t]+/g, ' ').trim();
   if (!t) return { ok: false, error: '内容为空' };
-  // 按字符数算（B 站按长度限制，中文一字算一个）
+  // counted in characters (bilibili limits by length, and one CJK character counts as one)
   if ([...t].length > MAX_LEN) return { ok: false, error: `超过 ${MAX_LEN} 字上限（当前 ${[...t].length}）` };
   return { ok: true, text: t };
 }
 
 /**
- * 发一条弹幕。
+ * Post one danmaku.
  * @param {object} cfg
  * @param {object} log
  * @param {{accountId:string, roomId:string|number, text:string, confirm:boolean}} req
  */
 export async function sendDanmaku(cfg, log, req) {
-  // 关卡 1：必须显式确认
+  // gate 1: explicit confirmation is required
   if (req?.confirm !== true) {
     return { ok: false, error: '必须显式确认（confirm=true）才会发送 —— 这是用你的账号身份公开发言，不做任何默认动作' };
   }
-  // 关卡 2：必须指定账号
+  // gate 2: the account has to be named
   const accountId = String(req?.accountId ?? '').trim();
   if (!accountId) return { ok: false, error: '必须指定用哪个账号发送' };
 
@@ -106,18 +107,18 @@ export async function sendDanmaku(cfg, log, req) {
   const v = validateText(req?.text);
   if (!v.ok) return { ok: false, error: v.error };
 
-  // 关卡 3：确认这个账号现在仍然可用
+  // gate 3: confirm this account is still usable right now
   const { accounts } = await listAccounts(cfg);
   const acct = accounts.find((a) => a.id === accountId);
   if (!acct) return { ok: false, error: '找不到该账号（登录态可能已失效，刷新一下列表）' };
   if (!acct.canSend) return { ok: false, error: `该账号当前不能发言：${acct.note ?? '缺少 SESSDATA 或 bili_jct'}` };
 
-  // 关卡 4：本地限速
+  // gate 4: local rate limit
   const last = lastSent.get(accountId) ?? 0;
   const wait = MIN_INTERVAL_MS - (Date.now() - last);
   if (wait > 0) return { ok: false, error: `本地限速：请等 ${Math.ceil(wait / 1000)} 秒后再发（同一账号 ${MIN_INTERVAL_MS / 1000} 秒一条）` };
 
-  // 关卡 5：现场重新读 cookie（不缓存）
+  // gate 5: read the cookie again on the spot (no caching)
   const ck = await readBrowserCookies(acct.profile, ['bilibili.com']);
   if (!ck.ok) return { ok: false, error: `读不到登录态：${ck.error}` };
   const csrf = /(?:^|;\s*)bili_jct=([^;]+)/.exec(ck.cookieHeader)?.[1] ?? '';
@@ -137,8 +138,9 @@ export async function sendDanmaku(cfg, log, req) {
 
   let result;
   try {
-    // 发送也要 WBI 签名：B 站的新风控对写接口一视同仁，不带签名会被 -352 挡掉。
-    // 签名加在 **query** 上，表单体保持原样（把签名塞进体会让服务端认为签名不对）。
+    // Sending needs WBI signing too: bilibili's newer risk control treats write endpoints the same as any
+    // other, and an unsigned call is turned away with -352.
+    // The signature goes on the **query**, the form body stays as it is (pushing the signature into the body makes the server call it invalid).
     const r = await wbiPost(
       cfg,
       SEND_URL,
@@ -181,8 +183,8 @@ export async function sendDanmaku(cfg, log, req) {
     code: result.code ?? null,
     error: result.ok ? null : (result.error ?? result.message ?? null),
   });
-  if (result.ok) log?.info(`弹幕已发送 / danmaku sent — ${acct.uname ?? acct.mid} → 房间 ${roomId}：${v.text}`);
-  else log?.warn(`弹幕发送失败 / danmaku failed — code=${result.code ?? '-'} ${result.error ?? result.message ?? ''}`);
+  if (result.ok) log?.info(`danmaku sent — ${acct.uname ?? acct.mid} → room ${roomId}: ${v.text}`);
+  else log?.warn(`danmaku failed — code=${result.code ?? '-'} ${result.error ?? result.message ?? ''}`);
 
   return { ...result, auditLogged: logged, account: { mid: acct.mid, uname: acct.uname }, roomId, text: v.text };
 }

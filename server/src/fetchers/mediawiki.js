@@ -1,6 +1,6 @@
-// fetchers/mediawiki.js — MediaWiki API 抓取（如 Fandom 的 recentchanges）
-// 注意：部分 Wiki（如萌娘百科）会拒绝匿名 recentchanges 调用（action-notallowed），
-// 这类站点应改用 fetch: 'browser'。
+// fetchers/mediawiki.js - MediaWiki API fetching (e.g. Fandom's recentchanges)
+// Note: some wikis (e.g. Moegirlpedia) reject anonymous recentchanges calls (action-notallowed),
+// so those sites should switch to fetch: 'browser'.
 export async function fetchMediaWiki(source, { log }) {
   const UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -11,13 +11,13 @@ export async function fetchMediaWiki(source, { log }) {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const text = await r.text();
-    // MediaWiki 的错误也是 200 + {"error":{...}}，需要显式判别
+    // MediaWiki errors also come back as 200 + {"error":{...}}, so they must be checked explicitly
     try {
       const j = JSON.parse(text);
       if (j.error) throw new Error(`API ${j.error.code}: ${j.error.info}`);
     } catch (e) {
       if (String(e.message).startsWith('API ')) throw e;
-      // 非 JSON 视为正常文本继续
+      // non-JSON is treated as ordinary text and processing continues
     }
     log?.info(`${source.id}: ok ${text.length}B`);
     return { ok: true, content: text, ext: 'json' };

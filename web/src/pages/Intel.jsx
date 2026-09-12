@@ -1,12 +1,13 @@
-// Intel.jsx — 情报卡片流 / intel stream
-// 排版可 DIY（卡片墙 / 列表 / 紧凑 / 时间线 / 表格），支持星标与已读、本次 vs 上次对比。
+// Intel.jsx — intel stream
+// The layout is DIY-able (card wall / list / compact / timeline / table), with starring and
+// read state, and a this-run vs last-run comparison.
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { layoutClass, normalizeLayout } from '../layout.js';
 import Collapsible from '../Collapsible.jsx';
 
-/** 图片类型 → 图标（与 vision.js 的 IMAGE_KINDS 对应） */
+/** image kind -> icon (matching IMAGE_KINDS in vision.js) */
 const IMAGE_KIND_ICON = {
   illustration: '🎨',
   screenshot: '🖥',
@@ -25,7 +26,7 @@ function fmtTime(t) {
 }
 
 export default function Intel({ layout }) {
-  const { t, lang } = useI18n();
+  const { t, tn, lang } = useI18n();
   const L = normalizeLayout(layout);
   const [data, setData] = useState(null);
   const [diffData, setDiffData] = useState(null);
@@ -37,10 +38,12 @@ export default function Intel({ layout }) {
   const [starredOnly, setStarredOnly] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [busy, setBusy] = useState(false);
-  // 多源同事件合并：打开后信息流按「事件」而不是按「条目」呈现
+  // Same event from several sources merged: when on, the stream is presented by "event" rather
+  // than by "item"
   const [merge, setMerge] = useState(false);
   const [events, setEvents] = useState(null);
-  // 图片打标：就绪状态决定按钮能不能点（未启用时把原因写在 tooltip 上）
+  // Image tagging: the ready state decides whether the button is clickable (when it is not
+  // enabled, the reason goes into the tooltip)
   const [visionReadyOk, setVisionReadyOk] = useState(null);
   const [visionReason, setVisionReason] = useState('');
 
@@ -138,7 +141,7 @@ export default function Intel({ layout }) {
         {L.showSource && <span className="chip">{it.sourceName?.[lang] ?? it.sourceId}</span>}
         {L.showTime && it.time ? <span className="muted small">{fmtTime(it.time)}</span> : null}
         {it.keywords?.length ? <span className="chip alert">⚠ {it.keywords.join('/')}</span> : null}
-        {/* 图片标签：来自视觉模型打标（读时合并自缓存）。图标按 kind 给，一眼可辨是什么图 */}
+        {/* Image tags: produced by vision-model tagging (merged from the cache at read time). The icon comes from kind, so what the image is can be told at a glance */}
         {(it.imageTags ?? []).map((tag) => (
           <span className="chip img-tag" key={'img-' + tag} title={(it.imageKinds ?? []).join('/')}>
             {IMAGE_KIND_ICON[it.imageKinds?.[0]] ?? '🖼'} {tag}
@@ -314,7 +317,7 @@ export default function Intel({ layout }) {
         </div>
         <div className="hint" style={{ margin: 0 }}>
           {data?.generatedAt
-            ? `${t('generatedAt')}: ${fmtTime(data.generatedAt)} · ${data.count}/${data.total} ${t('items')}${data.starred ? ` · ★ ${data.starred}` : ''}`
+            ? `${t('generatedAt')}: ${fmtTime(data.generatedAt)} · ${data.count}/${tn('items', data.total)}${data.starred ? ` · ★ ${data.starred}` : ''}`
             : t('noIntel')}
         </div>
         {err && <p style={{ color: 'var(--err)' }}>❌ {err}</p>}

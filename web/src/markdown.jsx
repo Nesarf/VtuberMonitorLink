@@ -1,10 +1,11 @@
-// markdown.jsx — 自带的极简 Markdown 渲染器
+// markdown.jsx — the built-in minimal Markdown renderer
 //
-// 为什么自己写而不用 marked / react-markdown：
-//   1) 报告内容来自「抓到的网页 + LLM 输出」，是不可信文本。先整体转义、再只
-//      放行我们自己生成的标签与 http(s) 图片地址，比引入一整条依赖链要可控；
-//   2) 发行包要能离线构建，少一个依赖少一份供应链风险。
-//   —— 因此：**任何原始 HTML 都当纯文本**，绝不做 dangerouslySetInnerHTML。
+// Why write our own instead of using marked / react-markdown:
+//   1) Report content comes from "scraped web pages + LLM output"; it is untrusted text.
+//      Escaping everything first and then allowing only the tags we generate ourselves plus
+//      http(s) image addresses is more controllable than pulling in a whole dependency chain;
+//   2) The release has to build offline, and one fewer dependency is one less supply-chain risk.
+//   — Therefore: **any raw HTML is treated as plain text**, never dangerouslySetInnerHTML.
 import React from 'react';
 
 const INLINE = [
@@ -23,13 +24,13 @@ const INLINE = [
       </a>
     ),
   },
-  // 裸 http(s) 链接
+  // bare http(s) link
   { re: /(^|[\s(])(https?:\/\/[^\s<>")]+)/g, render: (m, k) => [m[1], <a key={k} href={m[2]} target="_blank" rel="noreferrer noopener">{m[2]}</a>] },
-  // **必须** 也当强调
+  // 【...】 counts as emphasis too — english-logic:allow (the CJK brackets ARE the subject here)
   { re: /【([^】]{2,20})】/g, render: (m, k) => <strong key={k} className="badge-strong">{m[1]}</strong> },
 ];
 
-/** 行内渲染：输入是纯文本，输出是 React 节点数组 */
+/** Inline rendering: the input is plain text, the output is an array of React nodes */
 function renderInline(text, keyPrefix = 'i') {
   let nodes = [text];
   let step = 0;
@@ -58,26 +59,28 @@ function renderInline(text, keyPrefix = 'i') {
     nodes = next;
   }
 
-  // 高亮告警关键词（前端在渲染层做，服务端不用管）
+  // Alarm keywords are highlighted in the front end at the rendering layer; the server does not care
   return nodes;
 }
 
 const IMG_RE = /^!\[([^\]]*)\]\((https?:[^)\s]+)\)$/;
 
 /**
- * 行内 Markdown（**粗体** / `code` / 链接 / 【强调】），**不产生块级元素**。
+ * Inline Markdown (**bold** / `code` / links / 【emphasis】), producing **no block-level elements**.
+ * english-logic:allow — the CJK emphasis brackets are the thing being described.
  *
- * 用途：界面上的提示句（`.hint`）里写了 `**浏览器**` 这种强调，但它们以前是当纯文本渲染的 ——
- * 于是使用者看到的是一串星号（实测确认：`.hint` 里 0 个 <strong>，字面 3 处 `**`）。
- * 提示句本来就是一句话，不需要 <p> 包裹，所以只放行行内样式。
+ * Use case: hint sentences in the UI (`.hint`) contain emphasis written as `**browser**`, but they
+ * used to be rendered as plain text — so the user saw a row of asterisks (measured: 0 <strong> in
+ * `.hint`, 3 literal `**`). A hint is a single sentence and needs no <p> wrapper, so only inline
+ * styles are allowed through.
  */
 export function Inline({ text }) {
   return <>{renderInline(String(text ?? ''))}</>;
 }
 
 /**
- * 把 Markdown 渲染成 React 元素。
- * 支持：# 标题 / 列表 / 表格 / 引用 / 分隔线 / 代码块 / 图片 / 行内样式
+ * Render Markdown into React elements.
+ * Supports: # headings / lists / tables / quotes / horizontal rules / code blocks / images / inline styles
  */
 export function Markdown({ text, className, highlight = [] }) {
   const src = String(text ?? '');
@@ -120,7 +123,7 @@ export function Markdown({ text, className, highlight = [] }) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // 代码块
+    // code block
     if (/^\s*```/.test(line)) {
       const buf = [];
       i++;
@@ -134,7 +137,7 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 表格
+    // table
     if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
       const head = line.trim().slice(1, -1).split('|').map((c) => c.trim());
       i += 2;
@@ -158,7 +161,7 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 标题
+    // heading
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
     if (h) {
       const Tag = `h${Math.min(6, h[1].length)}`;
@@ -167,14 +170,14 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 分隔线
+    // horizontal rule
     if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       blocks.push(<hr key={key++} />);
       i++;
       continue;
     }
 
-    // 引用
+    // blockquote
     if (/^\s*>\s?/.test(line)) {
       const buf = [];
       while (i < lines.length && /^\s*>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
@@ -182,7 +185,7 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 列表（含嵌套一级）
+    // list (one level of nesting included)
     if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
       const items = [];
       while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
@@ -202,7 +205,7 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 独占一行的图片
+    // an image on its own line
     const img = IMG_RE.exec(line.trim());
     if (img) {
       blocks.push(
@@ -215,13 +218,13 @@ export function Markdown({ text, className, highlight = [] }) {
       continue;
     }
 
-    // 空行
+    // blank line
     if (!line.trim()) {
       i++;
       continue;
     }
 
-    // 段落
+    // paragraph
     const buf = [line];
     i++;
     while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*[-*+]\s|\s*\d+\.\s|>\s?|\||\s*```)/.test(lines[i])) {

@@ -1,22 +1,25 @@
-// search.js — 情报检索 / local search over everything collected
+// search.js - local search over everything collected
 //
-// 设计立场（按需求）：**搜索本身不需要 LLM、不需要联网**。
-// 它就是一个本地索引 + 关键词/标签/时间区间的匹配器 —— 像查论文、像浏览器里 Ctrl+F，
-// 有网没网、有没有配 LLM 都能用。LLM 只在「只记得特征、忘了名字」时作为**可选的**助手出现。
+// Design stance (per the requirements): **search itself needs no LLM and no network**.
+// It is a local index plus a keyword/tag/time-range matcher - like searching papers, like
+// Ctrl+F in a browser: it works online or offline, with or without an LLM configured. The LLM
+// only appears as an **optional** assistant for "I remember the traits but forgot the name".
 //
-// 索引来源：feeds/<date>/_items.json（每次运行落盘的情报条目，含历史）。
-// 标签来源：自动标签（来源 / 分类 / 关键词命中 / 正文里的 #话题# 与【名】）+ 用户手打的标签。
+// Index source: feeds/<date>/_items.json (the intel items each run writes to disk, history included).
+// Tag source: automatic tags (source / category / keyword hits / #topic# and bracketed name
+// markers in the body) plus tags typed by the user.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
 const DAY_MS = 86_400_000;
 
-// ───────────────────────────────────────── 时间归一化
+// ───────────────────────────────────────── time normalization
 
 /**
- * B 站给的是相对时间（"8小时前"、"3天前"、"8月29日"），要做时间区间筛选就必须先归一化。
- * 以**该次运行的生成时间**为参照点，而不是「现在」—— 否则翻历史时会算错。
+ * bilibili hands back relative times (Chinese strings such as "8 hours ago", "3 days ago",
+ * "August 29"), so range filtering requires normalizing them first. The reference point is
+ * **the run's generation time**, not "now" - otherwise revisiting history computes it wrong.
  */
 export function parseItemTime(raw, referenceISO) {
   const s = String(raw ?? '').trim();
@@ -37,12 +40,12 @@ export function parseItemTime(raw, referenceISO) {
   if (s === '前天') return new Date(ref.getTime() - 2 * DAY_MS).toISOString();
   if (/^今天|^\d+分钟前/.test(s)) return ref.toISOString();
 
-  // "8月29日" / "2025年8月29日"
+  // The bare month/day shape, with or without a leading year (see the regex right below)
   m = /^(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日$/.exec(s);
   if (m) {
     const year = m[1] ? Number(m[1]) : ref.getFullYear();
     const d = new Date(year, Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
-    // 没有年份且比参照点还晚 → 说的是去年
+    // no year and later than the reference point -> it means last year
     if (!m[1] && d.getTime() > ref.getTime() + 2 * DAY_MS) d.setFullYear(year - 1);
     return d.toISOString();
   }
@@ -50,11 +53,11 @@ export function parseItemTime(raw, referenceISO) {
   return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
-// ───────────────────────────────────────── 标签词表
+// ───────────────────────────────────────── tag vocabulary
 
 const DEFAULT_VOCAB = {
-  // 规范名 -> 别名（任一别名命中即算命中该标签）
-  // 注意：键名以数字开头的（2434 / 3D披露）必须加引号，否则不是合法标识符
+  // canonical name -> aliases (a hit on any alias counts as a hit on the tag)
+  // Note: keys starting with a digit (2434 / 3D debut) must be quoted, or they are not valid identifiers
   个人势: ['個人勢', '个人势', 'indie', '个人势vtuber'],
   '2434': ['にじさんじ', '彩虹社', 'nijisanji', '2434'],
   马里奥赛车: ['マリオカート', '马车', 'mario kart', 'mariokart'],
@@ -91,7 +94,7 @@ export function saveVocab(cfg, tags) {
   return tags;
 }
 
-/** 把一个检索词展开成它的全部别名 */
+/** Expand one search term into all of its aliases */
 export function expandTerm(vocab, term) {
   const t = String(term ?? '').trim();
   if (!t) return [];
@@ -103,7 +106,7 @@ export function expandTerm(vocab, term) {
   return [t];
 }
 
-// ───────────────────────────────────────── 索引
+// ───────────────────────────────────────── index
 
 function listRunDirs(cfg, days) {
   const root = resolveDir(cfg, 'feedsDir');
@@ -116,13 +119,13 @@ function listRunDirs(cfg, days) {
     .slice(0, days);
 }
 
-/** 自动标签：来源 / 分类 / 关键词命中 / 正文里的 #话题# 与【名】 */
+/** Automatic tags: source / category / keyword hits / #topic# and bracketed name markers in the body */
 export function autoTags(item) {
   const out = new Set();
   if (item.sourceId) out.add(`来源:${item.sourceId}`);
   if (item.category) out.add(`分类:${item.category}`);
   for (const k of item.keywords ?? []) out.add(String(k));
-  // LLM 抽出来的特征也进标签，这样「只记得玩什么游戏」也能搜到
+  // Features the LLM extracted become tags too, so "I only remember which game they played" still finds it
   for (const k of item.feats ?? []) out.add(String(k));
   for (const k of item.features?.names ?? []) out.add(String(k));
   const text = `${item.title ?? ''} ${item.text ?? ''}`;
@@ -133,7 +136,7 @@ export function autoTags(item) {
 }
 
 /**
- * 建立索引。可传 days 限制回溯天数。
+ * Build the index. Pass days to limit how far back it looks.
  * @returns {{items:Array, runs:Array, builtAt:string}}
  */
 export function buildIndex(cfg, { days = 60, flags = {} } = {}) {
@@ -154,8 +157,9 @@ export function buildIndex(cfg, { days = 60, flags = {} } = {}) {
             ...it,
             runDate: d,
             runAt,
-            // 有些来源没有发布时间（B 站的免登录图文动态就是 pub_time 为空）。
-            // 这时用「首次见于哪次运行」兜底，否则时间区间会把这些条目整批排除掉。
+            // Some sources carry no publish time (bilibili's login-free image/text dynamics come
+            // back with an empty pub_time). Fall back to "which run first saw it", otherwise a
+            // time range would exclude these items as a batch.
             ts: own ?? runAt,
             tsSource: own ? 'item' : 'run',
             tags: [...new Set([...autoTags(it), ...((flags[it.id]?.tags ?? []) || [])])],
@@ -163,17 +167,17 @@ export function buildIndex(cfg, { days = 60, flags = {} } = {}) {
           items.push(withTime);
         }
       } catch {
-        /* 坏文件跳过 */
+        /* skip broken files */
       }
     }
   }
-  // 同一个 id 只留最新一次（后面的覆盖前面的）
+  // Keep only the latest copy per id (later ones overwrite earlier ones)
   const byId = new Map();
   for (const it of items) byId.set(it.id, it);
   return { items: [...byId.values()], runs, builtAt: new Date().toISOString() };
 }
 
-// ───────────────────────────────────────── 检索
+// ───────────────────────────────────────── search
 
 const FIELD_SETS = {
   any: (i) => `${i.title ?? ''} ${i.text ?? ''} ${i.url ?? ''} ${i.sourceName?.zh ?? ''} ${i.sourceName?.en ?? ''} ${(i.tags ?? []).join(' ')}`,
@@ -192,7 +196,7 @@ function tokenize(q) {
 }
 
 /**
- * 检索。纯字符串匹配 —— 不需要 LLM，不需要联网。
+ * Search. Pure string matching - no LLM, no network.
  * @param {object} cfg
  * @param {{q?:string, tags?:string[], source?:string, category?:string, from?:string, to?:string,
  *          field?:string, starred?:boolean, limit?:number, offset?:number, sort?:string, days?:number}} query
@@ -205,7 +209,7 @@ export function search(cfg, query = {}, flags = {}) {
   const pick = FIELD_SETS[field];
 
   const tokens = tokenize(query.q);
-  // 每个词展开成别名组；一个组内命中任一别名即可
+  // Each term expands into a group of aliases; a hit on any alias in the group counts
   const groups = tokens.map((t) => expandTerm(vocab, t).map((x) => x.toLowerCase()));
   const wantTags = (query.tags ?? []).filter(Boolean);
 
@@ -268,7 +272,7 @@ export function search(cfg, query = {}, flags = {}) {
     return Date.parse(b.ts ?? b.runAt) - Date.parse(a.ts ?? a.runAt);
   });
 
-  // 分面（像论文检索左侧那种计数）
+  // Facets (the counts you see down the left of a paper search)
   const facet = (list, keyFn) => {
     const m = new Map();
     for (const it of list) for (const k of keyFn(it)) m.set(k, (m.get(k) ?? 0) + 1);
@@ -293,14 +297,15 @@ export function search(cfg, query = {}, flags = {}) {
     terms: tokens,
     expanded: groups,
     corpus: { items: idx.items.length, runs: idx.runs.length, days: Number(query.days) || 60 },
-    // 有时间但落在区间外的条数 —— 让使用者知道「不是没搜到，是被时间条件挡了」
+    // Items that have a time but fall outside the range - so the user knows "it is not that
+    // nothing was found, it was filtered out by the time condition"
     outsideTimeRange: timeFiltered,
     facets,
     items: matched.slice(offset, offset + limit),
   };
 }
 
-/** 词表 + 语料统计，给检索页做标签云 */
+/** Vocabulary + corpus stats, used by the search page to build the tag cloud */
 export function tagCloud(cfg, flags = {}) {
   const idx = buildIndex(cfg, { days: 60, flags });
   const vocab = loadVocab(cfg);
@@ -318,7 +323,7 @@ export function tagCloud(cfg, flags = {}) {
   };
 }
 
-/** 给 LLM 助手用的语料摘要（只在前端点了「帮我认人」时才会用到） */
+/** Corpus digest for the LLM assistant (only used when the frontend clicks "help me identify people") */
 export function corpusSample(cfg, limit = 200) {
   const idx = buildIndex(cfg, { days: 30 });
   return idx.items

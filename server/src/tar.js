@@ -1,15 +1,17 @@
-// tar.js — 极简 tar 读取（只为解 GitHub 的 tarball，零依赖）
+// tar.js — a minimal tar reader (only to unpack GitHub tarballs, zero dependencies)
 //
-// 为什么不用依赖：我们要的是「一条请求拿全库」（VDB 整库 tarball 只有 0.54MB），
-// 而为了解一个 tar 引入 npm 包不值得 —— 这个项目一贯只有 express/undici 两个运行时依赖。
-// 也不 shell 出去调 tar.exe：那会把「能在哪些平台跑」交给系统工具。
+// Why no dependency: what we want is "fetch the whole roster in one request" (the VDB full
+// tarball is only 0.54MB), and pulling in an npm package just to unpack a tar is not worth it
+// — this project has always had exactly two runtime dependencies, express/undici.
+// Nor do we shell out to tar.exe: that would hand "which platforms this runs on" to a system tool.
 //
-// 支持的形态（GitHub codeload / git archive 会用到）：
-//   · ustar 普通条目（type 0 / NUL / 7）
-//   · 目录条目（type 5）
-//   · GNU 长名（type L）：下一个条目的名字
-//   · pax 扩展头（type x）：里面的 `path=` 覆盖下一个条目的名字
-//     —— git archive 遇到长路径会发 pax，而不是 GNU L（中文名 + 长目录很容易触发）
+// Shapes we support (GitHub codeload / git archive use these):
+//   * ustar regular entries (type 0 / NUL / 7)
+//   * directory entries (type 5)
+//   * GNU long names (type L): the name of the next entry
+//   * pax extended headers (type x): the `path=` inside overrides the next entry's name
+//     — git archive emits pax rather than GNU L for long paths (a Chinese name + long
+//       directories triggers it easily)
 const BLOCK = 512;
 
 function cstr(buf) {
@@ -22,7 +24,7 @@ function octal(buf) {
   return parseInt(s, 8) || 0;
 }
 
-/** 解析 pax 扩展头（形如 `路径长度 key=value\n`） */
+/** Parse a pax extended header (shaped like `path-length key=value\n`) */
 export function parsePax(buf) {
   const out = {};
   let off = 0;
@@ -31,7 +33,7 @@ export function parsePax(buf) {
     if (sp === -1) break;
     const len = parseInt(buf.subarray(off, sp).toString('utf8'), 10);
     if (!Number.isFinite(len) || len <= 0) break;
-    const rec = buf.subarray(sp + 1, off + len - 1).toString('utf8'); // 末尾是 \n
+    const rec = buf.subarray(sp + 1, off + len - 1).toString('utf8'); // the trailing byte is \n
     const eq = rec.indexOf('=');
     if (eq > 0) out[rec.slice(0, eq)] = rec.slice(eq + 1);
     off += len;
@@ -40,8 +42,8 @@ export function parsePax(buf) {
 }
 
 /**
- * 读一个未压缩的 tar。
- * @returns {Map<string, Buffer>} 路径 → 内容（目录不入表）
+ * Read an uncompressed tar.
+ * @returns {Map<string, Buffer>} path -> content (directories are not put in the map)
  */
 export function readTar(buf) {
   const files = new Map();
@@ -51,7 +53,7 @@ export function readTar(buf) {
 
   while (off + BLOCK <= buf.length) {
     const header = buf.subarray(off, off + BLOCK);
-    if (header.every((b) => b === 0)) break; // 结束块
+    if (header.every((b) => b === 0)) break; // end-of-archive block
 
     const name = cstr(header.subarray(0, 100));
     const size = octal(header.subarray(124, 136));
@@ -62,11 +64,11 @@ export function readTar(buf) {
     const next = dataStart + Math.ceil(size / BLOCK) * BLOCK;
 
     if (type === 'L') {
-      pendingName = cstr(data); // GNU 长名：下一个条目的名字
+      pendingName = cstr(data); // GNU long name: the next entry's name
     } else if (type === 'x' || type === 'g') {
-      pendingPax = parsePax(data); // pax：path= 覆盖下一个条目的名字
+      pendingPax = parsePax(data); // pax: path= overrides the next entry's name
     } else if (type === '5') {
-      // 目录：跳过
+      // directory: skip
       pendingName = null;
       pendingPax = null;
     } else {

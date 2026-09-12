@@ -1,15 +1,17 @@
-// entities.js — 人物档案 / entity aggregation
+// entities.js — entity aggregation
 //
-// 特征抽取（features.js）已经把条目里的**人名**抽出来了，这里把它们聚合成「对象」：
-// 一个人出现过哪些条目、属于哪个事务所、玩什么游戏、涉及哪些事件、从何时到何时活跃。
-// 这是从「条目流」升级到「对象库」的那一步 —— 也是继续做关系图、粉丝曲线的地基。
+// Feature extraction (features.js) already pulls the **person names** out of items; this module
+// aggregates them into "objects": which items a person appeared in, which agency they belong to,
+// which games they play, which events they are involved in, and when they were active.
+// This is the step from "item stream" up to "object library" — and the foundation for the
+// relationship graph and the follower curve that come next.
 //
-// 纯本地统计，不需要 LLM、不需要联网：只读 feeds/features.json 与 feeds/*/_items.json。
+// Purely local statistics: no LLM, no network. It only reads feeds/features.json and feeds/*/_items.json.
 import { resolveDir } from './config.js';
 import { buildIndex } from './search.js';
 import { loadFeatureCache } from './features.js';
 
-/** 把同一个人名的各种写法归并（大小写、空格、全半角） */
+/** Collapse the various spellings of one person name (case, spaces, full/half width) */
 export function normalizeName(s) {
   return String(s ?? '')
     .trim()
@@ -19,7 +21,7 @@ export function normalizeName(s) {
 }
 
 /**
- * 聚合人物。
+ * Aggregate people.
  * @param {object} cfg
  * @param {{min?:number, days?:number, flags?:object}} opts
  */
@@ -39,7 +41,7 @@ export function listEntities(cfg, opts = {}) {
       if (!byKey.has(key)) {
         byKey.set(key, {
           key,
-          name: raw, // 展示用，取第一次见到的写法
+          name: raw, // for display: keep the first spelling seen
           aliases: new Set(),
           items: [],
           agencies: new Map(),
@@ -83,13 +85,13 @@ export function listEntities(cfg, opts = {}) {
       indie: !!e.indie,
       firstAt: e.firstAt ? new Date(e.firstAt).toISOString() : null,
       lastAt: e.lastAt ? new Date(e.lastAt).toISOString() : null,
-      // 最近一条正文，列表里当摘要用
+      // body text of the most recent item, used as the summary in the list
       sample: String(e.items.find((i) => (i.text ?? '').length > 4)?.text ?? '').replace(/\s+/g, ' ').slice(0, 120),
     }))
     .sort((a, b) => b.count - a.count || (b.lastAt ?? '').localeCompare(a.lastAt ?? ''));
 }
 
-/** 单个对象的详情：它的全部条目 + 时间线 */
+/** Detail of one object: all of its items plus a timeline */
 export function entityDetail(cfg, name, opts = {}) {
   const wanted = normalizeName(name);
   const all = listEntities(cfg, { ...opts, min: 1 });

@@ -47,7 +47,7 @@
 | **事件合并与来源权重** | IDF 加权相似度（专治「官方公告」这类套话）+ 并查集单链接 + 时间窗；权重可从「谁先报」的历史里自己长 |
 | **SQLite 归档与图表** | 按条目 id 幂等增量写入；每天计数；图表用**内联 SVG**，不引图表库 |
 | **一键分享** | 零外部引用的单文件 HTML（离线可看）；**按平台如实说明登录需求**，做不到的直接标「不支持」 |
-| **多语言与地区** | 25 个地区（含 zh-Hant/HK/TW、en-US/GB/AU/CA、es-ES/419/MX/AR、pt-PT/BR、fr-FR/CA、de/it/ja/ko/ru/uk/pl/sr/ar）；RTL；日期/数字/一周起始日按地区格式化 |
+| **多语言与地区** | 25 个地区（含 zh-Hant/HK/TW、en-US/GB/AU/CA、es-ES/419/MX/AR、pt-PT/BR、fr-FR/CA、de/it/ja/ko/ru/uk/pl/sr/ar）；RTL；日期/数字/一周起始日按地区格式化；**数词词形**按 `Intl.PluralRules` 选形（`1 запись / 2 записи / 5 записей`，顺带修掉英语的 `1 items`）；逐条校对与覆盖度棘轮 + 「记号渲染」守卫都进 `verify:fast` |
 | **自动出口** | 每个站点按「等效延迟 = 平均延迟 ×（1 + 丢包 × 4）」自动选直连或代理，带粘滞（优势不足 20% 不切换），真实抓取结果会反哺判定 |
 
 ### 社团花名册（VDB，多平台）
@@ -200,6 +200,11 @@ npm run traverse:ui   # 真实浏览器里走完十一个页面，并用 mock LL
 npm run release       # 上述全套
 ```
 
+另外三条「约定」类守卫也在这条链里（`verify:fast`）：
+`tools/english-logic.mjs`（工程层只许英文 —— 注释与日志，界面词条与产品文案不在此列，
+见 `docs/ENGLISH-LOGIC.md`）、`tools/i18n-plural-test.mjs`（数词词形完整性）、
+`tools/hint-md-test.mjs`（带 markdown 记号的文案必须走 `<Inline>`）。
+
 ### 第三方数据与署名
 
 本工具的代码是 MIT，但它会**在运行时**从外部取数据，那些数据有各自的许可与作者：
@@ -256,7 +261,7 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 | **Event merge & source weight** | IDF-weighted similarity + union-find single link + time window; weights grow from "who reported it first" |
 | **SQLite archive & charts** | Idempotent incremental writes keyed by item id; daily counts; charts are **inline SVG**, no chart library |
 | **One-click share** | A single HTML file with zero external references (readable offline); **login requirements stated honestly per platform**, unsupported ones are labelled as such |
-| **Locales & regions** | 25 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar); RTL; dates, numbers and week start formatted per region |
+| **Locales & regions** | 25 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar); RTL; dates, numbers and week start formatted per region; **plural forms** chosen by `Intl.PluralRules` (`1 запись / 2 записи / 5 записей`, which also fixes the old English `1 items`); per-entry proofreading, a coverage ratchet and a markup-rendering guard all run inside `verify:fast` |
 | **Automatic egress** | Each site picks direct or proxy by "effective latency = mean latency × (1 + loss × 4)", with stickiness (no switch below a 20% edge); real fetch results feed the decision back |
 
 ### VDB roster (multi-platform)
@@ -378,6 +383,12 @@ npm run traverse      # walk every HTTP endpoint, the SPA fallback and the error
 npm run traverse:ui   # walk all eleven pages in a real browser and do a real run against the mock LLM
 npm run release       # all of the above
 ```
+
+Three convention guards ride along in the same chain (`verify:fast`):
+`tools/english-logic.mjs` (the engineering layer is English only — comments and logs; UI strings and
+product copy are out of scope, see `docs/ENGLISH-LOGIC.md`), `tools/i18n-plural-test.mjs`
+(plural-form tables are complete per language) and `tools/hint-md-test.mjs`
+(any string carrying markdown must be rendered through `<Inline>`).
 
 ---
 

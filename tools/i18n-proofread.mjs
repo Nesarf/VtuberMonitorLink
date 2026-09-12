@@ -1,19 +1,22 @@
-// i18n-proofread.mjs — 全语言逐条校对 / proofread every locale, every used key
+// i18n-proofread.mjs — proofread every locale, entry by entry / proofread every locale, every used key
 //
-// 为什么需要它：翻译管线与覆盖度只能回答「有没有值」「是不是还留着中文」。
-// 真正会让界面出问题的错是**结构性的**：占位符被吃掉（{target} 不见了 → 提示变成残句）、
-// Markdown 的 ** 只剩一个（整段渲染成粗体）、换行被吞（两条提示粘成一行）、
-// 全角标点混进欧洲语言、按钮文案被截成半句。
-// 这些错**不会报错、不会白屏**，只是安静地变难看 —— 所以必须逐条比对源串。
+// Why it is needed: the translation pipeline and the coverage check can only answer "is there a value"
+// and "is there still Chinese left". The mistakes that actually break the UI are **structural**:
+// a placeholder got eaten ({target} is gone -> the hint turns into a broken sentence), a Markdown **
+// lost its pair (the whole block renders bold), a newline got swallowed (two hints glued into one line),
+// full-width punctuation leaked into a European locale, a button label got cut off mid-sentence.
+// These mistakes **throw nothing and never show a white screen**, they just quietly turn ugly --
+// so every single string has to be compared against its source.
 //
-// 判据分两档：
-//   hard   结构性破坏（占位符/加粗/换行/首尾空格）→ 直接判失败，棘轮卡住
-//   suspect 可疑但可能是对的（与英文逐字相同、长度离谱、全角标点、重复译文…）→ 记账，不许变多
+// Two tiers of verdicts:
+//   hard    structural breakage (placeholder/bold/newline/leading-trailing space) -> fail outright, the ratchet holds
+//   suspect suspicious but possibly right (identical to English, absurd length, full-width punctuation,
+//           duplicate translation...) -> recorded, must not grow
 //
-//   node tools/i18n-proofread.mjs                 全语言 + 与基线比对
-//   node tools/i18n-proofread.mjs --locale ko-KR  只看一个语言
-//   node tools/i18n-proofread.mjs --max 20        每个检查最多列几条
-//   node tools/i18n-proofread.mjs --update        把当前 suspect 计数写成新基线
+//   node tools/i18n-proofread.mjs                 all locales + compare against the baseline
+//   node tools/i18n-proofread.mjs --locale ko-KR  one locale only
+//   node tools/i18n-proofread.mjs --max 20        at most N rows per check
+//   node tools/i18n-proofread.mjs --update        write the current suspect counts out as the new baseline
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -22,7 +25,7 @@ import { HAND, HAND_COMMON } from '../web/src/locales/overlays.js';
 import { convertDict, toBritish } from '../web/src/locales/spelling.js';
 import { readDicts, usedKeys } from './lib/i18n-source.mjs';
 import { usableChain } from './lib/locale-chain.mjs';
-import { looksUntranslated, hasStraySentinel } from './i18n-translate.mjs';
+import { looksUntranslated } from './i18n-translate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = path.join(ROOT, 'web/src/locales/proofread.json');
@@ -50,17 +53,20 @@ const MACHINE = readJson(path.join(ROOT, 'web/src/locales/machine.json'), {});
 const GLOSSARY = readJson(path.join(ROOT, 'web/src/locales/glossary.json'), {});
 const GENERATED = (await import(pathToFileURL(path.join(ROOT, 'web/src/locales/generated.js')).href)).GENERATED ?? {};
 
-// 与 i18n.jsx 的 dict memo **逐字对应**的合并（分级正向合并 → 英文兜底）。
-// 顺序一旦不一致，校对对象就和界面看到的不是同一份东西 —— 那这份报告就没有意义了。
-// 特别是每级结尾的 `OVERLAY[c] ?? derived[c] ?? STRINGS[c] ?? {}`：
-// 这里是 **{}**，不是英文词条。写成英文词条的话，凡是自己没有人工层的地区
-// （例如 fr-CA）都会被整份英文盖掉 —— 我第一版就是这么写的，于是它「发现」了
-// 一个 560 条英文的假问题（真实界面是法语）。校对自己的假阳性同样会骗人。
+// The merge that corresponds **character for character** to the dict memo in i18n.jsx (per-level
+// forward merge, then English fallback).
+// The moment the order differs, the thing being proofread is no longer the same thing the UI shows --
+// and then this report means nothing at all.
+// In particular the `OVERLAY[c] ?? derived[c] ?? STRINGS[c] ?? {}` at the end of every level:
+// what goes here is **{}**, not the English dictionary. With the English dictionary, every region that
+// has no hand layer of its own (fr-CA, say) gets buried under the whole English file -- which is how I
+// wrote the first version, and it "found" a fake problem of 560 English rows (the real UI is French).
+// A false positive of your own checker lies to you just as well.
 const EN_DICT = Object.fromEntries(en);
 const derived = { ...GENERATED, 'en-GB': convertDict(EN_DICT, toBritish), 'en-AU': convertDict(EN_DICT, toBritish), 'en-CA': convertDict(EN_DICT, toBritish) };
 const ZH_DICT = Object.fromEntries(zh);
 
-/** 某一级自己的底本（只有 zh / en 有整本，其余地区没有就只有空对象） */
+/** The base text of one level itself (only zh / en have a whole dictionary; other regions have none, so an empty object) */
 const baseDictFor = (c) => (c === 'zh' || c === 'zh-Hans' ? ZH_DICT : c === 'en' || c === 'en-US' ? EN_DICT : {});
 
 function mergedDict(code) {
@@ -76,10 +82,10 @@ function mergedDict(code) {
   return { ...EN_DICT, ...out };
 }
 
-/** 这个语言**自己**提供的值（回落英文的不算），用于区分「漏译」与「英文兜底」 */
+/** The values this locale supplies **itself** (English fallbacks do not count), to tell "missing translation" from "English fallback" */
 function ownDict(code) {
   const own = {};
-  if (code.split('-')[0] === 'en') return { ...EN_DICT }; // 英文自己就是基准语言，整份都算「自己的」
+  if (code.split('-')[0] === 'en') return { ...EN_DICT }; // English is the base language itself, its whole dictionary counts as "its own"
   for (const c of usableChain(code)) {
     for (const layer of [MACHINE[c], HAND_COMMON[c], HAND[c], derived[c]]) {
       if (layer) Object.assign(own, layer);
@@ -89,24 +95,39 @@ function ownDict(code) {
   return own;
 }
 
-// ───────────────────────────────────────────── 结构指纹
+// ───────────────────────────────────────────── structural fingerprint
 
 /**
- * 必须**逐字不变**的令牌：动一个界面就坏了（{target} 不见 → 提示变残句）。
- * 注意日期/时间格式**不在**这里 —— 那些是给使用者看的说明，
- * 「MM-DD」翻成「MM-JJ」「MM-TT」其实是**对的**（法国人就是这么写日期的），
- * 把它算成结构破坏会制造一堆假警报（第一版就是这么误报的）。
+ * Any sentinel shape at all, not just the numbered kind.
+ *
+ * BUGS #64: i18n-translate.mjs's hasStraySentinel() only matches ⟦<digits>⟧, so a leftover sentinel
+ * carrying a *name* walked straight through the pipeline: web/src/locales/machine.json shipped
+ * `ar-SA outsideRange = "تم استبعاد ⟦n⟧ عنصرًا بسبب شرط الوقت"` and Arabic users literally saw ⟦n⟧ in
+ * the UI. A named sentinel is exactly as broken as a numbered one -- the numeric-only regex is what
+ * let this one ship -- so anything between ⟦ and ⟧ is a hard failure for the locale that shows it.
+ */
+const SENTINEL_RE = /⟦[^⟧]*⟧/g;
+/** Non-global twin of SENTINEL_RE for `.test()` (a /g regex would carry `lastIndex` from call to call) */
+const SENTINEL_TEST = /⟦[^⟧]*⟧/;
+
+/**
+ * Tokens that must stay **character for character unchanged**: touch one and the UI breaks
+ * ({target} gone -> the hint turns into a broken sentence).
+ * Note that date/time formats are deliberately **not** in here -- those are instructions for the
+ * reader, and translating "MM-DD" into "MM-JJ" / "MM-TT" is actually **correct** (that is how the
+ * French write dates); counting it as structural breakage would raise a pile of false alarms
+ * (which is exactly what the first version did).
  */
 const LITERAL_RES = [
   /\{[A-Za-z_][\w.]*\}/g, // {target} / {n}
   /\$\{[^}]+\}/g, // ${x}
   /%[sdif]\b/g, // %s
   /%[A-Z_]+%/g, // %TEMP%
-  /⟦\d+⟧/g,
+  SENTINEL_RE,
   /<\/?[a-z][a-z0-9]*>/g, // <video>
 ];
 
-/** 日期/时间格式令牌：按**类别**比（全大写形态：MM-DD / YYYY-MM-DD / MM-JJ / ДД-ММ） */
+/** Date/time format tokens: compared by **class** (all-caps shapes: MM-DD / YYYY-MM-DD / MM-JJ / ДД-ММ) */
 const FORMAT_RE = /\b[A-ZА-Я]{2,4}(?:-[A-ZА-Я]{2,4}){1,2}\b/g;
 
 export function literalTokens(text) {
@@ -120,10 +141,10 @@ export function formatTokens(text) {
 }
 
 const countOf = (text, needle) => String(text).split(needle).length - 1;
-/** 全角标点：中文/日文/韩文里是正常书写，欧洲与阿拉伯语言里混进来才是问题 */
+/** Full-width punctuation: normal writing in Chinese/Japanese/Korean, a problem only once it leaks into European or Arabic locales */
 const cjkPunct = /[（）【】「」『』，。；：？！、]/;
 
-// ───────────────────────────────────────────── 逐语言校对
+// ───────────────────────────────────────────── per-locale proofreading
 
 const HARD = [];
 const SUSPECT = [];
@@ -141,87 +162,91 @@ for (const loc of LOCALES) {
 
   for (const key of USED) {
     const src = zh.get(key);
-    if (!src) continue; // 没有源串的键没法比对（也不该有）
+    if (!src) continue; // a key with no source string cannot be compared (and should not exist)
     const val = dict[key];
     if (val === undefined) {
-      addHard(loc.code, key, '没有值（连英文兜底都没有）', '', src);
+      addHard(loc.code, key, 'no value at all (not even the English fallback)', '', src);
       continue;
     }
     const inOwn = Object.prototype.hasOwnProperty.call(own, key);
 
-    // ── hard：结构性破坏（对**显示出来的值**检查，不管是人工还是机翻）
+    // ── hard: structural breakage (checked on the **value that gets displayed**, hand-written or machine-translated alike)
     const tSrc = literalTokens(src).join(' ');
     const tVal = literalTokens(val).join(' ');
-    if (tSrc !== tVal) addHard(loc.code, key, `占位符不一致：源「${literalTokens(src).join('') || '无'}」→ 译文「${literalTokens(val).join('') || '无'}」`, val, src);
-    if (hasStraySentinel(val)) addHard(loc.code, key, '残留哨兵（模型凭空造的 ⟦n⟧，还原之后本不该存在）', val, src);
+    if (tSrc !== tVal) addHard(loc.code, key, `placeholder mismatch: source "${literalTokens(src).join('') || 'none'}" -> translation "${literalTokens(val).join('') || 'none'}"`, val, src);
+    if (SENTINEL_TEST.test(val)) addHard(loc.code, key, 'stray sentinel (a ⟦...⟧ the model invented, nothing should survive the restore)', val, src);
     const boldSrc = countOf(src, '**');
     const boldVal = countOf(val, '**');
-    if (boldSrc !== boldVal) addHard(loc.code, key, `加粗标记不配对：源 ${boldSrc} 个 ** / 译文 ${boldVal} 个`, val, src);
+    if (boldSrc !== boldVal) addHard(loc.code, key, `bold markers unbalanced: source ${boldSrc} ** / translation ${boldVal}`, val, src);
     const nlSrc = countOf(src, '\n');
     const nlVal = countOf(val, '\n');
-    if (nlSrc !== nlVal) addHard(loc.code, key, `换行数不同：源 ${nlSrc} / 译文 ${nlVal}`, val, src);
+    if (nlSrc !== nlVal) addHard(loc.code, key, `newline count differs: source ${nlSrc} / translation ${nlVal}`, val, src);
     if (src.trim() !== src || String(val).trim() !== String(val)) {
       const srcPad = src.length - src.trim().length;
       const valPad = String(val).length - String(val).trim().length;
-      if (srcPad !== valPad) addHard(loc.code, key, `首尾空格不同：源 ${srcPad} / 译文 ${valPad}`, val, src);
+      if (srcPad !== valPad) addHard(loc.code, key, `leading/trailing whitespace differs: source ${srcPad} / translation ${valPad}`, val, src);
     }
-    // 日期格式令牌：**整类消失**才算结构问题（数量差异是可疑项，见下）
+    // Date-format tokens: only the **whole class disappearing** counts as structural (a count difference is a suspect item, see below)
     const fmtSrc = formatTokens(src);
     const fmtVal = formatTokens(val);
-    if (fmtSrc.length && fmtVal.length === 0) addHard(loc.code, key, `日期格式说明整段丢失：源「${[...new Set(fmtSrc)].join(', ')}」`, val, src);
+    if (fmtSrc.length && fmtVal.length === 0) addHard(loc.code, key, `date-format hint lost entirely: source "${[...new Set(fmtSrc)].join(', ')}"`, val, src);
     if (fmtSrc.length && fmtVal.length && fmtVal.length !== fmtSrc.length) {
-      ownSuspect.push({ key, why: `日期格式出现次数不同（源 ${[...new Set(fmtSrc)].join(',')} / 译文 ${[...new Set(fmtVal)].join(',')}）`, val, src, kind: 'datefmt' });
+      ownSuspect.push({ key, why: `date-format occurrence count differs (source ${[...new Set(fmtSrc)].join(',')} / translation ${[...new Set(fmtVal)].join(',')})`, val, src, kind: 'datefmt' });
     }
 
-    // ── suspect：可疑但可能正确
-    // 「原文即英文」的键（LLM / API Key / 产品名）本来就不需要翻译，不算漏译
+    // ── suspect: suspicious but possibly right
+    // Keys whose "source text is English" (LLM / API Key / product names) need no translation at all, so they do not count as missing
     const langNeutral = src === en.get(key);
     if (!inOwn && !langNeutral) {
-      ownSuspect.push({ key, why: '这条是英文兜底（这个语言自己没写）', val, src, kind: 'fallback' });
+      ownSuspect.push({ key, why: 'this row is an English fallback (this locale never wrote its own)', val, src, kind: 'fallback' });
       continue;
     }
     if (lang !== 'en' && !langNeutral && src.length >= 12 && en.get(key) === val && src !== en.get(key)) {
-      // 短标签正好和英文一样很正常（Total / No / Proxy 这类同源词），
-      // 一整句还是英文才值得看一眼
-      ownSuspect.push({ key, why: '长句译文与英文逐字相同（源串并不是英文）', val, src, kind: 'same-as-en' });
+      // A short label happening to equal the English is perfectly normal (cognates like Total / No / Proxy);
+      // only a whole sentence still in English is worth a second look
+      ownSuspect.push({ key, why: 'long sentence identical to the English word for word (the source string is not English)', val, src, kind: 'same-as-en' });
     }
     if (lang !== 'zh' && lang !== 'ja' && lang !== 'ko') {
-      // 源串里本来就当**数据**出现的全角标点（例如「顿号/逗号分隔」里的那个顿号，
-      // 它是使用者真要敲的字符）不算「混入」—— 只有源串里没有、译文里自己冒出来的才算。
+      // Full-width punctuation that the **source string** already carries as *data* (the ideographic comma in
+      // "ideographic-comma separated", say -- it is a character the user really does have to type) does not
+      // count as "leaked in": only punctuation the source lacks and the translation produces by itself does.
       const srcPunct = new Set(String(src).match(/[（）【】「」『』，。；：？！、]/g) ?? []);
       const strayPunct = [...new Set(String(val).match(/[（）【】「」『』，。；：？！、]/g) ?? [])].filter((c) => !srcPunct.has(c));
-      if (strayPunct.length) ownSuspect.push({ key, why: `混入了全角标点「${strayPunct.join('')}」`, val, src, kind: 'cjk-punct' });
+      if (strayPunct.length) ownSuspect.push({ key, why: `full-width punctuation leaked in: "${strayPunct.join('')}"`, val, src, kind: 'cjk-punct' });
     }
     if (lang !== 'zh' && lang !== 'ja' && src.length >= 5 && String(en.get(key) ?? '').length >= 8) {
-      // 长度异常放到**跨语言**那一步再判：单个语言和英文比没意义 ——
-      // 韩语「알림 창 안」对上英文「Within reminder window」也才 0.29，
-      // 那不是错，是语言本来就紧凑。见下面 lengthOutliers()。
+      // Absurd length is judged one step later, **across locales**: comparing one locale against English alone
+      // says nothing -- Korean "알림 창 안" against English "Within reminder window" is only 0.29 too, and that
+      // is not a mistake, the language is simply compact. See lengthOutliers() below.
       lengthSamples.push({ code: loc.code, key, val: String(val) });
     }
     if (src.trimEnd().endsWith('…') !== String(val).trimEnd().endsWith('…')) {
-      ownSuspect.push({ key, why: '省略号有无不一致', val, src, kind: 'ellipsis' });
+      ownSuspect.push({ key, why: 'ellipsis presence differs', val, src, kind: 'ellipsis' });
     }
-    // 术语表里给了这个语言的约定叫法，译文却还留着**中文原词** → 覆盖值没生效。
-    // 只查中文术语：拉丁术语（bilibili / VTuber）本来就可能以原形出现，
-    // 而且「B 站」这类别名也映射到同一个值，拿它做判据必然误报（踩过）。
+    // The glossary gives this locale's agreed wording, yet the translation still carries the **Chinese source
+    // word** -> the override value never took effect.
+    // Only Chinese terms are checked: Latin terms (bilibili / VTuber) may legitimately appear in their original
+    // form, and an alias like the short form of bilibili maps to the same value, so using it as the criterion
+    // would necessarily raise false positives (learnt the hard way).
     for (const [term, spec] of Object.entries(GLOSSARY)) {
       if (term.startsWith('_')) continue;
       if (!/[\u4e00-\u9fff]/.test(term)) continue;
       const target = spec?.[loc.code];
       if (!target || target === term) continue;
       if (String(src).includes(term) && String(val).includes(term)) {
-        ownSuspect.push({ key, why: `术语「${term}」应当写成「${target}」，译文里仍是原词`, val, src, kind: 'glossary' });
+        ownSuspect.push({ key, why: `glossary term "${term}" should be written "${target}" but the translation still carries the source word`, val, src, kind: 'glossary' });
         break;
       }
     }
     if (lang !== 'zh' && lang !== 'ja' && looksUntranslated(val, loc.code, GLOSSARY)) {
-      addHard(loc.code, key, '译文里还留着汉字原文', val, src);
+      addHard(loc.code, key, 'the translation still carries the Chinese source text', val, src);
     }
     ownHan.push(key);
   }
 
-  // ── suspect：同一语言里两条不同的源串译成了**同一句长文案**（多为复制粘贴手误）。
-  // 只挑长句：短标签撞车是正常的（calAdded 与 calAlready 在日语里都是「カレンダーに追加済み」）。
+  // ── suspect: two different source strings inside one locale translated into the **same long sentence**
+  // (usually a copy-paste slip). Long sentences only: short labels colliding is normal
+  // (calAdded and calAlready are the very same string in Japanese).
   const byValue = new Map();
   for (const key of USED) {
     const val = own[key];
@@ -235,28 +260,28 @@ for (const loc of LOCALES) {
   for (const [val, keys] of byValue) {
     if (keys.length < 2) continue;
     const srcs = new Set(keys.map((k) => zh.get(k)));
-    if (srcs.size < 2) continue; // 源串本来就一样，译文一样是对的
+    if (srcs.size < 2) continue; // the source strings were identical to begin with, so identical values are right
     dupCount += keys.length;
-    if (ownSuspect.length < 400) ownSuspect.push({ key: keys.join(' / '), why: '不同的源串译成了同一个值（查一下是不是复制手误）', val, src: [...srcs].join(' | '), kind: 'duplicate' });
+    if (ownSuspect.length < 400) ownSuspect.push({ key: keys.join(' / '), why: 'different source strings translated into the same value (check for a copy-paste slip)', val, src: [...srcs].join(' | '), kind: 'duplicate' });
   }
 
   rows.push({ code: loc.code, name: loc.name, hard: HARD.filter((h) => h.code === loc.code).length, suspect: ownSuspect.length, dupCount, covered: ownHan.length });
   for (const s of ownSuspect) SUSPECT.push({ code: loc.code, ...s });
 }
 
-// 跨语言长度离群：补进可疑清单（每条都要能定位到语言，便于直接去修）
+// Cross-locale length outliers: appended to the suspect list (every one names its locale, so it can be fixed directly)
 for (const x of lengthOutliers()) {
   SUSPECT.push(x);
   const row = rows.find((r) => r.code === x.code);
   if (row) row.suspect++;
 }
 
-// ───────────────────────────────────────────── 跨语言：长度离群
+// ───────────────────────────────────────────── cross-locale: length outliers
 
 /**
- * 同一个键在 25 个语言里的长度**中位数**是很好的基准：
- * 各语言自己的松紧在中位数里已经体现了，真正的错（被截断、只剩一句、
- * 或者翻译时把整段丢了）才会离群。
+ * The **median** length of one key across the 25 locales is a very good baseline:
+ * each language's own tightness is already expressed in the median, and only a real mistake
+ * (truncated, reduced to a single sentence, or the whole paragraph dropped while translating) stands out.
  */
 function lengthOutliers() {
   const byKey = new Map();
@@ -266,30 +291,31 @@ function lengthOutliers() {
   }
   const out = [];
   for (const [key, list] of byKey) {
-    if (list.length < 6) continue; // 样本太少，中位数不可信
+    if (list.length < 6) continue; // too few samples, the median is not trustworthy
     const lens = list.map((x) => x.val.length).sort((a, b) => a - b);
     const mid = lens[Math.floor(lens.length / 2)];
     if (mid < 6) continue;
     for (const x of list) {
       if (x.val.length > mid * 3 || x.val.length < mid * 0.3) {
-        out.push({ code: x.code, key, val: x.val, src: zh.get(key) ?? '', why: `长度离群：其他语言中位数 ${mid}，这里是 ${x.val.length}`, kind: 'length' });
+        out.push({ code: x.code, key, val: x.val, src: zh.get(key) ?? '', why: `length outlier: the median of the other locales is ${mid}, this one is ${x.val.length}`, kind: 'length' });
       }
     }
   }
   return out;
 }
 
-// ───────────────────────────────────────────── 报告
+// ───────────────────────────────────────────── report
 
 const byKind = (kind) => SUSPECT.filter((s) => s.kind === kind);
 const hardByWhy = new Map();
 for (const h of HARD) {
-  const k = h.why.replace(/：.*$/, '');
+  // Group by the category part of the reason, i.e. the text before the colon; the detail after it varies per key
+  const k = h.why.replace(/:.*$/, '');
   if (!hardByWhy.has(k)) hardByWhy.set(k, []);
   hardByWhy.get(k).push(h);
 }
 
-/** 同一个键在哪些语言都出问题 —— 「一个键坏了 25 遍」和「25 个键各坏一遍」是两件事 */
+/** Which locales one and the same key fails in -- "one key broken 25 times" and "25 keys broken once each" are two different things */
 function hardByKey() {
   const m = new Map();
   for (const h of HARD) {
@@ -299,33 +325,33 @@ function hardByKey() {
   return [...m.values()].sort((a, b) => b.codes.length - a.codes.length);
 }
 
-process.stdout.write(`\n校对范围：${USED.length} 个界面词条 × ${rows.length} 个语言\n`);
-process.stdout.write(`源串取自简体词条（${zh.size} 条），显示值按 i18n.jsx 的合并顺序算出\n\n`);
+process.stdout.write(`\nproofread scope: ${USED.length} UI entries × ${rows.length} locales\n`);
+process.stdout.write(`source strings come from the simplified dictionary (${zh.size} entries); displayed values are computed with the i18n.jsx merge order\n\n`);
 for (const r of rows.sort((a, b) => b.hard - a.hard || b.suspect - a.suspect || a.code.localeCompare(b.code))) {
-  const flag = r.hard ? `✗ 结构性问题 ${r.hard}` : '✓ 结构正常';
-  process.stdout.write(`  ${r.code.padEnd(9)} ${flag.padEnd(16)} 可疑 ${String(r.suspect).padStart(3)}  自带词条 ${r.covered}\n`);
+  const flag = r.hard ? `✗ structural ${r.hard}` : '✓ fine';
+  process.stdout.write(`  ${r.code.padEnd(9)} ${flag.padEnd(16)} suspect ${String(r.suspect).padStart(3)}  own entries ${r.covered}\n`);
 }
 
 const show = (title, list, fmt) => {
   if (!list.length) return;
-  process.stdout.write(`\n${title}（${list.length} 条）\n`);
+  process.stdout.write(`\n${title} (${list.length} rows)\n`);
   for (const x of list.slice(0, args.max)) process.stdout.write('  ' + fmt(x) + '\n');
-  if (list.length > args.max) process.stdout.write(`  …还有 ${list.length - args.max} 条\n`);
+  if (list.length > args.max) process.stdout.write(`  ...and ${list.length - args.max} more\n`);
 };
 
 if (!args.quiet) {
   for (const [why, list] of hardByWhy) {
-    show(`✗ ${why}`, list, (x) => `${x.code} ${x.key}\n      源: ${JSON.stringify(String(x.src).slice(0, 90))}\n      值: ${JSON.stringify(String(x.val).slice(0, 90))}`);
+    show(`✗ ${why}`, list, (x) => `${x.code} ${x.key}\n      source: ${JSON.stringify(String(x.src).slice(0, 90))}\n      value: ${JSON.stringify(String(x.val).slice(0, 90))}`);
   }
-  show('✗ 同一个键在多个语言都出问题（按键汇总）', hardByKey(), (x) => `${x.key} —— ${x.codes.join(', ')}\n      ${x.why}`);
-  show('可疑：这条其实是英文兜底（该语言自己没写）', byKind('fallback'), (x) => `${x.code} ${x.key}`);
-  show('可疑：与英文逐字相同', byKind('same-as-en'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
-  show('可疑：日期格式出现次数不同（可能被本地化成 JJ/TT/GG 之类，属正常；数量差才可疑）', byKind('datefmt'), (x) => `${x.code} ${x.key}\n      ${x.why}`);
-  show('可疑：全角标点混进欧洲/阿拉伯语言', byKind('cjk-punct'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 70))}`);
-  show('可疑：短文案长度离谱', byKind('length'), (x) => `${x.code} ${x.key}\n      源: ${JSON.stringify(String(x.src).slice(0, 50))}\n      值: ${JSON.stringify(String(x.val).slice(0, 70))}`);
-  show('可疑：省略号不一致', byKind('ellipsis'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 70))}`);
-  show('可疑：术语表里的约定叫法没生效', byKind('glossary'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      值: ${JSON.stringify(String(x.val).slice(0, 80))}`);
-  show('可疑：不同源串译成同一个值', byKind('duplicate'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
+  show('✗ the same key fails in several locales (grouped by key)', hardByKey(), (x) => `${x.key} -- ${x.codes.join(', ')}\n      ${x.why}`);
+  show('suspect: this row is really an English fallback (the locale did not write its own)', byKind('fallback'), (x) => `${x.code} ${x.key}`);
+  show('suspect: identical to the English word for word', byKind('same-as-en'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
+  show('suspect: date-format occurrence count differs (localizing to JJ/TT/GG and the like is normal; only a count difference is suspicious)', byKind('datefmt'), (x) => `${x.code} ${x.key}\n      ${x.why}`);
+  show('suspect: full-width punctuation leaked into a European/Arabic locale', byKind('cjk-punct'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 70))}`);
+  show('suspect: short text with an absurd length', byKind('length'), (x) => `${x.code} ${x.key}\n      source: ${JSON.stringify(String(x.src).slice(0, 50))}\n      value: ${JSON.stringify(String(x.val).slice(0, 70))}`);
+  show('suspect: ellipsis presence differs', byKind('ellipsis'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 70))}`);
+  show('suspect: the glossary wording never took effect', byKind('glossary'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      value: ${JSON.stringify(String(x.val).slice(0, 80))}`);
+  show('suspect: different source strings translated into the same value', byKind('duplicate'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
 }
 
 const counts = Object.fromEntries(rows.map((r) => [r.code, r.suspect]));
@@ -333,7 +359,7 @@ const totalSuspect = SUSPECT.length;
 
 if (args.update) {
   fs.writeFileSync(BASELINE, JSON.stringify({ generatedAt: new Date().toISOString(), used: USED.length, locales: counts }, null, 2) + '\n', 'utf8');
-  process.stdout.write(`\n已写入基线 / baseline written: ${path.relative(ROOT, BASELINE)}\n`);
+  process.stdout.write(`\nbaseline written: ${path.relative(ROOT, BASELINE)}\n`);
   process.exit(HARD.length ? 1 : 0);
 }
 
@@ -343,13 +369,13 @@ if (baseline?.locales) {
   regressed = rows.filter((r) => (baseline.locales[r.code] ?? 0) < r.suspect).map((r) => `${r.code}: ${baseline.locales[r.code] ?? 0} → ${r.suspect}`);
 }
 
-process.stdout.write(`\n结构性（hard）问题：${HARD.length} 条 · 可疑：${totalSuspect} 条\n`);
+process.stdout.write(`\nstructural (hard) problems: ${HARD.length} · suspect: ${totalSuspect}\n`);
 if (regressed.length) {
-  process.stdout.write('\n可疑条数比基线变多了（要么修，要么确认后 --update）：\n');
+  process.stdout.write('\nsuspect counts grew against the baseline (fix them, or confirm and --update):\n');
   for (const r of regressed) process.stdout.write('  - ' + r + '\n');
 }
 if (HARD.length || regressed.length) {
-  process.stdout.write('\n校对未通过 / proofread failed\n');
+  process.stdout.write('\nproofread failed\n');
   process.exit(1);
 }
-process.stdout.write('\n校对通过 ✓\n');
+process.stdout.write('\nproofread passed ✓\n');

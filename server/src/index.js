@@ -1,5 +1,5 @@
-// index.js — 入口 / entry point
-// 起本机服务 → 自动打开浏览器 → 启动内置调度器
+// index.js — entry point
+// Start the local server -> open the browser automatically -> start the built-in scheduler
 import { spawn } from 'node:child_process';
 import { loadConfig, saveConfig, resolveDir, APP_ROOT } from './config.js';
 import { createLogger } from './logger.js';
@@ -15,10 +15,13 @@ const PORT = Number(process.env.PORT ?? 43110);
 const HOST = '127.0.0.1';
 
 /**
- * 把配置里的路径写进进程环境变量，供子模块/第三方库读取。
- * - VML_TEMP_DIR：cookie 库副本等临时文件的落地目录（可避开 C 盘）
- * - PLAYWRIGHT_BROWSERS_PATH：浏览器内核位置（默认在 Windows 上是 C 盘的 %LOCALAPPDATA%）
- * 两个都留空时保持系统默认，便携发行版因此不会绑死任何机器路径。
+ * Write the paths from the config into the process environment, for submodules/third-party
+ * libraries to read.
+ * - VML_TEMP_DIR: where temporary files such as the cookie-jar copy land (can avoid the C: drive)
+ * - PLAYWRIGHT_BROWSERS_PATH: browser engine location (on Windows this defaults to
+ *   %LOCALAPPDATA% on the C: drive)
+ * When both are left empty the system defaults stand, so the portable release never hard-codes
+ * a machine path.
  */
 function applyPathEnv(c) {
   const temp = String(c?.paths?.tempDir ?? '').trim();
@@ -30,13 +33,14 @@ function applyPathEnv(c) {
 let cfg = loadConfig();
 ensureDirs(cfg);
 applyPathEnv(cfg);
-// 启动即按配置应用代理（直连被阻断的环境必须显式走代理）
+// Apply the proxy from the config at startup (an environment where direct connections are
+// blocked must go through a proxy explicitly)
 await applyProxy(cfg);
 
 const log = createLogger(path.join(resolveDir(cfg, 'logsDir'), 'server.log'));
 log.info(`Vtuber's Monitor Link starting… (root: ${APP_ROOT})`);
 
-/** 计划任务触发 → 跑一次并记历史 */
+/** A scheduled task fired -> run once and record the history */
 async function runScheduled(task, meta = {}) {
   const r = await runOnce({ cfg, mode: task.mode, task, catchUp: !!meta.catchUp });
   scheduler.appendHistory(cfg, {
@@ -60,9 +64,9 @@ function openBrowser(url) {
     const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
     const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
     child.unref();
-    log.info(`已请求打开浏览器 / requested to open: ${url}`);
+    log.info(`requested to open: ${url}`);
   } catch (err) {
-    log.warn(`打开浏览器失败 / could not open browser: ${err.message}`);
+    log.warn(`could not open browser: ${err.message}`);
   }
 }
 
@@ -76,54 +80,55 @@ const app = createApp({
   onConfigChanged: (next) => {
     ensureDirs(next);
     applyPathEnv(next);
-    applyProxy(next).catch(() => {}); // 代理配置变更后立即生效
-    scheduler.start(next, runScheduled, log); // 配置变更后重排定时
+    applyProxy(next).catch(() => {}); // take effect immediately after the proxy config changes
+    scheduler.start(next, runScheduled, log); // reschedule the timers after a config change
   },
 });
 
 const server = app.listen(PORT, HOST, () => {
   const url = `http://${HOST}:${PORT}`;
-  log.info(`服务已就绪 / listening on ${url}`);
+  log.info(`listening on ${url}`);
   console.log(`\n  Vtuber's Monitor Link  →  ${url}\n`);
   if (process.env.NO_OPEN !== '1') openBrowser(url);
 });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    log.error(`端口被占用 / port ${PORT} in use —— 可用环境变量 PORT 换一个端口`);
+    log.error(`port ${PORT} in use — set the PORT environment variable to pick another port`);
   } else {
-    log.error(`服务启动失败 / server error — ${err.message}`);
+    log.error(`server error — ${err.message}`);
   }
   process.exit(1);
 });
 
-// 内置调度器
+// built-in scheduler
 scheduler.start(cfg, runScheduled, log);
 
-// 优雅退出
+// graceful shutdown
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
-    log.info(`收到 ${sig}，退出中 / shutting down`);
+    log.info(`received ${sig}, shutting down`);
     scheduler.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   });
 }
 
-// ── 兜底：别因为一处写错就整站死掉 ────────────────────────────────
-// 教训：Express 4 **不会**捕获 async 路由里的抛错，一次 ReferenceError
-// （features.js 里一个写错的变量名）就让整个进程退出，连带网页全白。
-// 这里把未捕获的异常/拒绝记成日志并继续运行 —— 对本地工具来说，
-// 「某个接口 500」远比「整个服务没了」可接受。
+// ── Safety net: one typo must not take the whole site down ────────────────
+// Lesson learned: Express 4 does **not** catch a throw inside an async route, so a single
+// ReferenceError (a misspelled variable name in features.js) exited the whole process and
+// blanked every page along with it.
+// Here uncaught exceptions/rejections are logged and the process keeps running — for a local
+// tool, "some endpoint returns 500" is far more acceptable than "the whole service is gone".
 process.on('unhandledRejection', (reason) => {
-  log.error(`未处理的 Promise 拒绝 / unhandledRejection — ${reason?.stack ?? reason}`);
+  log.error(`unhandledRejection — ${reason?.stack ?? reason}`);
 });
 process.on('uncaughtException', (err) => {
-  log.error(`未捕获异常 / uncaughtException — ${err?.stack ?? err}`);
+  log.error(`uncaughtException — ${err?.stack ?? err}`);
   if (/EADDRINUSE/.test(String(err?.code ?? ''))) process.exit(1);
 });
 
-// 首次运行提示 / first-run hint
+// first-run hint
 if (!fs.existsSync(path.join(APP_ROOT, 'config.json'))) {
-  log.warn('未找到 config.json，已使用默认配置（请到网页里填写 LLM API Key）/ using defaults; set your LLM API key in the UI');
+  log.warn('config.json not found, using defaults; set your LLM API key in the UI');
 }

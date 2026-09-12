@@ -1,6 +1,6 @@
-// Settings.jsx — 设置页：浏览器 / 代理 / 定时 / 界面 / 计划任务 / 推送 / 排版 / 节点 / 导入导出 / 隐私
-// 注意：LLM 与 API Key 已单独拉出成独立页面（pages/Llm.jsx）—— 它埋在设置里时
-// 使用者根本找不到，档位为空更是连输入框都不渲染。
+// Settings.jsx — settings page: browser / proxy / schedule / appearance / scheduled tasks / push / layout / nodes / import-export / privacy
+// Note: LLM and the API key were split out into their own page (pages/Llm.jsx) - buried in the settings
+// page the user could not find them at all, and with no provider profile the inputs were not even rendered.
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -22,16 +22,17 @@ export default function Settings({ onLayout }) {
   const [domain, setDomain] = useState('bilibili.com');
   const [loginMsg, setLoginMsg] = useState('');
   const [loginOk, setLoginOk] = useState(false);
-  // 计划任务 / 通知 / 节点 / 导入导出
-  // 注意：所有 hook 必须排在下面那句 `if (!cfg) return` 之前 —— 否则首帧
-  // 与数据到齐后的帧 hook 数量不一致，React 会抛 #310 并把整棵树卸掉。
+  // scheduled tasks / notifications / nodes / import-export
+  // Note: every hook must sit above the `if (!cfg) return` below - otherwise the first frame and the
+  // frame after the data arrives have a different hook count, React throws #310 and unmounts the whole tree.
   const [sched, setSched] = useState(null);
   const [notifyInfo, setNotifyInfo] = useState(null);
   const [nodes, setNodes] = useState(null);
   const [nodeTestUrl, setNodeTestUrl] = useState('https://www.bilibili.com/');
   const [nodeDelays, setNodeDelays] = useState(null);
   const [newNotifyKind, setNewNotifyKind] = useState('bark');
-  // 任务名防抖定时器：**必须在早退之前**，否则首帧/后续帧 hook 数不一致 -> React #310
+  // Task-name debounce timer: **must be before the early return**, otherwise the first frame and later
+  // frames have a different hook count -> React #310
   const scheduleSaveTimer = useRef(null);
 
   useEffect(() => {
@@ -153,7 +154,7 @@ export default function Settings({ onLayout }) {
     });
   };
 
-  // 只读提取登录态：回报 cookie 数量与名字，不回传任何值
+  // Read-only login-state extraction: report the cookie count and names, never hand back any value
   const checkLogin = async () => {
     setBusy(true);
     setLoginMsg(t('checkingLogin'));
@@ -172,7 +173,8 @@ export default function Settings({ onLayout }) {
     }
   };
 
-  // ── 计划任务 / 通知 / 节点 / 导入导出（handler 放这里，hook 已提到早退之前） ──
+  // -- scheduled tasks / notifications / nodes / import-export (handlers live here, the hooks were
+  // moved above the early return) --
   const loadSched = () => api.getSchedule().then(setSched).catch(() => {});
   const loadNotify = () => api.getNotify().then(setNotifyInfo).catch(() => {});
 
@@ -193,8 +195,9 @@ export default function Settings({ onLayout }) {
   };
 
   /**
-   * 任务名是文本框：不能每敲一个字就 PUT 一次配置 —— 那既是请求风暴，也会把配置
-   * 反复写盘（实测敲 10 个字发了 10 次 PUT）。本地先改，停止输入 800ms 后再存。
+   * The task name is a text box: it must not PUT the config on every keystroke - that is a request storm
+   * and it also rewrites the config to disk over and over (measured: typing 10 characters sent 10 PUTs).
+   * Change it locally first, save 800ms after typing stops.
    */
   const onTaskNameChange = (id, name) => {
     st.dirty();
@@ -349,7 +352,7 @@ export default function Settings({ onLayout }) {
     }
   };
 
-  // Tor 无痕出口：检测端口 + 确认出口是不是 Tor；可选用配置好的 tor.exe 一键拉起
+  // Tor anonymous egress: probe the port + confirm whether the exit really is Tor; optionally launch the configured tor.exe in one click
   const checkTor = async () => {
     setBusy(true);
     flash(t('checkingLogin'), 0);
@@ -397,7 +400,7 @@ export default function Settings({ onLayout }) {
 
   return (
     <>
-      {/* ── 浏览器 / Browser ── */}
+      {/* -- Browser -- */}
       <section className="panel">
         <h2>{t('browserTitle')}</h2>
         <div className="hint">{t('browserHint')}</div>
@@ -462,7 +465,7 @@ export default function Settings({ onLayout }) {
           </div>
         )}
 
-        {/* ── 登录态探测：只读提取，浏览器开着也行 ── */}
+        {/* -- login-state probe: read-only extraction, works even with the browser open -- */}
         <div className="row">
           <div className="field" style={{ flex: '0 0 150px' }}>
             <label>{t('domainLabel')}</label>
@@ -480,7 +483,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 代理 / Proxy ── */}
+      {/* -- Proxy -- */}
       <section className="panel">
         <h2>{t('proxyTitle')}</h2>
         <div className="hint">{t('proxyHint')}</div>
@@ -519,7 +522,7 @@ export default function Settings({ onLayout }) {
           </div>
         </div>
 
-        {/* Tor 无痕出口 */}
+        {/* Tor anonymous egress */}
         <div className="row">
           <div className="field">
             <label>{t('torSocks')}</label>
@@ -549,7 +552,7 @@ export default function Settings({ onLayout }) {
         <div className="hint" style={{ margin: 0 }}>{t('torHint')}</div>
       </section>
 
-      {/* ── 定时 / Schedule ── */}
+      {/* -- Schedule -- */}
       <section className="panel">
         <h2>{t('scheduleTitle')}</h2>
         <div className="hint">{t('scheduleHint')}</div>
@@ -613,7 +616,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 观测模式 / Observation mode ── */}
+      {/* -- Observation mode -- */}
       <section className="panel">
         <h2>{t('obsTitle')}</h2>
         <div className="hint">{t('obsHint')}</div>
@@ -681,7 +684,7 @@ export default function Settings({ onLayout }) {
         <div className="hint" style={{ marginBottom: 0 }}>{t('obsRotationHint')}</div>
       </section>
 
-      {/* ── 界面 / Appearance ── */}
+      {/* -- Appearance -- */}
       <section className="panel">
         <h2>{t('uiTitle')}</h2>
         <div className="hint">{t('uiHint')}</div>
@@ -720,7 +723,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 计划任务 ── */}
+      {/* -- scheduled tasks -- */}
       <section className="panel tasks">
         <h2>{t('scheduleTasks')}</h2>
         <div className="hint">{t('scheduleHint2')}</div>
@@ -852,7 +855,7 @@ export default function Settings({ onLayout }) {
         )}
       </section>
 
-      {/* ── 告警推送 ── */}
+      {/* -- alert push -- */}
       <section className="panel">
         <h2>{t('notifyTitle')}</h2>
         <div className="hint">{t('notifyPanelHint')}</div>
@@ -894,7 +897,7 @@ export default function Settings({ onLayout }) {
           </div>
         </div>
 
-        {/* ── 静默时段：入队补发，不是丢弃 ── */}
+        {/* -- quiet hours: queued for later delivery, not discarded -- */}
         <Collapsible
           id="notify-quiet"
           title={t('quietTitle')}
@@ -1058,7 +1061,7 @@ export default function Settings({ onLayout }) {
         )}
       </section>
 
-      {/* ── 排版 DIY ── */}
+      {/* -- layout DIY -- */}
       <section className="panel">
         <h2>{t('layoutTitle')}</h2>
         <div className="hint">{t('layoutHint')}</div>
@@ -1155,7 +1158,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 代理节点 ── */}
+      {/* -- proxy nodes -- */}
       <section className="panel">
         <h2>{t('nodesTitle')}</h2>
         <div className="hint">{t('nodesHint')}</div>
@@ -1171,8 +1174,10 @@ export default function Settings({ onLayout }) {
           </div>
         </div>
         {(nodes?.groups ?? []).map((g) => {
-          // 默认收起：以前一进设置就把整套节点列表铺开，几十行把页面顶掉一大截。
-          // 摘要里保留「当前节点 + 数量 + 最快延迟」，不点开也够判断要不要操作。
+          // Collapsed by default: entering the settings page used to spread the whole node list open, and
+          // those dozens of rows pushed the page a long way down.
+          // The summary keeps "current node + count + fastest delay", enough to decide whether any action
+          // is needed without expanding it.
           const fastest = g.nodes.reduce((best, n) => {
             const d = n.lastDelay ?? Infinity;
             return d < (best?.d ?? Infinity) ? { name: n.name, d } : best;
@@ -1228,7 +1233,7 @@ export default function Settings({ onLayout }) {
         {nodes && !(nodes.groups ?? []).length && <p className="muted small">{t('controlNotFound')}</p>}
       </section>
 
-      {/* ── 配置导入导出 ── */}
+      {/* -- config import / export -- */}
       <section className="panel io">
         <h2>{t('ioTitle')}</h2>
         <div className="hint">{t('ioHint')}</div>
@@ -1251,7 +1256,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 隐私 / 无痕 ── */}
+      {/* -- privacy / anonymous -- */}
       <section className="panel">
         <h2>{t('privacyTitle')}</h2>
         <div className="hint">{t('privacyHint')}</div>
@@ -1277,7 +1282,7 @@ export default function Settings({ onLayout }) {
         </div>
       </section>
 
-      {/* ── 每日情报的输出格式 / 落盘位置 ── */}
+      {/* -- daily intel output format / write location -- */}
       <section className="panel">
         <h2>{t('outputTitle')}</h2>
         <div className="hint">{t('outputHint')}</div>

@@ -108,9 +108,11 @@ async function main() {
   const cfgPath = path.join(appDir, 'config.json');
   const hadConfig = fs.existsSync(cfgPath);
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
-  // 运行数据一律先清空：不这样做的话，上一次巡检留下的报告/情报会让
-  // 「还没有情报」这类断言随机失败（真的踩到过），而且目录也就不可发布了。
-  // vdb 也在这里：它是 VDB 花名册的运行期缓存（第三方数据），巡检不该把它留在包里
+  // Always wipe the runtime data first: otherwise reports/intel left behind by the previous
+  // traversal make assertions like "there is no intel yet" fail at random (we really did step on
+  // this), and the folder cannot be published either.
+  // vdb is in here too: it is the runtime cache of the VDB roster (third-party data), and a
+  // traversal should not leave it in the package
   const RUNDATA = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice', 'vdb'];
   for (const d of RUNDATA) fs.rmSync(path.join(appDir, d), { recursive: true, force: true });
   const createdDirs = RUNDATA;
@@ -123,14 +125,17 @@ async function main() {
   await sleep(900);
   fs.writeFileSync(cfgPath, JSON.stringify(seedConfig(args.mock), null, 2), 'utf8');
 
-  // 把被测应用的输出收下来：出问题时能看到它的日志，而不是只看到一个断言不过
+  // Capture the app-under-test's output: when something goes wrong you can read its log instead
+  // of just seeing one failed assertion
   const appLog = path.join(appDir, 'logs', 'traverse-app.txt');
   fs.mkdirSync(path.dirname(appLog), { recursive: true });
   const appOut = fs.createWriteStream(appLog, { flags: 'w' });
-  // 起 app 之前先确认端口是空的：上一个进程（或使用者自己开着的窗口）还占着的话，
-  // 我们起的这个会绑不上，而请求会被**别人的实例**接走 —— 症状会漂到完全不相关的地方。
+  // Confirm the port is free before starting the app: if a previous process (or a window the user
+  // left open themselves) still holds it, the instance we start will fail to bind and the requests
+  // will be picked up by **someone else's instance** — the symptom then drifts somewhere
+  // completely unrelated.
   const free = await waitPortFree(args.port, { onWait: (m) => process.stdout.write('  ' + m + '\n') });
-  if (!free.free) process.stdout.write('  (warn) 端口 ' + args.port + ' 似乎一直被占用，接下来可能对不上\n');
+  if (!free.free) process.stdout.write('  (warn) port ' + args.port + ' seems to stay occupied, the checks below may not line up\n');
   const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(appOut);
   child.stderr.pipe(appOut);
@@ -167,8 +172,9 @@ async function main() {
       throw new Error('server never became ready');
     }
     check('server is up', true, base);
-    // 关键：确认答话的是**我们刚起的那个**实例。上一个进程没退干净时，
-    // 端口被别人接着答，后面所有断言都会对着错误的实例说话（这种错最难查）
+    // Crucial: confirm that **the instance we just started** is the one answering. When the
+    // previous process has not exited cleanly, someone else keeps answering on this port and
+    // every later assertion talks to the wrong instance (the hardest kind of failure to trace)
     check('the app we spawned is the one answering', child.exitCode === null, child.exitCode === null ? 'alive' : 'our child already exited with ' + child.exitCode);
 
     const br = await (await fetch(base + '/api/browsers')).json();
@@ -196,7 +202,8 @@ async function main() {
     const title = (await page.locator('h1').first().innerText()).trim();
     check('page mounts and shows the product title', title === "Vtuber's Monitor Link", title);
 
-    // 语言改成下拉了（26 个地区没法用两态按钮切）；钉到简体中文，后面的断言都按中文写的
+    // The language control became a dropdown (26 locales cannot be switched with a two-state
+    // button); pin it to Simplified Chinese, since the assertions below are written against Chinese
     const langSel = page.locator('select.lang').first();
     check('the language picker lists the locales', (await langSel.locator('option').count()) >= 20, (await langSel.locator('option').count()) + ' locales');
     await langSel.selectOption('zh-Hans');
@@ -205,74 +212,82 @@ async function main() {
     check('html lang is set', (await langIsHant.getAttribute('lang')) === 'zh-Hans');
     check('html dir is ltr for chinese', (await langIsHant.getAttribute('dir')) === 'ltr');
 
-    // 默认主题是深色（使用者指定）：配置里没写 theme 时也要是深色，
-    // 而且**真的**画成深色 —— 只断言属性会漏掉「CSS 没跟上」这种情况。
+    // The default theme is dark (specified by the user): it must be dark when the config has no
+    // theme either, and it must **really** paint dark — asserting the attribute alone would miss
+    // the "the CSS did not follow" case.
     const darkAttr = await langIsHant.getAttribute('data-theme');
     const bgDark = await page.evaluate(() => {
       const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g);
       return m ? Number(m[0]) + Number(m[1]) + Number(m[2]) : 999;
     });
-    check('默认主题是深色', darkAttr === 'dark' && bgDark < 240, 'data-theme=' + darkAttr + ' 背景亮度和=' + bgDark);
-    // 切到阿拉伯语：RTL 与另一套文案都要真的生效
+    check('the default theme is dark', darkAttr === 'dark' && bgDark < 240, 'data-theme=' + darkAttr + ' background luminance sum=' + bgDark);
+    // Switch to Arabic: RTL and the other set of copy both have to really take effect
     await langSel.selectOption('ar-SA');
     await page.waitForTimeout(400);
-    check('阿拉伯语把整页方向切成 rtl', (await langIsHant.getAttribute('dir')) === 'rtl');
+    check('Arabic flips the whole page direction to rtl', (await langIsHant.getAttribute('dir')) === 'rtl');
     const arTabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('阿拉伯语标签页用阿语渲染', arTabs.join('|').indexOf('المعلومات') !== -1, arTabs.join(' | '));
+    check('the Arabic tabs render in Arabic', arTabs.join('|').indexOf('المعلومات') !== -1, arTabs.join(' | '));
     await langSel.selectOption('zh-TW');
     await page.waitForTimeout(400);
     const twTabs = await page.locator('nav.tabs button').allInnerTexts();
-    // 台湾正体走 OpenCC 的 twp 词典（字形 + 用词一起转）：設定/資訊/網路 这一套
-    check('台湾正体是繁体 + 台湾用词', twTabs.join('|').indexOf('設定') !== -1, twTabs.join(' | '));
+    // Taiwan Traditional goes through OpenCC's twp dictionary (glyphs and wording converted
+    // together): the settings / information / network word set in its Taiwanese spelling
+    check('Taiwan Traditional is traditional plus Taiwanese wording', twTabs.join('|').indexOf('設定') !== -1, twTabs.join(' | '));
     check(
-      '台湾正体里没有漏转的简体字',
+      'no unconverted simplified characters are left in Taiwan Traditional',
       !/运行|监视|设置|报告|来源/.test(twTabs.join('|')),
       twTabs.join(' | '),
     );
     await langSel.selectOption('zh-HK');
     await page.waitForTimeout(400);
     const hkTabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('香港繁体同样是繁体', hkTabs.join('|').indexOf('設定') !== -1 || hkTabs.join('|').indexOf('設置') !== -1, hkTabs.join(' | '));
+    check('Hong Kong Traditional is traditional too', hkTabs.join('|').indexOf('設定') !== -1 || hkTabs.join('|').indexOf('設置') !== -1, hkTabs.join(' | '));
     await langSel.selectOption('zh-Hant');
     await page.waitForTimeout(400);
     const hantTabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('通用繁体可用', hantTabs.join('|').indexOf('情報') !== -1 || hantTabs.join('|').indexOf('資訊') !== -1, hantTabs.join(' | '));
+    check('generic Traditional works', hantTabs.join('|').indexOf('情報') !== -1 || hantTabs.join('|').indexOf('資訊') !== -1, hantTabs.join(' | '));
 
-    // 乌克兰语必须是乌克兰语，不能因为「缺键」就显示俄语。
-    // （防的是真实发生过的错误：uk/pl/sr 的回落链里写了 ru-RU，
-    //   于是俄语字符串被当成它们的界面文案显示给使用者。）
+    // Ukrainian must be Ukrainian; a missing key must not make it fall back to Russian.
+    // (This guards against a real bug: the uk/pl/sr fallback chains listed ru-RU,
+    //  so Russian strings were shown to users as their interface copy.)
     await langSel.selectOption('uk-UA');
     await page.waitForTimeout(400);
     const ukTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
-    check('乌克兰语界面用乌克兰语', ukTabs.includes('Зведення'), ukTabs);
-    // 判据只用**俄语专有**的词形：Запуск 在乌克兰语里也是同一个词（第一版把它当俄语特征，
-    // 结果误报了自己的正确输出 —— 共享词不能当语言指纹）
-    check('乌克兰语界面里没有混入俄语', !/Сводка|Настройки|Источники|Отчёты|Наблюдение/.test(ukTabs), ukTabs);
+    check('the Ukrainian interface is in Ukrainian', ukTabs.includes('Зведення'), ukTabs);
+    // The criterion uses only **Russian-specific** word forms: Запуск is the same word in Ukrainian
+    // (the first version treated it as a Russian marker and ended up flagging its own correct
+    // output — a shared word cannot serve as a language fingerprint)
+    check('no Russian mixed into the Ukrainian interface', !/Сводка|Настройки|Источники|Отчёты|Наблюдение/.test(ukTabs), ukTabs);
     await langSel.selectOption('pl-PL');
     await page.waitForTimeout(400);
     const plTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
-    check('波兰语界面用波兰语且没有混入俄语', plTabs.includes('Informacje') && !/Сводка|Настройки/.test(plTabs), plTabs);
+    check('the Polish interface is in Polish with no Russian mixed in', plTabs.includes('Informacje') && !/Сводка|Настройки/.test(plTabs), plTabs);
 
-    // 韩语界面里不能出现中文。防的是真实事故：6 条词条是「中韩混排」
-    // （「已加入모니터링」「开播是最有时效性的정보 —— …」），韩语使用者看到的是一整句中文，
-    // 而因为「有值」，覆盖度照样显示 100% —— 只有真的把页面读出来才看得见。
+    // Chinese must not appear in the Korean interface. This guards against a real incident: 6 entries
+    // were "Chinese-Korean interleaved" (the "already added to monitoring" copy and "a live stream is
+    // the most time-sensitive piece of information" copy carried Chinese text inside Korean strings),
+    // so a Korean user saw a whole Chinese sentence, and because there was "a value" the coverage still
+    // reported 100% — only actually reading the page out makes it visible.
     await langSel.selectOption('ko-KR');
     await page.waitForTimeout(400);
     const koTabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('韩语界面用韩语', koTabs.includes('정보'), koTabs.join(' | '));
+    check('the Korean interface is in Korean', koTabs.includes('정보'), koTabs.join(' | '));
     const koLive = page.locator('nav.tabs button', { hasText: '라이브' }).first();
     if (await koLive.count()) {
       await koLive.click();
       await page.waitForTimeout(800);
-      // 只扫**界面自己的文案**（标题 / 说明 / 标签页），不扫数据区 ——
-      // 直播页里的房间标题、分区名是 B 站来的外部数据（「轮播」「生活娱乐」…），
-      // 还有来源名是使用者自己起的（「嘉然动态」），它们当然不该被翻译。
+      // Scan only the **interface's own copy** (titles / hints / tabs), not the data area —
+      // the room titles and category names on the live page are external data from bilibili
+      // (its "carousel" and "life & entertainment" category names), and source names are whatever
+      // the user called them (a follow target the user named, say); those of course should not be
+      // translated.
       const koChrome = [
         ...(await page.locator('main h2').allInnerTexts()),
         ...(await page.locator('main .hint').allInnerTexts()),
         ...(await page.locator('nav.tabs button').allInnerTexts()),
       ].join('\n');
-      // 政策上要保留原文的专有名词先剔掉（先长后短，否则长词会被短词切碎）
+      // Strip the proper nouns that policy keeps verbatim first (longest first, otherwise long
+      // terms get chopped up by short ones)
       const keep = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
         .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
         .map(([k]) => k)
@@ -280,7 +295,7 @@ async function main() {
       let rest = koChrome;
       for (const term of keep) rest = rest.split(term).join('');
       const leftover = [...new Set(rest.match(/[\u4e00-\u9fff]/g) || [])];
-      check('韩语直播页里没有残留中文', leftover.length === 0, leftover.length ? '残留汉字: ' + leftover.join('') : '0 个汉字残留');
+      check('no Chinese left in the Korean live page', leftover.length === 0, leftover.length ? 'leftover Han characters: ' + leftover.join('') : '0 leftover Han characters');
     }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
@@ -303,9 +318,11 @@ async function main() {
     for (const section of ['浏览器', '网络代理', '定时', '界面']) {
       check('Settings has the ' + section + ' section', main.indexOf(section) !== -1, main.slice(0, 160).replace(/\n/g, ' '));
     }
-    // a11y：任务行里的控件必须有无障碍名（BUGS #6 —— 以前只有表头，读屏读不出这一格是什么）
+    // a11y: controls in a task row must have an accessible name (BUGS #6 — previously only the
+    // table header existed, so a screen reader could not say what this cell was)
     if ((await page.locator('section.tasks tbody tr').count()) === 0) {
-      // 用 class 钩子选按钮，别按文案 —— 换语言或改文案就断了
+      // Select the button via a class hook, never by its copy — changing language or wording
+      // would break that
       const add = page.locator('section.tasks button.add-task').first();
       if (await add.count()) {
         await add.click();
@@ -323,7 +340,8 @@ async function main() {
     }
     check('every task-row control has an accessible name', ctlCount > 0 && named === ctlCount, named + '/' + ctlCount);
 
-    // 保存状态必须看得见（以前的 toast 只有 2.5 秒、贴在屏幕最角上，用户当成没保存）
+    // The save state must be visible (the old toast lasted only 2.5 seconds and hugged the very
+    // corner of the screen, so users thought nothing had been saved)
     const fmtSel = page.locator('main select:has(option[value="adoc"])').first();
     check('the output-format picker is present', (await fmtSel.count()) > 0);
     await fmtSel.selectOption('adoc');
@@ -336,33 +354,35 @@ async function main() {
     check('saving leaves a persistent saved state with a timestamp', /(已保存|Saved)/.test(okText) && /\d{1,2}:\d{2}/.test(okText), okText);
     const stillThere = await page.waitForTimeout(3200).then(() => page.locator('.save-status.ok').first().innerText().catch(() => ''));
     check('the saved state is still there after the toast would have gone', stillThere.trim().length > 0, stillThere.trim());
-    // 恢复成 html：后面的报告断言依赖默认输出格式
+    // Back to html: the later report assertions depend on the default output format
     await fmtSel.selectOption('html');
     await page.waitForTimeout(200);
     await page.locator('.save-bar button.primary').first().click();
     await page.waitForTimeout(1000);
-    // LLM 与 API Key 现在是独立页面，所以这些断言都搬到那边去做
+    // LLM and API key now live on their own page, so those assertions moved over there
     await tab('LLM').click();
     await page.waitForTimeout(900);
     const llmText = await mainText();
     check('the LLM page renders on its own tab', llmText.indexOf('哪些功能需要它') !== -1 || llmText.indexOf('档位设置') !== -1, llmText.split('\n')[0]);
     check('it says which features need an LLM', llmText.indexOf('需要') !== -1, 'needs table present');
-    // 用量与预算：钱花在模型调用上，界面上必须看得到（usage 取回来了但一直没人聚合）
+    // Usage and budget: the money goes to model calls, and the UI has to show it (usage was
+    // fetched back but nobody aggregated it)
     check(
-      'LLM 页有「用量与预算」看板',
+      'the LLM page has a usage-and-budget board',
       llmText.indexOf('用量与预算') !== -1 && llmText.indexOf('每日预算') !== -1,
-      llmText.indexOf('用量与预算') !== -1 ? '看板在' : '没找到用量看板',
+      llmText.indexOf('用量与预算') !== -1 ? 'board present' : 'usage board not found',
     );
     const costApi = await (await fetch(base + '/api/cost?days=14')).json();
-    check('用量接口可用（拿不到用量的单独计数，不猜数字）', costApi.ok === true && !!costApi.today && typeof costApi.unknown === 'number', costApi.summary);
+    check('the usage endpoint answers (unknown usage is counted separately instead of guessed)', costApi.ok === true && !!costApi.today && typeof costApi.unknown === 'number', costApi.summary);
     const srcApi = await (await fetch(base + '/api/sources')).json();
     check(
-      '来源接口带观测信息（最近观测 / 轮次）',
+      'the sources endpoint carries observation info (last observed / rounds)',
       !!srcApi.observation && typeof srcApi.observation.rounds === 'number' && 'lastObserved' in (srcApi.sources?.[0] ?? {}),
       JSON.stringify(srcApi.observation),
     );
 
-    // ── 折叠区块：长参考列表默认收起（代理节点一屏几十行太占地方）──
+    // -- Collapsible blocks: long reference lists start collapsed (dozens of rows of proxy nodes
+    //    eat too much room on one screen) --
     const foldHead = page.locator('.collapsible .collapsible-head').first();
     const foldCount = await page.locator('.collapsible').count();
     check('the feature matrix ships collapsed', foldCount > 0);
@@ -380,15 +400,16 @@ async function main() {
     const keyVal = (await keyInput.count()) > 0 ? await keyInput.inputValue() : '';
     check('the seeded key is present but type=password', keyVal.length > 0, keyVal ? 'masked input has a value' : 'empty');
     const reveal = page.locator('main button', { hasText: '显示' }).first();
-    // 条件里藏断言 = 检查条数会变：这次 184 条、下次 183 条，而**没人看得出少了哪条**
-    // （少了的那条恰恰是因为元素没找到）。所以补一个 else，找不到就判失败。
+    // An assertion hidden inside a condition = the check count changes: 184 this time, 183 next
+    // time, and **nobody can tell which one went missing** (the missing one being exactly the one
+    // whose element was not found). So add an else branch and fail when it is not found.
     if (await reveal.count()) {
       await reveal.click();
       await page.waitForTimeout(200);
       check('the key field can be revealed on demand', (await page.locator('main input[type=text]').count()) > 0);
       await page.locator('main button', { hasText: '隐藏' }).first().click();
     } else {
-      check('the key field can be revealed on demand', false, '没找到「显示」按钮');
+      check('the key field can be revealed on demand', false, 'the reveal button was not found');
     }
     const modelOptions = await page.locator('#vml-models option').count();
     check('the model datalist is populated', modelOptions > 0, modelOptions + ' options');
@@ -399,16 +420,19 @@ async function main() {
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
 
-    // 观测模式：这是「痕迹本身也是信息」那一套的控制面，必须有；开关与说明缺一不可
-    // （只有开关没有说明 = 使用者不知道开的是什么，那比没有更糟）
+    // Observation mode: this is the control plane for the "traces themselves are information"
+    // approach and has to be there; the switch and the explanation are both required
+    // (a switch without an explanation = the user does not know what they turned on, which is
+    //  worse than not having it)
     check(
-      '观测模式的设置区在（开关 + 说明都在）',
+      'the observation-mode section is present (switch and explanation both there)',
       main.indexOf('观测模式') !== -1 && main.indexOf('取样比例') !== -1 && main.indexOf('间隔抖动') !== -1,
-      main.indexOf('观测模式') !== -1 ? '开关在' : '没找到观测模式区块',
+      main.indexOf('观测模式') !== -1 ? 'switch present' : 'observation-mode block not found',
     );
 
-    // 主题选择器要真的生效，并且记住选择（记住是为了刷新时不白闪 —— index.html 里那段
-    // 同步脚本会先按记忆上色，服务端配置到了再覆盖）。
+    // The theme selector has to really take effect, and remember the choice (remembering is so the
+    // page does not flash white on refresh — the synchronous script in index.html paints from the
+    // remembered value first, and the server config overwrites it once it arrives).
     const themeRow = page.locator('main .field', { hasText: '主题' }).first();
     const themeSel = themeRow.locator('select').first();
     const themeAttr = () => page.locator('html').getAttribute('data-theme');
@@ -417,37 +441,37 @@ async function main() {
         const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g);
         return m ? Number(m[0]) + Number(m[1]) + Number(m[2]) : 0;
       });
-    check('主题选中值就是默认的深色', (await themeSel.inputValue()) === 'dark', await themeSel.inputValue());
+    check('the selected theme value is the default dark', (await themeSel.inputValue()) === 'dark', await themeSel.inputValue());
     const bgDarkNow = await bgLuma();
     await themeSel.selectOption('light');
     await page.waitForTimeout(300);
     const bgLight = await bgLuma();
-    check('选浅色会真的变浅', (await themeAttr()) === 'light' && bgLight > bgDarkNow, 'data-theme=' + (await themeAttr()) + ' 亮度 ' + bgDarkNow + ' -> ' + bgLight);
-    check('主题被记住（刷新不白闪）', (await page.evaluate(() => localStorage.getItem('vml-theme'))) === 'light');
+    check('picking light really goes lighter', (await themeAttr()) === 'light' && bgLight > bgDarkNow, 'data-theme=' + (await themeAttr()) + ' luminance ' + bgDarkNow + ' -> ' + bgLight);
+    check('the theme is remembered (no white flash on refresh)', (await page.evaluate(() => localStorage.getItem('vml-theme'))) === 'light');
     await themeSel.selectOption('dark');
     await page.waitForTimeout(300);
     const bgBack = await bgLuma();
-    check('切回深色', (await themeAttr()) === 'dark' && bgBack < 240, '亮度 ' + bgBack);
+    check('switching back to dark', (await themeAttr()) === 'dark' && bgBack < 240, 'luminance ' + bgBack);
 
-    // ── 推送渠道与静默时段 ──
+    // -- Notification channels and quiet hours --
     const notifyInfo = await (await fetch(base + '/api/notify')).json();
     const kindIds = (notifyInfo.kinds ?? []).map((k) => k.id);
     for (const need of ['bark', 'serverchan', 'telegram', 'dingtalk', 'wecom', 'ntfy', 'gotify', 'pushplus', 'slack', 'discord', 'feishu', 'custom']) {
       if (!kindIds.includes(need)) {
-        check('推送渠道里包含 ' + need, false, kindIds.join(','));
+        check('the notification channels include ' + need, false, kindIds.join(','));
       }
     }
-    check('推送渠道齐全（钉钉/企业微信/ntfy/Gotify/PushPlus/Slack 都在）', kindIds.length >= 12, kindIds.length + ' kinds');
-    check('接口报告了静默状态与积压队列', !!notifyInfo.quiet && Array.isArray(notifyInfo.queue), JSON.stringify(notifyInfo.quiet).slice(0, 80));
+    check('every notification channel is present (dingtalk/wecom/ntfy/Gotify/PushPlus/Slack included)', kindIds.length >= 12, kindIds.length + ' kinds');
+    check('the endpoint reports the quiet state and the backlog queue', !!notifyInfo.quiet && Array.isArray(notifyInfo.queue), JSON.stringify(notifyInfo.quiet).slice(0, 80));
     const flushRes = await fetch(base + '/api/notify/flush', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ force: true }),
     });
     const flushJson = await flushRes.json();
-    check('可以手动补发积压通知', flushRes.ok && flushJson.ok === true, JSON.stringify(flushJson).slice(0, 80));
-    check('静默时段配置渲染在页面上', main.indexOf('静默时段') !== -1);
-    check('去重分钟数可配置', main.indexOf('去重') !== -1);
+    check('a queued notification can be flushed by hand', flushRes.ok && flushJson.ok === true, JSON.stringify(flushJson).slice(0, 80));
+    check('the quiet-hours config renders on the page', main.indexOf('静默时段') !== -1);
+    check('the dedupe window in minutes is configurable', main.indexOf('去重') !== -1);
 
     // --------------------------------------------------------------- sources
     process.stdout.write('\n3. Sources + custom source editor\n');
@@ -459,11 +483,11 @@ async function main() {
     check('the bilibili category is shown', main.indexOf('B 站') !== -1);
     check('the custom-source form is present', main.indexOf('自定义来源') !== -1);
 
-    // 每个站点的出口默认是「自动」，并且把判定结果写在旁边
+    // Every site's egress defaults to "auto", with the decision written next to it
     const autoOpts = await page.locator('main select:has(option[value="direct"]) option', { hasText: '自动' }).count();
-    check('每站出口默认是自动匹配', autoOpts > 0, autoOpts + ' 个出口选择器带自动选项');
+    check('every site defaults to automatic egress matching', autoOpts > 0, autoOpts + ' egress selectors carry the auto option');
     const egressShown = main.indexOf('探测后自动判定') !== -1 || main.indexOf('已判定') !== -1 || main.indexOf('试用中') !== -1;
-    check('自动判定的结果写在来源旁边', egressShown);
+    check('the automatic decision is written next to the source', egressShown);
     const eg = await page.evaluate(() => fetch('/api/egress').then((r) => r.json()).catch(() => null));
     check('/api/egress answers with decisions + reasons', !!eg && typeof eg.counts === 'object' && Array.isArray(eg.decisions), eg ? Object.keys(eg.counts).join(',') || 'no decisions yet' : 'no answer');
 
@@ -474,12 +498,14 @@ async function main() {
     await page.waitForTimeout(1200);
     main = await mainText();
     check('a custom source can be added from the UI', main.indexOf('ui-test-feed') !== -1);
-    // 精确定位到那一行的删除按钮 —— 页面上还有其它「删除」（诊断文件、监视对象）
+    // Pin the delete button on that exact row — the page has other "delete" controls
+    // (diagnostic files, watch targets)
     const rowDel = page.locator('main table tbody tr', { hasText: 'ui-test-feed' }).locator('button', { hasText: '删除' }).first();
     if (await rowDel.count()) {
       await rowDel.click();
       await page.waitForTimeout(1500);
-      // 用接口断言而不是页面文本：自检生成的诊断文件名里也带着来源 id
+      // Assert through the API rather than the page text: the diagnostic file names the self-check
+      // generates carry the source id too
       const after = await (await fetch(base + '/api/sources')).json();
       const gone = !(after.sources ?? []).some((s) => s.id === 'ui-test-feed');
       check('and removed again', gone, gone ? 'gone from the catalog' : 'still present');
@@ -495,8 +521,9 @@ async function main() {
     check('Watch page renders the seeded targets', main.indexOf('example.com') !== -1 && main.indexOf('嘉然动态') !== -1);
     check('the alarm-rules panel can be opened', (await page.locator('main button', { hasText: '告警规则' }).count()) > 0);
     await page.locator('main button', { hasText: '全部检查一次' }).click();
-    // 等到基线真的建立，而不是死等 6 秒：检查要联网（bilibili 那条），
-    // 固定等待在网络上快慢不定时就变成运气测试（这条断言就是因此红过两次）。
+    // Wait until the baseline is really established instead of sleeping a flat 6 seconds: the check
+    // needs the network (the bilibili one), and a fixed wait turns into a luck test when the network
+    // is fast or slow (this assertion went red twice because of that).
     let baselineReady = false;
     let watchMain = '';
     for (let i = 0; i < 25; i++) {
@@ -564,8 +591,8 @@ async function main() {
 
     // --------------------------------------------------------------- reports
     process.stdout.write('\n8. Reports: preview, render, search, export\n');
-    // 每日情报默认改成 .html 了，但 Markdown 渲染路径不能因此坏掉：
-    // 放一份老式 .md 报告进去，两种格式都要能看。
+    // The daily intel output now defaults to .html, but the Markdown rendering path must not break
+    // because of it: drop an old-style .md report in and both formats have to stay viewable.
     const legacy = path.join(appDir, 'reports', 'legacy-sample.md');
     fs.mkdirSync(path.dirname(legacy), { recursive: true });
     fs.writeFileSync(
@@ -575,8 +602,8 @@ async function main() {
     );
     await tab('报告').click();
     await page.waitForTimeout(1200);
-    // 等列表真的渲染出来再断言（而不是死等 1.2 秒）——
-    // 页面上的区块越来越多，固定等待会让断言变成「运气测试」
+    // Wait until the list really renders before asserting (rather than sleeping a flat 1.2 seconds) —
+    // the page keeps gaining blocks, and a fixed wait turns the assertion into a "luck test"
     let reportRows = 0;
     for (let i = 0; i < 20; i++) {
       reportRows = await page.locator('main table.reportlist tbody tr').count();
@@ -598,9 +625,9 @@ async function main() {
     }
     check('the run produced a report row', reportRows > 0, reportRows + ' rows');
 
-    // ① 默认格式：.html 主文件 → 页内 iframe 预览，内容真的渲染出来了
-    // 注意：不能用 hasText 挑行 —— 每行「对比」下拉里都有别的报告名，
-    // 会把 .html 的名字匹到 .md 那一行上去（踩过一次）。
+    // (1) default format: an .html main file -> previewed in an in-page iframe, content really rendered
+    // Note: hasText must not be used to pick a row — every row's "compare" dropdown contains other
+    // report names, which would match the .html name onto the .md row (we stepped on this once).
     const names = (await page.locator('main table.reportlist button.link').allInnerTexts()).map((s) => s.trim());
     const htmlName = names.find((n) => /\.html$/i.test(n));
     check('the daily report is a .html, not .md', !!htmlName, names.join(', '));
@@ -626,7 +653,7 @@ async function main() {
     await page.waitForTimeout(400);
     check('and switching back restores the preview', (await page.locator('main iframe.report-frame').count()) > 0);
 
-    // ② 老式 .md 报告：站内 Markdown 渲染路径仍然可用
+    // (2) old-style .md report: the in-app Markdown rendering path still works
     await page.locator('main table.reportlist tbody tr', { hasText: 'legacy-sample.md' }).first().locator('button.link').click();
     await page.waitForTimeout(1000);
     const rendered = await page.locator('main .md').count();
@@ -652,7 +679,7 @@ async function main() {
       const body = await r.text();
       check('the exported HTML downloads', r.ok && body.indexOf('<!doctype html>') === 0, body.length + ' bytes');
     } else {
-      check('the exported HTML downloads', false, '没有导出链接，无法下载');
+      check('the exported HTML downloads', false, 'no export link, cannot download');
     }
 
     await page.locator('main input[placeholder*="搜"]').first().fill('B 站动态');
@@ -671,7 +698,7 @@ async function main() {
     check('Search page renders', main.indexOf('情报检索') !== -1);
     check('it states that no LLM is needed', main.indexOf('不需要 LLM') !== -1);
 
-    // 拿一条真实条目里的词来搜（这次运行刚抓过 B 站动态）
+    // Search using a word from a real item (this run just scraped the bilibili dynamic feed)
     const corpus = await (await fetch(base + '/api/intel')).json();
     const sample = (corpus.items ?? []).find((i) => (i.text ?? '').length > 4);
     const term = sample ? String(sample.text).replace(/\[[^\]]+\]/g, '').trim().slice(0, 2) : '糖';
@@ -681,7 +708,7 @@ async function main() {
     const hits = await page.locator('main .card').count();
     check('a keyword search returns cards', hits > 0, `${hits} cards for "${term}"`);
 
-    // 直接打接口验证过滤语义
+    // Hit the API directly to verify the filtering semantics
     const apiSearch = await (
       await fetch(base + '/api/search', {
         method: 'POST',
@@ -736,11 +763,12 @@ async function main() {
     await tab('日历').click();
     await page.waitForTimeout(900);
     main = await mainText();
-    check('日历页渲出了「今天」与时区', main.indexOf('今天') !== -1, main.slice(0, 60).replace(/\n/g, ' '));
+    check('the calendar page renders "today" and the time zone', main.indexOf('今天') !== -1, main.slice(0, 60).replace(/\n/g, ' '));
     const emptyState = main.indexOf('还没有纪念日') !== -1;
-    check('空状态有明确的下一步提示', emptyState);
+    check('the empty state gives a clear next step', emptyState);
 
-    // 通过接口放一条闰日生日：平年必须显式顺延，界面要标出来
+    // Post a leap-day birthday through the API: a non-leap year has to roll over explicitly, and the
+    // UI has to mark it
     const leapEntry = await page.evaluate(() =>
       fetch('/api/calendar/entry', {
         method: 'POST',
@@ -748,62 +776,66 @@ async function main() {
         body: JSON.stringify({ id: 'ui-leap', name: '闰日测试', kind: 'birthday', date: '02-29' }),
       }).then((r) => r.json()),
     );
-    check('可以新增纪念日', leapEntry.ok === true, JSON.stringify(leapEntry).slice(0, 80));
+    check('a calendar entry can be added', leapEntry.ok === true, JSON.stringify(leapEntry).slice(0, 80));
     const cal = await (await fetch(base + '/api/calendar?days=400')).json();
     const leapRow = (cal.all ?? []).find((x) => x.id === 'ui-leap');
-    check('闰日生日有下一次发生日', !!leapRow, leapRow ? leapRow.day : 'missing');
+    check('a leap-day birthday has a next occurrence date', !!leapRow, leapRow ? leapRow.day : 'missing');
     check(
-      '2/29 在平年会顺延到 3/1 并被标记（不是悄悄算错）',
+      '2/29 rolls over to 3/1 in a non-leap year and is marked as such (it is not silently miscomputed)',
       leapRow ? leapRow.day.endsWith('-03-01') === leapRow.leapAdjusted : false,
       leapRow ? `${leapRow.day} leapAdjusted=${leapRow.leapAdjusted}` : '',
     );
 
-    // 时区：同一个瞬间，东京的「今天」可能已经是明天
+    // Time zone: at the same instant, "today" in Tokyo may already be tomorrow
     const tzCmp = await page.evaluate(async () => {
       const utc = await fetch('/api/calendar?days=400').then((r) => r.json());
       return { today: utc.today, timeZone: utc.timeZone, days: utc.due.length };
     });
-    check('接口报告了计算所用的日历日与时区', /^\d{4}-\d{2}-\d{2}$/.test(tzCmp.today) && !!tzCmp.timeZone, `${tzCmp.today} @ ${tzCmp.timeZone}`);
+    check('the endpoint reports the calendar day and time zone used for the computation', /^\d{4}-\d{2}-\d{2}$/.test(tzCmp.today) && !!tzCmp.timeZone, `${tzCmp.today} @ ${tzCmp.timeZone}`);
 
-    // 刷新后再断言：页面只在 mount / 换月时取数，重新点同一个标签不会重取
+    // Assert after a refresh: the page only fetches on mount / month change, so re-clicking the same
+    // tab does not re-fetch
     await page.reload({ waitUntil: 'networkidle' });
     await tab('日历').click();
     await page.waitForTimeout(900);
     const reloaded = await mainText();
-    check('新增的纪念日出现在倒计时里', reloaded.indexOf('闰日测试') !== -1, reloaded.slice(0, 40).replace(/\n/g, ' '));
+    check('the added calendar entry appears in the countdown', reloaded.indexOf('闰日测试') !== -1, reloaded.slice(0, 40).replace(/\n/g, ' '));
     const cells = await page.locator('.cal-cell').count();
-    check('月历网格渲染出来了', cells >= 28 && cells % 7 === 0, cells + ' cells');
+    check('the month grid renders', cells >= 28 && cells % 7 === 0, cells + ' cells');
     const dow = await page.locator('.cal-dow').allInnerTexts();
-    check('月历表头是 7 列', dow.length === 7, dow.join(' '));
+    check('the month header has 7 columns', dow.length === 7, dow.join(' '));
 
-    // 线索抽取必须**本地**完成且不误报
+    // Lead extraction must be done **locally** and must not produce false positives
     const detect = await (await fetch(base + '/api/calendar/detect')).json();
-    check('线索扫描接口可用（本地正则，无需 LLM）', detect.ok === true, `scanned ${detect.scanned}`);
+    check('the lead-scan endpoint answers (local regex, no LLM needed)', detect.ok === true, `scanned ${detect.scanned}`);
 
-    // 非法日期要被拒 —— 用 Node 侧发请求：从页面上发会让「无失败请求」断言误报
+    // An illegal date has to be rejected — send the request from the Node side: sending it from the
+    // page would make the "no failed requests" assertion fire wrongly
     const badRes = await fetch(base + '/api/calendar/entry', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: '坏日期', date: '13-45' }),
     });
-    check('非法日期被拒绝（13-45 不是合法月日）', badRes.status === 400, 'status ' + badRes.status);
+    check('an illegal date is rejected (13-45 is not a valid month-day)', badRes.status === 400, 'status ' + badRes.status);
 
-    // 清理：不要让巡检留下数据
+    // Cleanup: a traversal must not leave data behind
     await fetch(base + '/api/calendar/entry/ui-leap', { method: 'DELETE' });
 
-    // 日报里必须真的出现倒计时区块 —— 写了但没验证过的集成最容易悄悄不工作。
-    // 日期要**动态**算：日报只列未来 30 天内的，写死一个日期换个日子跑就会假失败。
+    // The countdown block really has to appear in the daily report — an integration that was written
+    // but never verified is the easiest thing to stop working silently.
+    // The date must be computed **dynamically**: the daily report only lists what is inside the next
+    // 30 days, so a hard-coded date starts failing spuriously the moment you run it on another day.
     const calForReport = await (await fetch(base + '/api/calendar')).json();
     const inFive = new Date(Date.parse(calForReport.today + 'T00:00:00Z') + 5 * 86400000)
       .toISOString()
       .slice(5, 10); // MM-DD
-    check('算得出一个落在日报窗口内的日期', /^\d{2}-\d{2}$/.test(inFive), `${calForReport.today} + 5d = ${inFive}`);
+    check('a date inside the daily-report window can be computed', /^\d{2}-\d{2}$/.test(inFive), `${calForReport.today} + 5d = ${inFive}`);
     const repEntry = await fetch(base + '/api/calendar/entry', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'ui-report-cal', name: '日报倒计时测试', kind: 'debut', date: inFive }),
     });
-    check('为日报验证准备好一条纪念日', repEntry.ok === true);
+    check('a calendar entry is ready for the daily-report verification', repEntry.ok === true);
     await fetch(base + '/api/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -819,29 +851,34 @@ async function main() {
       }
       await sleep(2000);
     }
-    check('第二次运行完成', repDone);
+    check('the second run completes', repDone);
     const reports = await (await fetch(base + '/api/reports')).json();
-    // 按修改时间取最新 —— 别按文件名排序：巡检自己写进去的 legacy-sample.md
-    // 在字典序上排在日期前面，会被误选（和之前 hasText 挑行的坑是同一类）
+    // Take the newest by modification time — never sort by file name: legacy-sample.md, which the
+    // traversal writes itself, sorts before the date lexicographically and would be picked wrongly
+    // (the same class of pitfall as the hasText row-picking above)
     const newest = [...reports]
       .filter((r) => !r.name.startsWith('legacy-'))
       .sort((a, b) => String(b.mtime).localeCompare(String(a.mtime)))[0];
     const body = newest ? await (await fetch(base + '/api/reports/' + encodeURIComponent(newest.name))).text() : '';
-    check('日报里带上了纪念日倒计时区块', body.indexOf('纪念日倒计时') !== -1, newest ? newest.name : 'no report');
-    check('日报里列出了那条纪念日', body.indexOf('日报倒计时测试') !== -1);
+    check('the daily report carries the calendar countdown block', body.indexOf('纪念日倒计时') !== -1, newest ? newest.name : 'no report');
+    check('the daily report lists that calendar entry', body.indexOf('日报倒计时测试') !== -1);
     await fetch(base + '/api/calendar/entry/ui-report-cal', { method: 'DELETE' });
 
     // ------------------------------------------------------------- people
     process.stdout.write('\n9c. People: follow by person, not by source\n');
     const emptyPeople = await (await fetch(base + '/api/people')).json();
-    check('关注名单接口可用', emptyPeople.ok === true, `扫描 ${emptyPeople.scanned} 条`);
+    check('the follow-list endpoint answers', emptyPeople.ok === true, `scanned ${emptyPeople.scanned} items`);
 
-    // 加一个关注对象，名字要在已有的 mock 情报里真的出现，才能验证匹配
-    // 加一个关注对象，别名取自**条目里真实存在的文本**，否则匹配无从验证
-    // （之前我用来源名当别名，结果 0/20 命中 —— 那是我探针写错，不是功能坏）
+    // Add a follow target whose name really occurs in the existing mock intel, otherwise there is no
+    // way to verify matching
+    // Add a follow target whose alias is taken from **text that really exists in the items**;
+    // otherwise the matching cannot be verified at all
+    // (I once used the source name as the alias and got 0/20 hits — my probe was wrong, the feature
+    //  was not broken)
     const mockIntel = await (await fetch(base + '/api/intel?limit=200')).json();
     const firstItem = (mockIntel.items ?? [])[0] ?? {};
-    // sourceName 是本地化对象 {zh,en}；用 || 而不是 ?? —— 空字符串也要继续往下取
+    // sourceName is a localised object {zh,en}; use || rather than ?? — an empty string must also
+    // fall through to the next candidate
     const src = firstItem.sourceName ?? {};
     const sampleText = String(src.zh || src.en || firstItem.title || firstItem.text || '').trim();
     const probeName = sampleText || 'Mock 关注对象';
@@ -850,104 +887,109 @@ async function main() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'ui-follow', name: probeName, aliases: ['Mock Chan'], links: { bilibili: '672328094' } }),
     });
-    check('可以新增关注对象', addPerson.ok === true, 'name=' + probeName);
+    check('a follow target can be added', addPerson.ok === true, 'name=' + probeName);
 
     const withPeople = await (await fetch(base + '/api/intel?limit=200')).json();
     const attributed = (withPeople.items ?? []).filter((i) => (i.people ?? []).length);
     check(
-      '情报条目被归属到人（本地匹配）',
+      'intel items are attributed to people (local matching)',
       attributed.length > 0,
-      `${attributed.length}/${(withPeople.items ?? []).length} 条命中（别名「${probeName}」）`,
+      `${attributed.length}/${(withPeople.items ?? []).length} hits (alias "${probeName}")`,
     );
     if (attributed.length) {
       const hits = attributed[0].peopleHits ?? [];
-      check('归属带证据（哪个别名、哪个字段）', hits.length > 0 && !!hits[0].alias && !!hits[0].field, JSON.stringify(hits[0] ?? {}));
+      check('the attribution carries evidence (which alias, which field)', hits.length > 0 && !!hits[0].alias && !!hits[0].field, JSON.stringify(hits[0] ?? {}));
     } else {
-      check('归属带证据（哪个别名、哪个字段）', false, '没有命中，无法验证证据');
+      check('the attribution carries evidence (which alias, which field)', false, 'no hits, so the evidence cannot be verified');
     }
 
     const feed = await (await fetch(base + '/api/people/feed?id=ui-follow')).json();
-    check('单人信息流可用', feed.ok === true && Array.isArray(feed.feed), JSON.stringify(feed).slice(0, 60));
+    check('the single-person feed works', feed.ok === true && Array.isArray(feed.feed), JSON.stringify(feed).slice(0, 60));
 
     const byPerson = await (await fetch(base + '/api/intel?limit=200&person=ui-follow')).json();
-    check('情报流可以按人筛选', (byPerson.items ?? []).length > 0 && (byPerson.items ?? []).every((i) => (i.people ?? []).includes('ui-follow')), `${(byPerson.items ?? []).length} 条`);
+    check('the intel stream can be filtered by person', (byPerson.items ?? []).length > 0 && (byPerson.items ?? []).every((i) => (i.people ?? []).includes('ui-follow')), `${(byPerson.items ?? []).length} items`);
 
     const exp = await fetch(base + '/api/people/ui-follow/export?format=md');
     const expText = await exp.text();
-    check('单人可导出（Markdown）', exp.ok && expText.includes('#'), expText.split('\n')[0]?.slice(0, 40));
+    check('a single person can be exported (Markdown)', exp.ok && expText.includes('#'), expText.split('\n')[0]?.slice(0, 40));
 
     const sugRes = await (await fetch(base + '/api/people/suggest?min=2')).json();
-    check('关注对象建议接口可用', sugRes.ok === true, `已统计实体 ${sugRes.scanned}`);
+    check('the follow-suggestion endpoint answers', sugRes.ok === true, `counted ${sugRes.scanned} entities`);
 
-    // 箱视角：给这个关注对象填上 agency，再确认箱级聚合真的把它算进去
+    // Box (agency) view: give this follow target an agency, then confirm the box-level aggregation
+    // really counts it
     await fetch(base + '/api/people/ui-follow', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agency: 'UI-Box' }),
     });
     const groups = await (await fetch(base + '/api/groups?days=30')).json();
-    check('箱视角接口可用', groups.ok === true && Array.isArray(groups.groups), `${(groups.groups ?? []).length} 个箱`);
+    check('the box (agency) view endpoint answers', groups.ok === true && Array.isArray(groups.groups), `${(groups.groups ?? []).length} boxes`);
     const box = (groups.groups ?? []).find((g) => g.agency === 'UI-Box');
-    check('填了 agency 的人被归进对应的箱', !!box && box.totals.members === 1, box ? `${box.totals.members} 位成员` : '没找到 UI-Box');
+    check('people with an agency are grouped into the matching box', !!box && box.totals.members === 1, box ? `${box.totals.members} members` : 'UI-Box not found');
     check(
-      '箱里带每日序列与基线（热力图要用）',
+      'the box carries a daily series and a baseline (the heatmap needs them)',
       !!box && Array.isArray(box.members[0]?.counts) && box.members[0].counts.length === groups.axis.length,
       box ? `counts=${box.members[0]?.counts?.length} / axis=${groups.axis.length}` : '-',
     );
     const silence = await (await fetch(base + '/api/silence?days=60')).json();
-    check('静默检测接口可用且说明「有没有基线」', silence.ok === true && typeof silence.checked === 'number', silence.summary);
+    check('the silence-detection endpoint answers and states whether there is a baseline', silence.ok === true && typeof silence.checked === 'number', silence.summary);
 
-    // 页面上也要真的渲染出来
+    // It really has to render on the page too
     await tab('关注').click();
     await page.waitForTimeout(900);
     const peopleText = await mainText();
-    check('关注页渲染出名单', peopleText.indexOf(probeName) !== -1, peopleText.slice(0, 60).replace(/\n/g, ' '));
-    check('关注页说明了匹配依据', peopleText.indexOf('命中依据') !== -1 || peopleText.indexOf('别名') !== -1);
-    // 箱视角区块必须在页面上：光有接口不算交付，使用者要能看见
-    check('关注页渲染出箱视角区块', peopleText.indexOf('箱视角') !== -1, peopleText.indexOf('箱视角') !== -1 ? '区块在' : '没找到箱视角');
+    check('the follow page renders the list', peopleText.indexOf(probeName) !== -1, peopleText.slice(0, 60).replace(/\n/g, ' '));
+    check('the follow page explains the matching basis', peopleText.indexOf('命中依据') !== -1 || peopleText.indexOf('别名') !== -1);
+    // The box-view block has to be on the page: an endpoint alone is not a deliverable, the user has
+    // to be able to see it
+    check('the follow page renders the box-view block', peopleText.indexOf('箱视角') !== -1, peopleText.indexOf('箱视角') !== -1 ? 'block present' : 'box view not found');
     check(
-      '箱视角把 UI-Box 画出来了（含热力图格子）',
+      'the box view draws UI-Box (heatmap cells included)',
       peopleText.indexOf('UI-Box') !== -1 && (await page.locator('.heat-cells i').count()) > 0,
-      (await page.locator('.heat-cells i').count()) + ' 个格子',
+      (await page.locator('.heat-cells i').count()) + ' cells',
     );
 
-    // VDB 花名册（多平台社团名册）：状态接口必须离线可用——它只读缓存，不联网
+    // VDB roster (a multi-platform agency roster): the status endpoint must work offline — it only
+    // reads the cache and never goes online
     const vdbStatus = await (await fetch(base + '/api/vdb/status')).json();
     check(
-      '花名册状态接口离线可用（含许可与来源署名）',
+      'the roster status endpoint works offline (licence and source attribution included)',
       vdbStatus.ok === true && typeof vdbStatus.count === 'number' && !!vdbStatus.license && !!vdbStatus.source,
-      `${vdbStatus.count} 条 · ${vdbStatus.source} · ${vdbStatus.license}`,
+      `${vdbStatus.count} records · ${vdbStatus.source} · ${vdbStatus.license}`,
     );
-    check('状态接口说明「有没有缓存」', 'cached' in vdbStatus, String(vdbStatus.cached));
+    check('the status endpoint states whether there is a cache', 'cached' in vdbStatus, String(vdbStatus.cached));
     const vdbGroups = await (await fetch(base + '/api/vdb/groups')).json();
-    check('可以按社团列花名册', vdbGroups.ok === true && typeof vdbGroups.groups === 'object', `${Object.keys(vdbGroups.groups ?? {}).length} 个社团`);
-    // 没选条目就导入 → 必须被拒（走的是和手工新增同一条净化路径，不搞后门）
+    check('the roster can be listed by agency', vdbGroups.ok === true && typeof vdbGroups.groups === 'object', `${Object.keys(vdbGroups.groups ?? {}).length} agencies`);
+    // Importing with no record selected -> it must be refused (it goes through the same sanitising
+    // path as a manual add; no back door)
     const vdbNoKeys = await fetch(base + '/api/vdb/import', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ keys: [] }),
     });
-    check('空选择导入被拒绝', vdbNoKeys.status === 400, String(vdbNoKeys.status));
+    check('an empty-selection import is refused', vdbNoKeys.status === 400, String(vdbNoKeys.status));
     const vdbEmptyQ = await (await fetch(base + '/api/vdb/search?q=')).json();
-    check('空关键词搜索直接返回空（不联网）', vdbEmptyQ.ok === true && (vdbEmptyQ.results ?? []).length === 0);
-    check('关注页渲染出花名册区块', peopleText.indexOf('从 VDB 导入') !== -1 && peopleText.indexOf('同步花名册') !== -1, peopleText.indexOf('从 VDB 导入') !== -1 ? '区块在' : '没找到 VDB 区块');
-    check('花名册区块带上游署名', peopleText.indexOf('dd-center/vdb') !== -1 || peopleText.indexOf('CC BY-NC-SA') !== -1);
+    check('an empty-keyword search returns empty straight away (no network)', vdbEmptyQ.ok === true && (vdbEmptyQ.results ?? []).length === 0);
+    check('the follow page renders the roster block', peopleText.indexOf('从 VDB 导入') !== -1 && peopleText.indexOf('同步花名册') !== -1, peopleText.indexOf('从 VDB 导入') !== -1 ? 'block present' : 'VDB block not found');
+    check('the roster block carries the upstream attribution', peopleText.indexOf('dd-center/vdb') !== -1 || peopleText.indexOf('CC BY-NC-SA') !== -1);
 
     await fetch(base + '/api/people/ui-follow', { method: 'DELETE' });
     const afterDel = await (await fetch(base + '/api/people')).json();
-    check('可以删除关注对象（且清理干净）', (afterDel.people ?? []).length === 0);
+    check('a follow target can be deleted (and is cleaned up completely)', (afterDel.people ?? []).length === 0);
 
     // ------------------------------------------------- events (merge/dedupe)
     process.stdout.write('\n9d. Events: multi-source merge, similarity dedupe, source weight\n');
     const ev = await (await fetch(base + '/api/events?learn=0')).json();
-    check('事件合并接口可用', ev.ok === true, `${ev.stats?.events} 个事件 / ${ev.stats?.itemsMerged} 条条目`);
-    check('返回了来源权重', ev.weights && Object.keys(ev.weights).length > 0, JSON.stringify(ev.weights).slice(0, 90));
+    check('the event-merge endpoint answers', ev.ok === true, `${ev.stats?.events} events / ${ev.stats?.itemsMerged} items`);
+    check('source weights came back', ev.weights && Object.keys(ev.weights).length > 0, JSON.stringify(ev.weights).slice(0, 90));
     for (const [id, w] of Object.entries(ev.weights ?? {})) {
-      if (!(w > 0 && w <= 3)) check('权重在合理区间 ' + id, false, String(w));
+      if (!(w > 0 && w <= 3)) check('weight is inside a sane range for ' + id, false, String(w));
     }
-    check('统计里有「去掉重复」与「多源确认」', typeof ev.stats.duplicatesRemoved === 'number' && typeof ev.stats.confirmedEvents === 'number', JSON.stringify(ev.stats).slice(0, 90));
-    // 用预览接口做真正的端到端验证：mock 的 20 条其实各不相同，
-    // 「必须合并重复」这种断言不能依赖语料恰好重复（之前就是那么写错的）
+    check('the stats include "duplicates removed" and "multi-source confirmed"', typeof ev.stats.duplicatesRemoved === 'number' && typeof ev.stats.confirmedEvents === 'number', JSON.stringify(ev.stats).slice(0, 90));
+    // Use the preview endpoint for a real end-to-end check: the 20 mock items are in fact all
+    // different, so an assertion like "duplicates must be merged" cannot rely on the corpus
+    // happening to contain duplicates (that is exactly how it was written wrongly before)
     const preview = await (
       await fetch(base + '/api/events/preview', {
         method: 'POST',
@@ -962,19 +1004,19 @@ async function main() {
         }),
       })
     ).json();
-    check('预览接口把三个来源的同一件事并成一个事件', preview.stats?.events === 2 && preview.stats?.duplicatesRemoved === 2, JSON.stringify(preview.stats ?? {}));
+    check('the preview endpoint merges the same thing from three sources into one event', preview.stats?.events === 2 && preview.stats?.duplicatesRemoved === 2, JSON.stringify(preview.stats ?? {}));
     const merged = (preview.events ?? []).find((e) => e.sourceCount === 3);
-    check('合并后标为多源确认，并选出来源权重最高的作为 lead', !!merged && merged.confirmed === true && merged.leadSourceId === 'official-hololive', JSON.stringify(merged ?? {}).slice(0, 120));
-    check('预览不会污染来源权重历史（learn:false）', preview.weights && Object.keys(preview.weights).length >= 3, JSON.stringify(preview.weights).slice(0, 90));
+    check('after merging it is marked multi-source confirmed, with the highest-weight source picked as lead', !!merged && merged.confirmed === true && merged.leadSourceId === 'official-hololive', JSON.stringify(merged ?? {}).slice(0, 120));
+    check('the preview does not pollute the source-weight history (learn:false)', preview.weights && Object.keys(preview.weights).length >= 3, JSON.stringify(preview.weights).slice(0, 90));
     const ded = await (await fetch(base + '/api/events/dedupe')).json();
-    check('去重接口保留 + 丢掉的数量自洽', ded.ok === true && ded.kept + ded.dropped >= ded.kept, `保留 ${ded.kept} / 去掉 ${ded.dropped}`);
-    check('被丢掉的条目能指回保留者', (ded.removed ?? []).every((d) => d.keptId && d.eventId), JSON.stringify((ded.removed ?? [])[0] ?? {}).slice(0, 80));
+    check('the dedupe endpoint\'s kept + dropped counts are self-consistent', ded.ok === true && ded.kept + ded.dropped >= ded.kept, `kept ${ded.kept} / dropped ${ded.dropped}`);
+    check('a dropped item points back at the one that was kept', (ded.removed ?? []).every((d) => d.keptId && d.eventId), JSON.stringify((ded.removed ?? [])[0] ?? {}).slice(0, 80));
 
     await tab('情报').click();
     await page.waitForTimeout(700);
     const mergeSel = page.locator('main select').filter({ hasText: 'off' }).first();
-    check('情报页有「合并重复事件」开关', (await page.locator('main label', { hasText: '合并重复事件' }).count()) > 0);
-    // 打开合并视图
+    check('the intel page has a "merge duplicate events" switch', (await page.locator('main label', { hasText: '合并重复事件' }).count()) > 0);
+    // turn the merged view on
     const mergeField = page.locator('main select').last();
     void mergeSel;
     void mergeField;
@@ -989,44 +1031,44 @@ async function main() {
     });
     await page.waitForTimeout(1500);
     const mergeText = await mainText();
-    check('合并视图渲染出来了', mergeText.indexOf('已合并事件') !== -1, mergeText.slice(0, 60).replace(/\n/g, ' '));
-    check('合并视图标出了多源确认', mergeText.indexOf('多源确认') !== -1 || mergeText.indexOf('来源') !== -1);
+    check('the merged view renders', mergeText.indexOf('已合并事件') !== -1, mergeText.slice(0, 60).replace(/\n/g, ' '));
+    check('the merged view marks multi-source confirmation', mergeText.indexOf('多源确认') !== -1 || mergeText.indexOf('来源') !== -1);
 
     // ------------------------------------------------------------- archive
     process.stdout.write('\n9e. SQLite archive and charts\n');
     const arch0 = await (await fetch(base + '/api/archive/stats')).json();
-    check('归档接口可用', arch0.ok === true, JSON.stringify(arch0).slice(0, 80));
-    check('运行结束后归档里已经有点东西（运行时自动增量写入）', (arch0.items ?? 0) > 0, `${arch0.items} 条 / ${arch0.days} 天`);
+    check('the archive endpoint answers', arch0.ok === true, JSON.stringify(arch0).slice(0, 80));
+    check('the archive already holds something after a run (written incrementally during the run)', (arch0.items ?? 0) > 0, `${arch0.items} items / ${arch0.days} days`);
     const ing = await (
       await fetch(base + '/api/archive/ingest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limit: 500 }) })
     ).json();
-    check('手动补录可用且幂等（重复补录不会新增）', ing.ok === true && ing.inserted === 0, JSON.stringify(ing).slice(0, 80));
+    check('a manual backfill works and is idempotent (a repeat backfill inserts nothing)', ing.ok === true && ing.inserted === 0, JSON.stringify(ing).slice(0, 80));
     const ser = await (await fetch(base + '/api/archive/series?days=30')).json();
-    check('序列接口返回五组图表数据', ser.ok === true && !!ser.daily && !!ser.bySource && !!ser.people && !!ser.keywords && !!ser.health, Object.keys(ser).join(','));
-    check('按天序列补齐了 30 天（没跑的日子是 0，不是缺席）', (ser.daily.days ?? []).length === 30, `${ser.daily?.days?.length} 天`);
-    check('来源合计与条目数一致', (ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0) === arch0.items, `合计 ${(ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0)} vs ${arch0.items}`);
+    check('the series endpoint returns five chart datasets', ser.ok === true && !!ser.daily && !!ser.bySource && !!ser.people && !!ser.keywords && !!ser.health, Object.keys(ser).join(','));
+    check('the daily series is padded out to 30 days (a day that did not run is 0, not missing)', (ser.daily.days ?? []).length === 30, `${ser.daily?.days?.length} days`);
+    check('the per-source totals agree with the item count', (ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0) === arch0.items, `total ${(ser.bySource.totals ?? []).reduce((n, r) => n + r.items, 0)} vs ${arch0.items}`);
     const archItems = await (await fetch(base + '/api/archive/items?limit=5')).json();
-    check('归档条目可查询', archItems.ok === true && archItems.items.length > 0, `${archItems.count} 条`);
+    check('archive items can be queried', archItems.ok === true && archItems.items.length > 0, `${archItems.count} items`);
     const evilQ = await (await fetch(base + '/api/archive/items?q=' + encodeURIComponent("%' OR '1'='1"))).json();
-    check('查询串是按参数处理的（注入无效）', evilQ.ok === true && evilQ.items.length === 0, `${evilQ.items.length} 条`);
+    check('the query string is handled as a parameter (injection is inert)', evilQ.ok === true && evilQ.items.length === 0, `${evilQ.items.length} items`);
 
     await tab('报告').click();
     await page.waitForTimeout(1200);
     const chartText = await mainText();
-    check('报告页出现趋势图表区块', chartText.indexOf('趋势图表') !== -1);
-    check('图表显示了归档条数', /归档[:：]?\s*\d+/.test(chartText.replace(/\n/g, ' ')) || chartText.indexOf('每天条目数') !== -1, chartText.slice(0, 70).replace(/\n/g, ' '));
+    check('the trend-charts block appears on the reports page', chartText.indexOf('趋势图表') !== -1);
+    check('the charts show the archive item count', /归档[:：]?\s*\d+/.test(chartText.replace(/\n/g, ' ')) || chartText.indexOf('每天条目数') !== -1, chartText.slice(0, 70).replace(/\n/g, ' '));
     const svgCount = await page.locator('main svg.chart-svg').count();
-    check('图表真的画出来了（内联 SVG，无图表库）', svgCount > 0, svgCount + ' 个图');
+    check('the charts are really drawn (inline SVG, no chart library)', svgCount > 0, svgCount + ' charts');
 
     // ------------------------------------------------------------- share
     process.stdout.write('\n9f. Share: login requirements honest, bundles self-contained\n');
     const shareTargets = await (await fetch(base + '/api/share/targets')).json();
-    check('分享目标接口可用', shareTargets.ok === true, `${shareTargets.targets?.length} 个目标`);
+    check('the share-targets endpoint answers', shareTargets.ok === true, `${shareTargets.targets?.length} targets`);
     const byId = Object.fromEntries((shareTargets.targets ?? []).map((x) => [x.id, x]));
-    check('不需登录的方式是 ready', byId['file-html']?.status === 'ready' && byId['text']?.status === 'ready' && byId['webhook']?.status === 'ready');
-    check('每个目标都如实声明是否需要登录', (shareTargets.targets ?? []).every((x) => typeof x.needsLogin === 'boolean'));
-    check('需要登录的目标不会假装可用', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic'] ?? {}).slice(0, 90));
-    check('做不到的平台明确标为不支持（X 需要 OAuth）', byId['x-post']?.status === 'unsupported');
+    check('the methods that need no login are ready', byId['file-html']?.status === 'ready' && byId['text']?.status === 'ready' && byId['webhook']?.status === 'ready');
+    check('every target honestly declares whether a login is needed', (shareTargets.targets ?? []).every((x) => typeof x.needsLogin === 'boolean'));
+    check('a target that needs a login does not pretend to be available', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic'] ?? {}).slice(0, 90));
+    check('a platform we cannot do is marked unsupported explicitly (X needs OAuth)', byId['x-post']?.status === 'unsupported');
 
     const bundleRes = await fetch(base + '/api/share/bundle', {
       method: 'POST',
@@ -1034,14 +1076,14 @@ async function main() {
       body: JSON.stringify({ scope: { kind: 'latest' }, format: 'html', note: '巡检导出' }),
     });
     const bundleHtml = await bundleRes.text();
-    check('可以生成单文件 HTML', bundleRes.ok && bundleHtml.length > 500, `${bundleHtml.length} 字节`);
-    check('返回的是 HTML 且带下载文件名', (bundleRes.headers.get('content-type') ?? '').includes('text/html') && /filename="vml-share-.+\.html"/.test(bundleRes.headers.get('content-disposition') ?? ''), bundleRes.headers.get('content-disposition'));
+    check('a single-file HTML can be generated', bundleRes.ok && bundleHtml.length > 500, `${bundleHtml.length} bytes`);
+    check('it returns HTML with a download filename', (bundleRes.headers.get('content-type') ?? '').includes('text/html') && /filename="vml-share-.+\.html"/.test(bundleRes.headers.get('content-disposition') ?? ''), bundleRes.headers.get('content-disposition'));
     const externalRefs = [...bundleHtml.matchAll(/(?:src|href)\s*=\s*"([^"]*)"/gi)]
       .map((m) => m[1])
       .filter((u) => !u.startsWith('#') && !u.startsWith('data:'));
     const resourceRefs = externalRefs.filter((u) => !/^https?:\/\//.test(u));
-    check('分享文件没有任何外部资源引用（离线可看）', resourceRefs.length === 0, resourceRefs.join(',') || 'none');
-    check('分享文件里不含脚本', !/<script/i.test(bundleHtml));
+    check('the shared file references no external resources at all (viewable offline)', resourceRefs.length === 0, resourceRefs.join(',') || 'none');
+    check('the shared file contains no scripts', !/<script/i.test(bundleHtml));
 
     const txt = await (
       await fetch(base + '/api/share/bundle', {
@@ -1050,18 +1092,19 @@ async function main() {
         body: JSON.stringify({ scope: { kind: 'latest' }, format: 'text' }),
       })
     ).json();
-    check('复制文本模式返回纯文本', txt.ok === true && typeof txt.text === 'string' && txt.text.length > 10, `${txt.items} 条`);
+    check('copy-text mode returns plain text', txt.ok === true && typeof txt.text === 'string' && txt.text.length > 10, `${txt.items} items`);
 
     const audit = await (await fetch(base + '/api/share/audit')).json();
-    check('导出行为被记进分享记录', (audit.entries ?? []).some((e) => e.action === 'bundle'), JSON.stringify(audit.entries?.[0] ?? {}).slice(0, 80));
+    check('the export is recorded in the share log', (audit.entries ?? []).some((e) => e.action === 'bundle'), JSON.stringify(audit.entries?.[0] ?? {}).slice(0, 80));
 
-    // 对外发声的三道闸门：缺确认 / 未验证 / 不支持，都要被挡住
+    // The three gates on speaking in public: no confirmation / unverified / unsupported all have to
+    // be blocked
     const noConfirm = await fetch(base + '/api/share/post', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试' }),
     });
-    check('没有确认就不许对外发声', noConfirm.status === 400, 'status ' + noConfirm.status);
+    check('without confirmation it must not post publicly', noConfirm.status === 400, 'status ' + noConfirm.status);
     const unverified = await (
       await fetch(base + '/api/share/post', {
         method: 'POST',
@@ -1069,37 +1112,37 @@ async function main() {
         body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试', confirm: true }),
       })
     ).json();
-    check('未验证的目标即使确认也不可用', unverified.ok === false && unverified.status === 'needs-verification', JSON.stringify(unverified).slice(0, 90));
+    check('an unverified target is unusable even with confirmation', unverified.ok === false && unverified.status === 'needs-verification', JSON.stringify(unverified).slice(0, 90));
     const unsupported = await fetch(base + '/api/share/post', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: 'x-post', text: '测试', confirm: true }),
     });
-    check('不支持的平台被拒绝', unsupported.status === 400, 'status ' + unsupported.status);
+    check('an unsupported platform is refused', unsupported.status === 400, 'status ' + unsupported.status);
 
     await tab('报告').click();
     await page.waitForTimeout(900);
     const shareText = await mainText();
-    check('报告页出现一键分享区块', shareText.indexOf('一键分享') !== -1);
-    check('界面上写明了每个方式要不要登录', shareText.indexOf('需要登录') !== -1 && shareText.indexOf('待验证') !== -1);
+    check('the one-click-share block appears on the reports page', shareText.indexOf('一键分享') !== -1);
+    check('the UI states whether each method needs a login', shareText.indexOf('需要登录') !== -1 && shareText.indexOf('待验证') !== -1);
 
     // ------------------------------------------------------------- vision
     process.stdout.write('\n9g. Vision: image tagging behind an explicit opt-in\n');
     const vs = await (await fetch(base + '/api/vision/stats')).json();
-    check('图片打标状态接口可用', vs.ok === true, `images=${vs.images} tagged=${vs.tagged}`);
-    check('默认未启用，并且说明了原因', vs.enabled === false && vs.ready?.ok === false, vs.ready?.reason ?? '');
+    check('the image-tagging status endpoint answers', vs.ok === true, `images=${vs.images} tagged=${vs.tagged}`);
+    check('it is disabled by default, and the reason is stated', vs.enabled === false && vs.ready?.ok === false, vs.ready?.reason ?? '');
     const tagRefused = await fetch(base + '/api/vision/tag', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ limit: 5 }),
     });
     const tagBody = await tagRefused.json();
-    check('未启用时拒绝打标（隐私闸门：不会把图偷偷发出去）', tagRefused.status === 400 && /未启用/.test(tagBody.error ?? ''), 'status ' + tagRefused.status);
+    check('tagging is refused while disabled (privacy gate: no image leaves quietly)', tagRefused.status === 400 && /未启用/.test(tagBody.error ?? ''), 'status ' + tagRefused.status);
     await tab('情报').click();
     await page.waitForTimeout(700);
     const vBtn = page.locator('main button', { hasText: '图片打标' });
-    check('情报页有「图片打标」入口', (await vBtn.count()) > 0);
-    check('未就绪时按钮是禁用的（而不是点了没反应）', (await vBtn.first().isDisabled()) === true, 'disabled');
+    check('the intel page has an image-tagging entry point', (await vBtn.count()) > 0);
+    check('the button is disabled while not ready (rather than doing nothing when clicked)', (await vBtn.first().isDisabled()) === true, 'disabled');
 
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');
@@ -1116,7 +1159,8 @@ async function main() {
     const featBefore = await (await fetch(base + '/api/features')).json();
     check('feature stats endpoint answers', typeof featBefore.extracted === 'number', `${featBefore.extracted} extracted`);
     const featRun = await (await fetch(base + '/api/features/extract', { method: 'POST' })).json();
-    // 第二次调用应全部命中缓存（extracted=0/cached=N）—— 这正是想要的，别断言必须 >0
+    // A second call should hit the cache entirely (extracted=0/cached=N) — that is exactly what we
+    // want, so do not assert it has to be >0
     check(
       'feature extraction answers and reuses its cache',
       featRun.ok === true && featRun.extracted + featRun.cached > 0,
@@ -1124,7 +1168,8 @@ async function main() {
     );
     check('extracted features become searchable tags', (featRun.stats?.names ?? []).some((n) => n.value === 'Mock Chan'), JSON.stringify((featRun.stats?.names ?? []).slice(0, 3)));
 
-    // Tor：本机不一定在跑，所以只验契约与「不可用时如实报错」
+    // Tor: not necessarily running on this machine, so verify only the contract and "reports an
+    // honest error when unavailable"
     const tor = await (
       await fetch(base + '/api/proxy/tor', {
         method: 'POST',
@@ -1153,15 +1198,15 @@ async function main() {
   } catch (err) {
     check('UI traversal completed', false, err && err.message);
     process.stdout.write('\n  ' + (err && err.stack ? err.stack : err) + '\n');
-    // 失败时把页面侧的报错一并打出来，否则只能看到「某个断言没过」
-    if (pageErrors.length) process.stdout.write('\n  页面异常:\n' + pageErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
-    if (consoleErrors.length) process.stdout.write('\n  控制台错误:\n' + consoleErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
-    if (badApi.length) process.stdout.write('\n  失败请求:\n' + badApi.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    // On failure, print the page-side errors as well, otherwise all you see is "some assertion failed"
+    if (pageErrors.length) process.stdout.write('\n  page errors:\n' + pageErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    if (consoleErrors.length) process.stdout.write('\n  console errors:\n' + consoleErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
+    if (badApi.length) process.stdout.write('\n  failed requests:\n' + badApi.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
     try {
       appOut.end();
       const tail = fs.readFileSync(appLog, 'utf8').trim().split(/\r?\n/).slice(-25);
-      process.stdout.write('\n  被测应用输出(末尾):\n' + tail.map((l) => '    ' + l).join('\n') + '\n');
-      process.stdout.write('\n  被测应用是否还在: ' + (child.exitCode === null ? '在' : '已退出 exit=' + child.exitCode) + '\n');
+      process.stdout.write('\n  app-under-test output (tail):\n' + tail.map((l) => '    ' + l).join('\n') + '\n');
+      process.stdout.write('\n  is the app under test still alive: ' + (child.exitCode === null ? 'alive' : 'exited with exit=' + child.exitCode) + '\n');
     } catch {}
   } finally {
     if (browser) {
@@ -1185,9 +1230,10 @@ async function main() {
           /* ignore */
         }
       }
-      // 等它真的退干净再收工：端口没放开就往下走的话，下一次跑会对着残留实例说话
+      // Wait for it to really exit before wrapping up: if we move on before the port is released,
+      // the next run ends up talking to a leftover instance
       const gone = await waitChildExit(child);
-      if (!gone) process.stdout.write('  (warn) app 进程没在 8 秒内退出，端口可能还没放开\n');
+      if (!gone) process.stdout.write('  (warn) the app process did not exit within 8 seconds, the port may not be released yet\n');
     }
     try {
       mock.kill();

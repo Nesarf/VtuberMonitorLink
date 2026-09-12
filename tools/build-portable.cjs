@@ -199,9 +199,11 @@ function main() {
   // ------------------------------------------------------------------ 1. web
   log('[1/7] web UI build');
   const distIndex = path.join(ROOT, 'web', 'dist', 'index.html');
-  // 「复用旧产物」是个陷阱：改了界面却忘了先 npm run build，打包出来的还是旧包，
-  // 而构建日志看起来一切正常（这类「改了但产物没变」这个项目踩过一次，见 BUGS #27）。
-  // 所以复用之前先比时间戳：源码比产物新就重建。
+  // "Reusing the old artifacts" is a trap: you change the UI but forget to run npm run build
+  // first, and the package still contains the old bundle — while the build log looks perfectly
+  // normal (this project has been bitten by that "changed but the artifacts did not" class once,
+  // see BUGS #27).
+  // So compare timestamps before reusing: if the sources are newer than the artifacts, rebuild.
   function newestMtime(dir, acc = 0) {
     let newest = acc;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -221,7 +223,7 @@ function main() {
   const stale = !fs.existsSync(distIndex) || srcNewest > distMtime;
   if (stale) {
     if (fs.existsSync(distIndex)) {
-      log('  web/src 比 web/dist 新 -> rebuilding（否则打出来的还是旧界面）');
+      log('  web/src is newer than web/dist -> rebuilding (otherwise the packaged UI stays stale)');
     }
     run(process.execPath, [path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--config', 'web/vite.config.js']);
   } else {
@@ -280,13 +282,14 @@ function main() {
     try {
       copyFile(stageExe, exeOut);
     } catch (err) {
-      // Windows 不允许覆盖正在运行的 exe。使用者（或刚才那个调试实例）还开着时
-      // 这里会抛 EBUSY —— 裸错误看不出所以然，所以翻译成人话再说。
+      // Windows will not let us overwrite a running exe. While the user (or the debug instance
+      // that just ran) still has it open, this throws EBUSY — a bare error explains nothing,
+      // so translate it into plain words first.
       if (err && err.code === 'EBUSY') {
         throw new Error(
-          'exe 正在运行，无法覆盖 / the exe is currently running and cannot be replaced:\n    ' +
+          'exe is running, cannot overwrite / the exe is currently running and cannot be replaced:\n    ' +
             exeOut +
-            '\n  先关掉它再打包（或者用 --out 输出到别的目录）。'
+            '\n  close it and rebuild (or use --out to write to a different directory).'
         );
       }
       throw err;
@@ -312,12 +315,13 @@ function main() {
   // ------------------------------------------------------------- 4. app tree
   log('[4/7] application files');
   //
-  // ⚠️ 运行期数据必须活着穿过这次构建。
-  // 以前这里是「直接 rmrf(appDir) 再重建」，而 app/ 里放着**用户的 config.json
-  // （含 API Key）和全部历史**（reports/feeds/logs/watch/thumbs/advice）。
-  // 结果：每次修完 bug 重新打包，API Key 就被清空、历史全没了。
-  // 现在先把这些挪到 build/ 下的暂存区，重建完再放回去。
-  // 想要一份干净出厂状态就用 --fresh。
+  // Runtime data has to survive this build.
+  // This used to be "rmrf(appDir) and rebuild", while app/ holds **the user's config.json
+  // (with the API key) and their entire history** (reports/feeds/logs/watch/thumbs/advice).
+  // The result: every time a bug was fixed and the package rebuilt, the API key was wiped and
+  // the history was gone.
+  // Now those are moved into a staging area under build/ first and put back after the rebuild.
+  // For a pristine factory state, use --fresh.
   const RUNTIME_KEEP = ['config.json', 'reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'];
   const stash = path.join(buildDir, 'app-runtime-stash');
   const stashed = [];
@@ -331,7 +335,7 @@ function main() {
       try {
         fs.renameSync(from, to);
       } catch {
-        // 跨盘时 rename 会失败（EXDEV），退回复制 + 删除
+        // A cross-drive rename fails (EXDEV), so fall back to copy + delete
         copyDir(from, to, () => false);
         rmrf(from);
       }
@@ -370,7 +374,7 @@ function main() {
   }
   log('  -> app/');
 
-  // 把暂存的运行期数据放回去（API Key、报告、情报、日志、监视基线……）
+  // Put the stashed runtime data back (API key, reports, intel, logs, watch baselines…)
   if (stashed.length) {
     for (const rel of stashed) {
       const from = path.join(stash, rel);
@@ -445,7 +449,8 @@ function main() {
   }
 
   // -------------------------------------------------------------- 8. release zip
-  // 发行包必须干净：运行期数据（API Key / 历史）不进包，由 make-zip.mjs 保证。
+  // The release package has to be clean: runtime data (API key / history) must not go into it,
+  // which make-zip.mjs guarantees.
   if (args.zip) {
     log('');
     log('[8/8] release zip');

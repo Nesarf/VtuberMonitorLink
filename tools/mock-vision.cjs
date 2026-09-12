@@ -1,18 +1,20 @@
-// mock-vision.cjs — 本地假视觉模型 / local fake vision endpoint
+// mock-vision.cjs — local fake vision model / local fake vision endpoint
 //
-// 用途：在没有 API Key、也不想把图片发出去的情况下，端到端验证图片打标这条链路
-// （请求组装、image_url 传参、回复解析、缓存、并发、界面呈现）。
-// 它只按 URL 里的关键字返回**确定性**的标签，不做任何真实识别。
+// Purpose: verify the image-tagging chain end to end without an API key and without sending any
+// image out (request assembly, image_url argument passing, reply parsing, caching, concurrency,
+// UI rendering). It returns **deterministic** tags based on keywords in the URL, and does no real
+// recognition whatsoever.
 //
 //   node tools/mock-vision.cjs --port 43211 [--mode normal|prose|bad|flaky]
 //
-// 模式（用来验证解析器的宽容度 —— 真实模型经常不老实）：
-//   normal  规规矩矩的 JSON
-//   prose   JSON 外面裹一段解释，还带 ``` 围栏
-//   bad     完全不是 JSON（验证解析失败能被记录成 failed 而不是崩）
-//   flaky   前一半请求 500，后一半正常（验证失败重试/记录）
-//   drop    第一次请求**直接掐断连接**（不发响应），之后正常
-//           —— 用来验证「传输层失败重试一次」这条路径真的走到了（HTTP 500 属于另一类，不重试）
+// Modes (used to verify how tolerant the parser is -- real models are often not well behaved):
+//   normal  a perfectly well-formed JSON
+//   prose   JSON wrapped in an explanation, with a ``` fence around it
+//   bad     not JSON at all (verify that a parse failure gets recorded as failed instead of crashing)
+//   flaky   first half of the requests 500, the rest fine (verify retry/recording on failure)
+//   drop    the first request **has its connection cut outright** (no response sent), the rest fine
+//           -- verifies that the "retry once on transport failure" path is really taken
+//           (an HTTP 500 is a different class and is not retried)
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -27,7 +29,7 @@ const PORT = Number(arg('port', 43211));
 const MODE = arg('mode', 'normal');
 let calls = 0;
 
-/** 按 URL 关键字编一个稳定的假标签，方便断言 */
+/** Make up a stable fake tag set from keywords in the URL, so assertions are easy */
 function fakeTagsFor(url) {
   const u = String(url ?? '').toLowerCase();
   if (u.includes('meme') || u.includes('emoji')) return { kind: 'meme', tags: ['梗图', '表情'], text: '', people: [], confidence: 0.7 };
@@ -43,7 +45,7 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     calls++;
     if (MODE === 'drop' && calls === 1) {
-      // 不发任何响应就把连接掐掉：客户端会看到 ECONNRESET / socket hang up
+      // Cut the connection without sending any response: the client sees ECONNRESET / socket hang up
       req.socket.destroy();
       return;
     }
@@ -59,9 +61,9 @@ const server = http.createServer((req, res) => {
     try {
       body = JSON.parse(buf);
     } catch {
-      /* 保持 null，下面照样回一个正常答案 */
+      /* keep it null, we still return a normal answer below */
     }
-    // 从对话里找出 image_url —— 这就是「模型看到的图」
+    // Pick image_url out of the conversation -- this is "the image the model actually saw"
     const content = body?.messages?.flatMap((m) => (Array.isArray(m.content) ? m.content : [])) ?? [];
     const img = content.find((c) => c.type === 'image_url')?.image_url?.url ?? '';
     const tags = fakeTagsFor(img);
@@ -83,14 +85,16 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  // 端口写进一个**运行期**文件，方便人和脚本查（路径可用环境变量改）。
-  // 教训：这东西原来写在 process.cwd()（就是仓库根目录），结果被误提交进了 git ——
-  // 运行期产物不该落在仓库里，现在默认写到系统临时目录，`.gitignore` 那边也堵住了。
+  // The port goes into a **runtime** file so humans and scripts can look it up (the path is
+  // overridable through an environment variable).
+  // Lesson learned: this used to be written to process.cwd() (i.e. the repo root) and got
+  // committed to git by accident -- runtime artifacts must not land in the repo, so it now
+  // defaults to the system temp directory, and `.gitignore` covers it too.
   const out = process.env.VML_MOCK_VISION_PORT_FILE || path.join(os.tmpdir(), 'vml-mock-vision-port.txt');
   try {
     fs.writeFileSync(out, String(PORT), 'utf8');
   } catch {
-    /* 写不了就算了 */
+    /* if it cannot be written, never mind */
   }
   process.stdout.write(`mock vision (${MODE}) listening on http://127.0.0.1:${PORT}\n`);
   process.stdout.write(`  port file: ${out}\n`);

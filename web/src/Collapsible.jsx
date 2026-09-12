@@ -1,11 +1,11 @@
-// Collapsible.jsx — 默认收起的折叠区块
+// Collapsible.jsx — a collapsible block that starts closed
 //
-// 为什么有它：被明确点出来过 ——「代理节点每次探测都把列表全部拉出来，很占地方」。
-// 一屏能放的信息是有限的资源，把「长列表 / 次要选项」默认收起来，
-// 只留一行摘要让人知道里面有什么、有多少、关键值是多少，想看再点开。
-// 同一套思路在这里被复用到：代理节点、LLM 需求表、来源分组、报告的导出按钮组。
+// Why it exists: it was called out explicitly - "every proxy-node probe drags the whole list out, it takes up a lot of room".
+// The information that fits on one screen is a limited resource, so "long lists / secondary options" start collapsed,
+// leaving only a one-line summary that says what is inside, how many there are and the key value; open it when you want to look.
+// The same idea is reused here for: proxy nodes, the LLM requirements table, source groups, the report export button group.
 //
-// 细节：展开状态记在 localStorage（按 id），所以「我习惯展开」这件事只需说一次。
+// Detail: the expanded state is remembered in localStorage (keyed by id), so "I like it expanded" only has to be said once.
 import { useEffect, useState } from 'react';
 
 const KEY = 'vml.collapsed.v1';
@@ -30,7 +30,7 @@ export function Collapsible({ id, title, summary, children, defaultOpen = false,
     try {
       localStorage.setItem(KEY, JSON.stringify(saved));
     } catch {
-      // 隐私模式下 localStorage 可能不可写，不影响使用
+      // In private mode localStorage may not be writable; it does not affect usability
     }
   }, [id, open]);
 

@@ -1,12 +1,14 @@
-// savebar.jsx — 统一的「保存 + 状态」条
+// savebar.jsx — the unified "save + status" bar
 //
-// 为什么要有它：以前保存成功只 flash 一个 2.5 秒的 toast，位置在屏幕右下角，
-// 又小又容易错过；保存按钮旁边则是**什么都没有**，所以「保存成功了吗」根本无从判断
-// （实测：toast 确实出现了，但 71×43px 贴在视口最角上，用户看不到）。
-// 现在的约定：
-//   idle  = 还没动过        dirty = 有未保存的改动（琥珀色，常驻）
-//   saving= 保存中          saved = 已保存 + 时间戳（常驻，绿色）
-//   error = 失败原因（常驻，红色，不清掉 —— 失败了就必须一直看得见）
+// Why it exists: a successful save used to flash a 2.5-second toast in the bottom-right
+// corner of the screen -- tiny and easy to miss; next to the save button there was
+// **nothing at all**, so "did the save succeed?" was impossible to answer
+// (measured: the toast did show up, but 71×43px glued to the very corner of the viewport
+// is not something users see).
+// The convention now:
+//   idle  = untouched        dirty = unsaved changes (amber, persistent)
+//   saving= saving           saved = saved + timestamp (persistent, green)
+//   error = failure reason (persistent, red, never cleared -- if it failed it must stay visible)
 import { useCallback, useState } from 'react';
 import { useI18n } from './i18n.jsx';
 

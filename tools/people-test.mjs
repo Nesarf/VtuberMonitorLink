@@ -1,9 +1,13 @@
-// people-test.mjs — 「按人关注」匹配逻辑的自检 / self-test for people matching
+// people-test.mjs — self-test for the "follow by person" matching logic
 //
-// 人名匹配最容易出两类问题，而且都不会报错、只会安静地给错结果：
-//   · **假阴性**：中日文没有词边界，用 \b 匹配「嘉然」永远匹配不到「【嘉然】新动态」
-//   · **假阳性**：拉丁名用子串匹配，`Rei` 会命中 `Reimu`、`Mika` 会命中 `Mikado`
-// 所以这里两类都要钉死，还要验证「命中要带证据」（界面得能解释凭什么算他的）。
+// Person-name matching is most prone to two classes of problem, and neither raises an error —
+// they just quietly produce wrong results:
+//   · **false negatives**: CJK has no word boundaries, so a \b-based match for the CJK name of
+//     the `jaran` fixture never finds it inside a headline that wraps it in brackets (see the
+//     matchItem fixtures below)
+//   · **false positives**: matching Latin names by substring, so `Rei` hits `Reimu` and `Mika` hits `Mikado`
+// So both classes are pinned down here, plus the rule that "a hit must carry evidence"
+// (the UI has to be able to explain why an item counts as that person's).
 import assert from 'node:assert/strict';
 import {
   aliasesOf,
@@ -49,102 +53,102 @@ const people = [
   { id: 'off', name: '关闭的人', aliases: [], enabled: false },
 ];
 
-process.stdout.write('\npeople: 别名提取\n');
-t('名字 / 英文名 / 别名 / 账号 / uid 都被收进来', () => {
+process.stdout.write('\npeople: alias extraction\n');
+t('name / English name / aliases / accounts / uid all get collected', () => {
   const a = aliasesOf(people[0]).map((x) => x.value);
   assert.ok(a.includes('嘉然'));
   assert.ok(a.includes('Diana'));
   assert.ok(a.includes('嘉然今天吃什么'));
-  assert.ok(a.includes('672328094'), 'uid 应参与匹配');
-  assert.ok(a.includes('space.bilibili.com/672328094'), 'uid 链接形态');
-  assert.ok(a.includes('diana_aso') && a.includes('@diana_aso'), 'handle 有无 @ 都要覆盖');
+  assert.ok(a.includes('672328094'), 'uid should take part in matching');
+  assert.ok(a.includes('space.bilibili.com/672328094'), 'uid link shape');
+  assert.ok(a.includes('diana_aso') && a.includes('@diana_aso'), 'both the handle with and without @ must be covered');
 });
 
-t('太短的别名被丢掉（避免 1 个字到处误命中）', () => {
+t('too-short aliases are dropped (so one single character does not falsely match everywhere)', () => {
   const a = aliasesOf({ id: 'x', name: 'AB', aliases: ['R', ''] }).map((x) => x.value);
   assert.ok(!a.includes('R'));
 });
 
-process.stdout.write('\npeople: 匹配（中日文子串 + 拉丁词边界）\n');
+process.stdout.write('\npeople: matching (CJK substring + Latin word boundary)\n');
 const M = buildMatchers(people);
 
-t('中文名在标题里能命中（无词边界也能）', () => {
+t('a CJK name matches inside a title (even with no word boundary)', () => {
   const r = matchItem({ title: '【嘉然】今天有新动态' }, M);
   assert.deepEqual(r.ids, ['jaran']);
   assert.equal(r.hits[0].field, 'title');
   assert.equal(r.hits[0].alias, '嘉然');
 });
 
-t('拉丁名不会被别的词包住而误命中', () => {
+t('a Latin name is not falsely matched when wrapped by another word', () => {
   assert.deepEqual(matchItem({ title: 'Mikado is not Mika' }, buildMatchers([{ id: 'm', name: 'Mika', enabled: true }])).ids, ['m']);
-  // 「Reimu」里含有「Rei」，但它是完整词，不能算命中
+  // "Reimu" contains "Rei", but it is a whole word, so it must not count as a hit
   const r = matchItem({ title: 'Reimu Hakurei 的直播' }, M);
-  assert.ok(!r.ids.includes('rei'), 'Reimu 不应命中 Rei');
+  assert.ok(!r.ids.includes('rei'), 'Reimu must not match Rei');
 });
 
-t('大小写不敏感', () => {
+t('case-insensitive', () => {
   assert.deepEqual(matchItem({ title: 'REI 新曲发布' }, M).ids, ['rei']);
   assert.deepEqual(matchItem({ title: 'diana 生日' }, M).ids, ['jaran']);
 });
 
-t('假名别名可命中', () => {
+t('a kana alias can match', () => {
   assert.deepEqual(matchItem({ title: 'レイの3D披露' }, M).ids, ['rei']);
 });
 
-t('uid 在 URL 字段里能命中（来源页那种）', () => {
+t('a uid matches inside a URL field (the source-page kind)', () => {
   const r = matchItem({ title: '某条动态', url: 'https://space.bilibili.com/672328094/dynamic' }, M);
   assert.deepEqual(r.ids, ['jaran']);
   assert.equal(r.hits[0].field, 'url');
 });
 
-t('handle 命中 @ 形式', () => {
+t('a handle matches the @ form', () => {
   assert.deepEqual(matchItem({ text: 'via @diana_aso' }, M).ids, ['jaran']);
 });
 
-t('禁用的关注对象不参与匹配', () => {
+t('a disabled watch target takes no part in matching', () => {
   assert.deepEqual(matchItem({ title: '关闭的人 发了什么' }, M).ids, []);
 });
 
-t('一条里有两个人 → 都算命中，且都带证据', () => {
+t('two people in one item -> both count as hits, each carrying evidence', () => {
   const r = matchItem({ title: '嘉然 和 Rei 联动' }, M);
   assert.deepEqual(r.ids.sort(), ['jaran', 'rei']);
   assert.equal(r.hits.length, 2);
   for (const h of r.hits) {
-    assert.ok(h.alias && h.source && h.field, '每处命中都要能解释');
+    assert.ok(h.alias && h.source && h.field, 'every hit has to be explainable');
   }
 });
 
-t('同一个人在同一字段只记一次（不刷屏）', () => {
+t('the same person is recorded only once per field (no flooding)', () => {
   const r = matchItem({ title: '嘉然 嘉然 嘉然' }, M);
   assert.equal(r.hits.filter((h) => h.field === 'title').length, 1);
 });
 
-t('来源名字本身是人名时能归属（B站动态 · 嘉然… 这类）', () => {
+t('attribution works when the source name is itself a person name (the "bilibili feed · Jaran…" kind)', () => {
   const r = matchItem({ title: '今天发了一条动态', sourceName: 'B站动态 · 嘉然今天吃什么' }, M);
   assert.deepEqual(r.ids, ['jaran']);
   assert.equal(r.hits[0].field, 'sourceName');
 });
 
-t('本地化对象字段（sourceName 是 {zh,en}）也要能匹配', () => {
-  // 这是真实形状：直接 String({zh,en}) 会得到 "[object Object]"，让归属静默失效
+t('a localized object field (sourceName being {zh,en}) has to match as well', () => {
+  // This is the real shape: a plain String({zh,en}) yields "[object Object]" and silently kills attribution
   const r = matchItem({ title: '新动态', sourceName: { zh: 'B站动态 · 嘉然今天吃什么', en: 'bilibili · Diana' } }, M);
   assert.deepEqual(r.ids, ['jaran']);
   assert.equal(r.hits[0].field, 'sourceName');
-  // 英文那一份也要能命中
+  // The English one has to be able to hit too
   const r2 = matchItem({ title: 'x', sourceName: { zh: '某来源', en: 'Diana channel' } }, M);
   assert.deepEqual(r2.ids, ['jaran']);
 });
 
-t('对象里没有可匹配内容时不会误命中', () => {
+t('nothing matchable inside the item means no false hit', () => {
   const r = matchItem({ title: 'x', sourceName: { zh: '无关来源', en: 'unrelated' } }, M);
   assert.deepEqual(r.ids, []);
 });
 
-t('无关条目一个人都不命中', () => {
+t('an unrelated item matches nobody', () => {
   assert.deepEqual(matchItem({ title: '某游戏更新公告' }, M).ids, []);
 });
 
-process.stdout.write('\npeople: 批量归属与聚合\n');
+process.stdout.write('\npeople: batch attribution and aggregation\n');
 const items = [
   { id: 'a', title: '【嘉然】新动态', publishedAt: '2026-09-01T10:00:00Z' },
   { id: 'b', title: 'Rei 宣布 3D 披露', publishedAt: '2026-09-05T10:00:00Z' },
@@ -152,36 +156,36 @@ const items = [
   { id: 'd', title: '嘉然 与 Rei 联动预告', publishedAt: '2026-09-07T10:00:00Z' },
 ];
 
-t('批量归属统计正确（含一条命中两人的情况）', () => {
+t('batch attribution counts are correct (including an item that hits two people)', () => {
   const r = annotateItems(items, people);
-  assert.equal(r.matched, 3, 'a/b/d 三条命中');
+  assert.equal(r.matched, 3, 'a/b/d, three items matched');
   assert.equal(r.items[0].people[0], 'jaran');
   assert.deepEqual(r.items[3].people.sort(), ['jaran', 'rei']);
 });
 
-t('按人聚合：数量、最近时间、按最近排序', () => {
+t('per-person aggregation: count, most recent time, sorted by recency', () => {
   const feed = feedByPerson(items, people);
   const jaran = feed.find((f) => f.person.id === 'jaran');
   const rei = feed.find((f) => f.person.id === 'rei');
   assert.equal(jaran.count, 2);
   assert.equal(rei.count, 2);
   assert.equal(jaran.lastAt, '2026-09-07T10:00:00Z');
-  // jaran 与 rei 的最近时间相同 → 再按数量；两者相同 → 顺序无所谓，但都要在列表里
-  assert.ok(feed.findIndex((f) => f.person.id === 'off') >= 0 || true, '未命中的关注对象也应出现在名单里（数量 0）');
+  // jaran and rei share the same most recent time -> then by count; if both are equal the order does not matter, but both must be in the list
+  assert.ok(feed.findIndex((f) => f.person.id === 'off') >= 0 || true, 'a watch target with no hits must appear in the list too (count 0)');
   const off = feed.find((f) => f.person.id === 'off');
-  assert.equal(off.count, 0, '没动静的人也要在名单里，只是 count 为 0');
+  assert.equal(off.count, 0, 'someone with no activity stays in the list, just with count 0');
 });
 
-t('按单人筛选只返回那个人', () => {
+t('filtering by a single person returns only that person', () => {
   const feed = feedByPerson(items, people, { id: 'rei' });
   assert.equal(feed.length, 1);
   assert.equal(feed[0].person.id, 'rei');
   assert.equal(feed[0].items.length, 2);
-  assert.ok(feed[0].items[0].peopleHits.length >= 1, '单人的条目要带上是哪个别名命中的');
+  assert.ok(feed[0].items[0].peopleHits.length >= 1, 'a single-person item has to carry which alias hit');
 });
 
-process.stdout.write('\npeople: 导入建议与导出\n');
-t('从实体统计里推荐关注对象，已关注的会被排除', () => {
+process.stdout.write('\npeople: import suggestions and export\n');
+t('suggest watch targets from entity statistics, with already-followed ones excluded', () => {
   const entities = [
     { value: '嘉然', count: 9 },
     { value: '新出现的某人', count: 5 },
@@ -189,12 +193,12 @@ t('从实体统计里推荐关注对象，已关注的会被排除', () => {
   ];
   const s = suggestFromPeople(entities, people, { minCount: 2 });
   const names = s.map((x) => x.name);
-  assert.ok(!names.includes('嘉然'), '已关注的不要重复推荐');
+  assert.ok(!names.includes('嘉然'), 'do not re-suggest someone already followed');
   assert.ok(names.includes('新出现的某人'));
-  assert.ok(!names.includes('只出现一次'), '低于阈值的不推荐');
+  assert.ok(!names.includes('只出现一次'), 'below-threshold ones are not suggested');
 });
 
-t('导出 JSON / Markdown 都带齐人与条目', () => {
+t('the JSON and Markdown exports both carry the person and the items', () => {
   const feed = feedByPerson(items, people, { id: 'jaran' })[0];
   const js = personExport(feed.person, feed.items, 'json');
   const parsed = JSON.parse(js.body);
@@ -205,30 +209,30 @@ t('导出 JSON / Markdown 都带齐人与条目', () => {
   assert.ok(md.body.includes('共 2 条'));
 });
 
-process.stdout.write('\npeople: 输入校验\n');
-t('必须有名字；id 会被清洗', () => {
+process.stdout.write('\npeople: input validation\n');
+t('a name is required; the id gets sanitized', () => {
   assert.ok(sanitizePerson({ name: '' }).error);
   const { person } = sanitizePerson({ id: '有 空格/斜杠', name: '测试' });
   assert.ok(/^[A-Za-z0-9._-]+$/.test(person.id));
 });
 
-t('别名去重、去空、限长', () => {
+t('aliases are de-duplicated, blanks dropped, length capped', () => {
   const { person } = sanitizePerson({ name: 'X', aliases: ['a1', 'a1', ' ', 'b2'] });
   assert.deepEqual(person.aliases, ['a1', 'b2']);
 });
 
-t('通知级别只允许三档，默认 alert', () => {
+t('only three notification levels are allowed, default alert', () => {
   assert.equal(sanitizePerson({ name: 'X' }).person.notifyLevel, 'alert');
   assert.equal(sanitizePerson({ name: 'X', notifyLevel: 'urgent' }).person.notifyLevel, 'urgent');
   assert.equal(sanitizePerson({ name: 'X', notifyLevel: '乱写' }).person.notifyLevel, 'alert');
 });
 
-t('links 只保留认识的键', () => {
+t('links keeps only the recognized keys', () => {
   const { person } = sanitizePerson({ name: 'X', links: { bilibili: '123', 乱七八糟: 'y' } });
   assert.deepEqual(Object.keys(person.links), ['bilibili']);
 });
 
-t('**不限于 bilibili**：twitch / acfun / niconico / weibo 等平台账号都要留下来', () => {
+t('**not limited to bilibili**: accounts on twitch / acfun / niconico / weibo and the like all have to survive', () => {
   const { person } = sanitizePerson({
     name: 'Y',
     links: { twitch: 'someone_tv', acfun: '123456', niconico: '999', weibo: '7595006312', youtube: 'UCabc', 乱七八糟: 'z' },
@@ -236,17 +240,17 @@ t('**不限于 bilibili**：twitch / acfun / niconico / weibo 等平台账号都
   assert.deepEqual(Object.keys(person.links).sort(), ['acfun', 'niconico', 'twitch', 'weibo', 'youtube']);
 });
 
-t('别名从**任意平台**链接生成（不是只认 bilibili）', () => {
+t('aliases are generated from links on **any platform** (not only bilibili)', () => {
   const p = { id: 'p1', name: '甲', links: { twitch: 'someone_tv', youtube: 'UCabc', twitter: 'SomeOne', bilibili: '672328094' } };
   const vals = aliasesOf(p).map((a) => a.value);
-  assert.ok(vals.includes('someone_tv'), 'twitch 名本身');
-  assert.ok(vals.includes('twitch.tv/someone_tv'), 'twitch 链接形态');
-  assert.ok(vals.includes('youtube.com/channel/UCabc'), 'youtube 频道链接');
-  assert.ok(vals.includes('@SomeOne'), 'twitter handle 的 @ 形态');
-  assert.ok(vals.includes('space.bilibili.com/672328094'), 'bilibili 链接（原有行为不能丢）');
+  assert.ok(vals.includes('someone_tv'), 'the twitch name itself');
+  assert.ok(vals.includes('twitch.tv/someone_tv'), 'the twitch link shape');
+  assert.ok(vals.includes('youtube.com/channel/UCabc'), 'the youtube channel link');
+  assert.ok(vals.includes('@SomeOne'), 'the @ form of the twitter handle');
+  assert.ok(vals.includes('space.bilibili.com/672328094'), 'the bilibili link (the existing behaviour must not be lost)');
 });
 
-t('别名来源标注平台（界面要能说「凭什么说这条是他的」）', () => {
+t('the alias source records the platform (the UI has to be able to say "why is this one his")', () => {
   const p = { id: 'p2', name: '乙', links: { twitch: 'abc_tv' } };
   const hit = aliasesOf(p).find((a) => a.value === 'abc_tv');
   assert.equal(hit.source, 'twitch-id');

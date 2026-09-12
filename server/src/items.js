@@ -1,11 +1,11 @@
-// items.js — 把各来源的抓取结果统一成「情报条目」
-// 网页端的卡片流、报告里的来源清单、关注量增长，全都吃这一份结构。
+// items.js — normalize each source's fetch result into an "intel item"
+// The web card stream, the source list inside reports and the follow-count growth all consume this one shape.
 //
-// 条目形状 / item shape:
+// item shape:
 //   { id, kind, sourceId, sourceName:{zh,en}, title, text, url, time, images[], stats{}, extra }
 //
-// id 用**内容派生**而不是下标：星标/已读要跨运行保持，用 `sourceId#3` 这种下标
-// 下次换个顺序就全对不上了。
+// id is **content-derived** rather than positional: stars/read flags have to survive across runs, and a
+// positional id like `sourceId#3` stops matching anything the moment the order changes next run.
 import crypto from 'node:crypto';
 import { CATEGORIES } from './sources.js';
 
@@ -65,8 +65,8 @@ function fromMediaWiki(content, src) {
 }
 
 /**
- * 一个抓取结果 → 情报条目数组
- * @param {object} result fetchAll() 的单项
+ * one fetch result → an array of intel items
+ * @param {object} result a single entry out of fetchAll()
  */
 export function normalizeResult(result, limit = LIMIT_DEFAULT) {
   const src = result.source ?? {};
@@ -78,7 +78,7 @@ export function normalizeResult(result, limit = LIMIT_DEFAULT) {
   let raw = [];
 
   if (Array.isArray(result.items) && result.items.length) {
-    // 抓取器已经给出结构化条目（bilibili 等）
+    // the fetcher already handed back structured items (bilibili and friends)
     raw = result.items;
   } else if (!result.ok || !result.content) {
     return [];
@@ -109,7 +109,7 @@ export function normalizeResult(result, limit = LIMIT_DEFAULT) {
   });
 }
 
-/** 汇总所有来源 / collect every result into one flat list */
+/** collect every result into one flat list */
 export function collectItems(results, limitPerSource = LIMIT_DEFAULT) {
   const out = [];
   for (const r of results) out.push(...normalizeResult(r, limitPerSource));
@@ -117,8 +117,8 @@ export function collectItems(results, limitPerSource = LIMIT_DEFAULT) {
 }
 
 /**
- * 关键词命中检查（用于告警高亮）/ keyword alarm check
- * @returns {string[]} 命中的关键词
+ * keyword hit check (used for alert highlighting)
+ * @returns {string[]} the keywords that matched
  */
 export function matchedKeywords(item, keywords = []) {
   if (!keywords.length) return [];

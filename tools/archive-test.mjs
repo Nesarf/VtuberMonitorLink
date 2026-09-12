@@ -1,9 +1,9 @@
-// archive-test.mjs — SQLite 归档的自检 / self-test for the incremental archive
+// archive-test.mjs — self-test for the incremental archive / self-test for the incremental archive
 //
-// 归档层有两个「安静地错」的大坑，必须钉死：
-//   · **不幂等**：运行会重跑与补跑，重复写入会让图表数字凭空变大
-//   · **参数拼接**：来源 id / 日期来自外部，拼 SQL 就是注入
-// 另外验证：迁移能接上老库、按天补齐不出现断线、量大时不慢。
+// The archive layer has two big "fails quietly" traps that must be pinned down:
+//   · **Not idempotent**: runs re-run and backfill, and duplicate writes make the chart numbers grow out of thin air
+//   · **Parameter concatenation**: source ids / dates come from outside, so concatenating SQL is injection
+// It also verifies: migration can pick up an old database, gap-filling by day never breaks the line, and large volumes are not slow.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -52,27 +52,27 @@ const mk = (n, day, sourceId = 'src-a', extra = {}) =>
     ...extra,
   }));
 
-process.stdout.write('\narchive: 建库与迁移\n');
-t('建库后 user_version 是当前版本', () => {
+process.stdout.write('\narchive: schema and migration\n');
+t('user_version is the current version after creating the database', () => {
   const db = openArchive({}, { file: dbPath });
   const v = db.prepare('PRAGMA user_version').get().user_version;
   assert.equal(v, SCHEMA_VERSION);
   db.close();
 });
 
-t('重复打开不会重复建表，且迁移可重入', () => {
+t('reopening does not re-create tables and migration is re-entrant', () => {
   const db = openArchive({}, { file: dbPath });
   const r = migrate(db);
-  assert.equal(r.from, SCHEMA_VERSION, '已是当前版本就不该再迁');
+  assert.equal(r.from, SCHEMA_VERSION, 'already at the current version, so it must not migrate again');
   assert.equal(r.to, SCHEMA_VERSION);
   db.close();
 });
 
-t('老库（user_version=0）能被迁移接上', () => {
+t('an old database (user_version=0) can be picked up by migration', () => {
   const oldPath = path.join(tmp, 'old.db');
   const raw = openArchive({}, { file: oldPath });
-  raw.exec('PRAGMA user_version = 0'); // 模拟老库
-  raw.exec('DROP TABLE IF EXISTS source_health'); // 模拟缺少新表
+  raw.exec('PRAGMA user_version = 0'); // simulate an old database
+  raw.exec('DROP TABLE IF EXISTS source_health'); // simulate a missing new table
   raw.close();
   const db = openArchive({}, { file: oldPath });
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
@@ -80,44 +80,44 @@ t('老库（user_version=0）能被迁移接上', () => {
   db.close();
 });
 
-process.stdout.write('\narchive: 增量与幂等\n');
+process.stdout.write('\narchive: increment and idempotence\n');
 const db = openArchive({}, { file: dbPath });
 
-t('首次写入 N 条', () => {
+t('first write of N items', () => {
   const r = ingestItems(db, mk(10, '2026-09-01'), { day: '2026-09-01' });
   assert.equal(r.inserted, 10);
   assert.equal(r.skipped, 0);
   assert.deepEqual(r.days, ['2026-09-01']);
 });
 
-t('同一天重跑（同一批）不会重复计数', () => {
+t('re-running the same day (same batch) does not double-count', () => {
   const r = ingestItems(db, mk(10, '2026-09-01'), { day: '2026-09-01' });
-  assert.equal(r.inserted, 0, '全都应被忽略');
+  assert.equal(r.inserted, 0, 'all of them should be skipped');
   assert.equal(r.skipped, 10);
   const row = db.prepare('SELECT items FROM daily WHERE day = ? AND source_id = ?').get('2026-09-01', 'src-a');
-  assert.equal(Number(row.items), 10, 'daily 计数不能翻倍');
+  assert.equal(Number(row.items), 10, 'the daily count must not double');
 });
 
-t('增量：新增 5 条只加 5', () => {
+t('increment: 5 new items add only 5', () => {
   const more = mk(15, '2026-09-01').slice(10);
   const r = ingestItems(db, more, { day: '2026-09-01' });
   assert.equal(r.inserted, 5);
   assert.equal(stats(db).items, 15);
 });
 
-t('空输入与缺 id 的条目不炸', () => {
+t('empty input and items missing an id do not blow up', () => {
   assert.deepEqual(ingestItems(db, [], { day: '2026-09-02' }).inserted, 0);
-  const r = ingestItems(db, [{ title: '没有 id' }, null, undefined], { day: '2026-09-02' });
+  const r = ingestItems(db, [{ title: 'no id' }, null, undefined], { day: '2026-09-02' });
   assert.equal(r.inserted, 0);
 });
 
-t('发布日优先于运行日（跨天抓到的旧内容归到它自己的日期）', () => {
+t('the publish day wins over the run day (old content caught across midnight belongs to its own date)', () => {
   assert.equal(dayOf({ publishedAt: '2026-08-30T12:00:00Z' }, '2026-09-01'), '2026-08-30');
   assert.equal(dayOf({}, '2026-09-01'), '2026-09-01');
-  assert.equal(dayOf({ publishedAt: '不是时间' }, '2026-09-01'), '2026-09-01');
+  assert.equal(dayOf({ publishedAt: 'not a time' }, '2026-09-01'), '2026-09-01');
 });
 
-t('多来源分别计数', () => {
+t('multiple sources are counted separately', () => {
   ingestItems(db, mk(4, '2026-09-03', 'src-x'), { day: '2026-09-03' });
   ingestItems(db, mk(6, '2026-09-03', 'src-y'), { day: '2026-09-03' });
   const s = series(db, { days: 7, endDay: '2026-09-03' });
@@ -125,30 +125,30 @@ t('多来源分别计数', () => {
   assert.equal(d3.items, 10);
 });
 
-process.stdout.write('\narchive: 图表查询\n');
-t('按天序列补齐空白日（图表不该断线）', () => {
+process.stdout.write('\narchive: chart queries\n');
+t('the by-day series fills in empty days (the chart must not break its line)', () => {
   const s = series(db, { days: 5, endDay: '2026-09-03' });
   assert.equal(s.days.length, 5);
   assert.deepEqual(
     s.days.map((d) => d.day),
     ['2026-08-30', '2026-08-31', '2026-09-01', '2026-09-02', '2026-09-03']
   );
-  assert.equal(s.days.find((d) => d.day === '2026-08-31').items, 0, '没跑的日子应为 0 而不是缺席');
+  assert.equal(s.days.find((d) => d.day === '2026-08-31').items, 0, 'a day with no run should be 0, not absent');
 });
 
-t('按来源分组的序列与合计', () => {
+t('the series grouped by source, plus the totals', () => {
   const s = series(db, { days: 7, endDay: '2026-09-03', groupBy: 'source' });
   assert.equal(s.totals[0].sourceId, 'src-a');
   assert.equal(s.totals[0].items, 15);
-  // 注意：按来源分组时 days 只含**真有数据的日子**（稀疏视图，避免 30 天里塞 30 个空 map）
-  assert.ok(s.days.length >= 2, '实际 ' + s.days.length);
+  // Note: when grouped by source, days only contains **days with real data** (a sparse view, so 30 empty maps are not stuffed into 30 days)
+  assert.ok(s.days.length >= 2, 'actual ' + s.days.length);
   const d3 = s.days.find((d) => d.day === '2026-09-03');
   assert.equal(d3.sources['src-x'], 4);
   assert.equal(d3.sources['src-y'], 6);
-  assert.equal(d3.items, 10, '每天的合计要对');
+  assert.equal(d3.items, 10, 'the per-day total has to be right');
 });
 
-t('关注对象的活跃度序列', () => {
+t('the activity series for followed people', () => {
   ingestItems(db, mk(3, '2026-09-04', 'src-z', { people: ['jaran'] }), { day: '2026-09-04' });
   ingestItems(db, mk(2, '2026-09-04', 'src-z2', { people: ['jaran', 'rei'] }), { day: '2026-09-04' });
   const p = peopleSeries(db, { days: 7, endDay: '2026-09-04' });
@@ -157,14 +157,14 @@ t('关注对象的活跃度序列', () => {
   assert.equal(p.byDay.jaran['2026-09-04'], 5);
 });
 
-t('关键词趋势', () => {
+t('keyword trend', () => {
   ingestItems(db, mk(2, '2026-09-05', 'src-k', { keywords: ['3D披露'] }), { day: '2026-09-05' });
   const k = keywordSeries(db, { days: 7, endDay: '2026-09-05' });
   assert.equal(k.keywords[0].keyword, '3D披露');
   assert.equal(k.keywords[0].total, 2);
 });
 
-t('来源健康度：成功率与平均耗时', () => {
+t('source health: success rate and average duration', () => {
   for (let i = 0; i < 4; i++) recordHealth(db, { day: '2026-09-05', sourceId: 'src-a', ok: i < 3, ms: 100 + i * 10 });
   const h = healthSeries(db, { days: 7, endDay: '2026-09-05' });
   const a = h.sources.find((x) => x.sourceId === 'src-a');
@@ -174,71 +174,71 @@ t('来源健康度：成功率与平均耗时', () => {
   assert.equal(a.avgMs, 110);
 });
 
-t('运行记录写入', () => {
+t('run records are written', () => {
   recordRun(db, { runId: 'r1', day: '2026-09-05', mode: 'daily', sourcesOk: 2, sources: 3, items: 7, alerts: 1 });
   recordRun(db, { runId: 'r1', day: '2026-09-05', mode: 'daily', sourcesOk: 3, sources: 3, items: 7, alerts: 0 });
   const s = stats(db);
-  assert.equal(s.runs, 1, '同一个 runId 应覆盖而不是新增');
+  assert.equal(s.runs, 1, 'the same runId should overwrite, not add');
 });
 
-process.stdout.write('\narchive: 查询安全与概况\n');
-t('恶意来源 id 不会注入（参数化）', () => {
+process.stdout.write('\narchive: query safety and overview\n');
+t('a malicious source id cannot inject (parameterized)', () => {
   const evil = "src-a'; DROP TABLE items; --";
   ingestItems(db, [{ id: 'evil-1', sourceId: evil, title: 'x' }], { day: '2026-09-06' });
   const s = series(db, { days: 7, endDay: '2026-09-06', groupBy: 'source' });
-  assert.ok(s.totals.some((x) => x.sourceId === evil), '应该被当作普通字符串存下来');
-  assert.ok(stats(db).items > 0, 'items 表必须还在');
+  assert.ok(s.totals.some((x) => x.sourceId === evil), 'it should be stored as a plain string');
+  assert.ok(stats(db).items > 0, 'the items table must still be there');
 });
 
-t('恶意查询串不会注入', () => {
+t('a malicious query string cannot inject', () => {
   const rows = queryItems(db, { q: "%' OR '1'='1" });
   assert.ok(Array.isArray(rows));
-  assert.equal(rows.length, 0, '当作普通字符串匹配，不该匹配到所有行');
+  assert.equal(rows.length, 0, 'it should match as a plain string, not match every row');
 });
 
-t('按人查询用 LIKE 也能正确包含', () => {
+t('the per-person query with LIKE also includes correctly', () => {
   const rows = queryItems(db, { personId: 'jaran', limit: 50 });
   assert.equal(rows.length, 5);
   assert.ok(rows.every((r) => r.people.includes('jaran')));
 });
 
-t('分页参数被夹住（不能要 100 万条）', () => {
+t('pagination parameters are clamped (you cannot ask for a million rows)', () => {
   const rows = queryItems(db, { limit: 10 ** 6 });
   assert.ok(rows.length <= 1000);
 });
 
-t('归档概况', () => {
+t('archive overview', () => {
   const s = stats(db);
-  assert.ok(s.items >= 30, '实际 ' + s.items);
+  assert.ok(s.items >= 30, 'actual ' + s.items);
   assert.ok(s.firstDay <= s.lastDay);
   assert.ok(s.bySource.length > 0);
 });
 
-process.stdout.write('\narchive: 性能\n');
-t('1000 条写入 + 查询在合理耗时内', () => {
+process.stdout.write('\narchive: performance\n');
+t('1000 writes + queries stay within a reasonable duration', () => {
   const t0 = Date.now();
   const big = Array.from({ length: 1000 }, (_, i) => ({
     id: 'big-' + i,
     sourceId: 'src-big-' + (i % 20),
-    title: '批量条目 ' + i,
+    title: 'bulk item ' + i,
     publishedAt: new Date(Date.UTC(2026, 8, 10, i % 24)).toISOString(),
   }));
   ingestItems(db, big, { day: '2026-09-10' });
   const s = series(db, { days: 30, endDay: '2026-09-10', groupBy: 'source' });
   const ms = Date.now() - t0;
-  assert.ok(ms < 5000, `用了 ${ms}ms`);
-  assert.equal(s.totals.reduce((n, x) => n + x.items, 0) >= 1000, true, '合计应包含那 1000 条');
-  process.stdout.write(`         （1000 条 + 30 天聚合 ${ms}ms）\n`);
+  assert.ok(ms < 5000, `took ${ms}ms`);
+  assert.equal(s.totals.reduce((n, x) => n + x.items, 0) >= 1000, true, 'the totals should include those 1000 items');
+  process.stdout.write(`         (1000 items + 30-day aggregation ${ms}ms)\n`);
 });
 
 db.close();
 
-t('库文件确实落在磁盘上', () => {
+t('the database file really lands on disk', () => {
   assert.ok(fs.existsSync(dbPath));
   assert.ok(fs.statSync(dbPath).size > 0);
 });
 
-t('archivePath 跟随配置的 feedsDir', () => {
+t('archivePath follows the configured feedsDir', () => {
   const p = archivePath({ paths: { feedsDir: tmp } });
   assert.ok(p.startsWith(tmp));
   assert.ok(p.endsWith('archive.db'));

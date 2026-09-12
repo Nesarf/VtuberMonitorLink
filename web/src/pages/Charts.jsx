@@ -1,10 +1,10 @@
-// Charts.jsx — 趋势图表（纯内联 SVG，不引入任何图表库）
+// Charts.jsx — trend charts (pure inline SVG, no charting library pulled in)
 //
-// 便携版 exe 不该为了画几根柱子多背几百 KB 依赖；而且这些图很简单：
-// 柱状（每天条目数）、横向条（来源占比）、折线（关键词/关注对象趋势）、表（来源健康度）。
+// A portable exe should not carry a few hundred KB of dependencies just to draw some bars; and these charts are simple:
+// bars (items per day), horizontal bars (share per source), lines (keyword / followed-person trends), a table (source health).
 //
-// 一个刻意的设计：**没有数据时不画空图的假象** —— 显示「还没有归档数据」并告诉使用者
-// 怎么产生数据（跑一次运行，或点补录）。空图上画一条零线等于骗人。
+// One deliberate design choice: **no fake empty chart when there is no data** — it shows "no archive data yet" and tells the user
+// how to produce some (run a run, or click backfill). Drawing a zero line on an empty chart is a lie.
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';

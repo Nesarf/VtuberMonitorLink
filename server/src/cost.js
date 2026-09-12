@@ -1,26 +1,29 @@
-// cost.js — LLM 用量记账 / token accounting
+// cost.js — LLM usage accounting / token accounting
 //
-// 为什么要记：这个工具的钱花在 LLM 上（每轮分析 + 特征抽取 + 图片打标），
-// 而在此之前**界面上看不到任何用量** —— `analyze.js` 把 `usage` 取回来了，
-// 但没人聚合，于是「这周花了多少」只能靠猜。跑得越久越需要这个数。
+// Why keep books: this tool spends its money on the LLM (each analysis round + feature
+// extraction + image tagging), and before this **the UI showed no usage at all** —
+// `analyze.js` did bring back `usage`, but nobody aggregated it, so "how much did this week
+// cost" could only be guessed. The longer it runs, the more this number is needed.
 //
-// 设计上的两个克制：
-//   1. 只记**能看到的**：拿不到 usage 的路径（模型没返回用量、或走的是本地模型）
-//      记成 unknown 而不是猜一个数字 —— 假账比没账更糟。
-//   2. 预算闸门默认**只警告不拦**：使用者自己开的工具，拦下来不打招呼是越权；
-//      想真拦就把 llm.budget.onExceed 设成 'stop'。
+// Two deliberate restraints in the design:
+//   1. Only record **what can be seen**: paths where usage is unavailable (the model returned
+//      no usage, or a local model was used) are recorded as unknown rather than guessed —
+//      fake books are worse than no books.
+//   2. The budget gate by default **only warns, never blocks**: this is a tool the user runs
+//      themselves, and blocking it without a word would be overreach; to really block, set
+//      llm.budget.onExceed to 'stop'.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
 const FILE = 'cost.jsonl';
-const KEEP_LINES = 5000; // 超过就只留最近这么多行（一次运行一行，几千行够看一年）
+const KEEP_LINES = 5000; // Beyond this only the most recent lines are kept (one line per run; a few thousand covers a year)
 
 function costPath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), FILE);
 }
 
-/** 记一条用量（一次运行一条）。坏行不影响别人 —— 读的时候逐行容错。 */
+/** Record one usage entry (one per run). A bad line doesn't affect the others — reads are tolerant line by line. */
 export function recordUsage(cfg, entry) {
   const p = costPath(cfg);
   const row = {
@@ -40,7 +43,7 @@ export function recordUsage(cfg, entry) {
     fs.appendFileSync(p, JSON.stringify(row) + '\n', 'utf8');
     trimIfHuge(p);
   } catch {
-    /* 记不上不影响运行 */
+    /* failing to record doesn't affect the run */
   }
   return row;
 }
@@ -52,11 +55,11 @@ function trimIfHuge(p) {
     if (lines.length <= KEEP_LINES) return;
     fs.writeFileSync(p, lines.slice(-KEEP_LINES).join('\n') + '\n', 'utf8');
   } catch {
-    /* 裁剪失败无所谓 */
+    /* a failed trim doesn't matter */
   }
 }
 
-/** 读出所有用量行（坏行跳过并计数，不抛错） */
+/** Read all usage lines (bad lines are skipped and counted, never thrown) */
 export function loadUsage(cfg) {
   let raw = '';
   try {
@@ -82,8 +85,9 @@ export function loadUsage(cfg) {
 const dayOf = (v) => new Date(v).toISOString().slice(0, 10);
 
 /**
- * 汇总：今天 / 逐日 / 按模型。
- * 注意 known=false 的行单独计数 —— 「没拿到用量」和「用量为 0」是两件事。
+ * Summary: today / per day / per model.
+ * Note that known=false rows are counted separately — "usage unavailable" and "usage was 0"
+ * are two different things.
  */
 export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
   const today = dayOf(now);
@@ -121,8 +125,9 @@ export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
 }
 
 /**
- * 预算状态。`dailyTokens` 为 0（或不填）= 不设限。
- * 只用**已知**用量参与判断（未知的那些没法参与，这一点在返回里说明）。
+ * Budget status. `dailyTokens` of 0 (or unset) = no limit.
+ * Only **known** usage takes part in the judgement (the unknown ones can't, and that is stated
+ * in the return value).
  */
 export function budgetStatus(cfg, summary, { now = new Date() } = {}) {
   const budget = cfg?.llm?.budget ?? {};
@@ -143,7 +148,7 @@ export function budgetStatus(cfg, summary, { now = new Date() } = {}) {
   };
 }
 
-/** 一行摘要，给日志与界面用 */
+/** One-line summary, for logs and the UI */
 export function costSummary(summary, budget) {
   const parts = [`今日 ${summary.today.tokens} tokens / ${summary.today.calls} 次`];
   if (budget?.limit) parts.push(`预算 ${budget.limit}（${Math.round(budget.pct * 100)}%）`);

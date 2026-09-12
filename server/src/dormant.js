@@ -1,29 +1,29 @@
-// dormant.js — 已停止活动的对象（毕业 / 长期休止）：日报末尾统一列他们的最新内容
+// dormant.js — objects that stopped being active (graduated / long hiatus): list their latest content at the end of the daily report
 //
-// 为什么需要：日报是「今天有什么新东西」，于是**停了的人永远不会出现在日报里** ——
-// 哪怕他昨天刚发了一条（那是他半年来唯一的一条，恰恰最该被看见）。
-// 反过来，一个已经半年没动的人，如果突然动了，也应该在日报里一眼看到。
+// Why this is needed: the daily report answers "what is new today", so **anyone who stopped never shows up in it** --
+// even if they posted something yesterday (their only post in half a year, and precisely the one that most deserves to be seen).
+// Conversely, someone quiet for half a year who suddenly moves should be visible at a glance in the daily report.
 //
-// 所以规则是：把「停止活动达到阈值（默认 6 个月）」的人在日报**末尾**统一列出来，
-// 每人附上他最新的一两条内容与日期。这样日报对「人」这件事是连续的：
-// 活跃的人在上面（今天的动态），休眠的人在下面（他们的最近一次），谁突然动了都一眼可见。
+// So the rule is: list everyone who has "been inactive past the threshold (6 months by default)" together at the **end** of the
+// daily report, each with their latest one or two items and dates. That way the report stays continuous about *people*:
+// active people on top (today's activity), dormant people below (their most recent one), and any sudden movement is obvious.
 //
-// 判据只看**事实**（最后一次活动距今多久），不猜「是不是毕业了」：
-// 毕业、休止、换平台，在数据上都只是「很久没有新条目」。
+// The criterion looks at **facts** only (how long since the last activity); it does not guess "did they graduate":
+// graduation, hiatus and platform switches all look like the same thing in the data -- "no new items for a long time".
 import { baselineOf } from './silence.js';
 
 export const DORMANT_DEFAULTS = {
   enabled: true,
-  months: 6, // 用户要的阈值：半年
-  maxPeople: 12, // 一次最多列几个人（多了就变成噪音）
-  maxItems: 2, // 每人最多几条
-  comebackDays: 3, // 「复出」判定：休眠这么久之后，最近几天又有动静
+  months: 6, // the threshold the user asked for: half a year
+  maxPeople: 12, // how many people to list at most in one run (more than that becomes noise)
+  maxItems: 2, // how many items per person at most
+  comebackDays: 3, // "comeback" criterion: after being dormant this long, there is movement again in the last few days
 };
 
 const DAY_MS = 86400000;
 const dayOf = (v) => new Date(v).toISOString().slice(0, 10);
 
-/** 距今天数（按天粒度） */
+/** Days since today (day granularity) */
 export function daysSince(day, now = new Date()) {
   if (!day) return null;
   const d = Date.parse(String(day).slice(0, 10) + 'T00:00:00Z');
@@ -32,8 +32,8 @@ export function daysSince(day, now = new Date()) {
 }
 
 /**
- * 这个人算「已停止活动」吗。
- * months 用 30.44 天/月（不用 30 天：半年差出一天多，边界上会前后不一致）。
+ * Does this person count as "no longer active".
+ * months uses 30.44 days/month (not 30: half a year differs by more than a day, which makes boundaries inconsistent).
  */
 export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS.months } = {}) {
   const days = daysSince(lastDay, now);
@@ -43,13 +43,13 @@ export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS
 }
 
 /**
- * 组织日报末尾的那个区块。
+ * Build the block at the end of the daily report.
  *
  * @param {object} o
- * @param {Array}  o.people       关注对象
- * @param {object} o.byDay        archive.peopleSeries().byDay（算最后活跃日）
- * @param {object} o.latestItems  { personId: [{title, day, url}] } —— 由 archive 查来
- * @param {object} o.todayPeople  今天有条目的 personId 集合（用来识别「复出」）
+ * @param {Array}  o.people       followed people
+ * @param {object} o.byDay        archive.peopleSeries().byDay (used to compute the last active day)
+ * @param {object} o.latestItems  { personId: [{title, day, url}] } -- looked up from the archive
+ * @param {object} o.todayPeople  set of personIds with items today (used to detect a "comeback")
  * @param {object} o.rules
  * @returns {{dormant:Array, returnees:Array, markdown:string, skipped:number}}
  */
@@ -65,15 +65,16 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
     const days = byDay[String(p.id)] ?? {};
     const baseline = baselineOf(days, { now });
     if (baseline.lastDay === null) {
-      // 从来没有记录过：不是「停止活动」，是「还没见过」——不列（列出来等于噪音）
+      // Never seen at all: this is not "stopped being active", it is "not seen yet" -- do not list (listing it is noise)
       out.skipped++;
       continue;
     }
     const activeDays = Object.keys(days)
       .filter((d) => Number(days[d]) > 0)
       .sort();
-    // 复出要这样看：最近几天动了，而**在那之前**已经静默了至少一整个阈值 ——
-    // 只看「最后活跃日」是抓不到的（复出的人最后活跃日就是今天，看上去很健康）。
+    // A comeback has to be read like this: there is movement in the last few days, and **before that** the person had
+    // already been silent for at least a full threshold --
+    // looking only at the "last active day" misses it (a returning person's last active day is today, so they look healthy).
     const recentActive = daysSince(activeDays.at(-1), now) <= (Number(r.comebackDays) || DORMANT_DEFAULTS.comebackDays);
     const prevDay = activeDays.length >= 2 ? activeDays.at(-2) : null;
     const gapBeforeRecent = prevDay ? daysSince(prevDay, now) : null;
@@ -98,7 +99,7 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
     else candidates.push(rec);
   }
 
-  // 复出的排前面（那是最该被看见的），其余按「谁最近有过动静」排
+  // Returnees first (those are what most deserves to be seen), the rest by "who had movement most recently"
   out.returnees.sort((a, b) => a.quietDays - b.quietDays);
   candidates.sort((a, b) => (b.lastDay ?? '').localeCompare(a.lastDay ?? ''));
   const picked = [...out.returnees, ...candidates].slice(0, Math.max(1, Number(r.maxPeople) || DORMANT_DEFAULTS.maxPeople));

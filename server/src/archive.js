@@ -1,19 +1,24 @@
-// archive.js — SQLite 增量归档 / incremental SQLite archive
+// archive.js — incremental SQLite archive
 //
-// 为什么需要一层归档：情报现在是「每天一份 JSON」，够用但做不了趋势分析 ——
-// 「这个来源最近是不是变差了」「这个人多久没动静了」「哪个关键词最近在涨」
-// 都要把几十份文件全读一遍再自己聚合。归档层负责：
+// Why an archive layer is needed: intel is currently "one JSON per day", which is enough but cannot do
+// trend analysis - "has this source got worse lately", "how long has this person been quiet", "which
+// keyword is rising right now" all mean reading dozens of files and aggregating them by hand. The
+// archive layer handles:
 //
-//   1) **增量写入**：按条目 id 幂等（`INSERT OR IGNORE`），同一天重跑不会产生重复
-//   2) **每日汇总**：写入时顺手更新 daily 计数，图表不必扫全表
-//   3) **可查询**：按天/来源/人/关键词出时间序列
+//   1) **Incremental writes**: idempotent per item id (`INSERT OR IGNORE`), so re-running the same day
+//      produces no duplicates
+//   2) **Daily rollups**: the daily counters are updated on write, so charts do not have to scan the whole table
+//   3) **Queryable**: time series by day / source / person / keyword
 //
-// 三个必须做对的地方：
-//   · **幂等**：运行会重跑、补跑，重复计数会让图表悄悄失真
-//   · **参数化**：任何来自外部的值（来源 id、日期）一律绑定参数，不做字符串拼接
-//   · **迁移**：这是要随发行版一起交付的库文件，加列必须能被老库平滑升级
+// Three things that must be got right:
+//   - **Idempotence**: runs get re-run and back-filled, and double counting silently distorts the charts
+//   - **Parameterization**: any value coming from outside (source id, date) is always bound as a
+//     parameter, never spliced into the string
+//   - **Migration**: this is a database file shipped with the release, so an added column must upgrade
+//     an old database smoothly
 //
-// 用的是 Node 24 自带的 node:sqlite（同样用于读浏览器 cookie），**不引入新依赖**。
+// It uses node:sqlite bundled with Node 24 (the same one used to read browser cookies) and
+// **introduces no new dependency**.
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -22,7 +27,7 @@ import { resolveDir } from './config.js';
 export const SCHEMA_VERSION = 1;
 
 const MIGRATIONS = [
-  // v1：初始结构
+  // v1: initial schema
   (db) => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS items (
@@ -86,7 +91,7 @@ export function archivePath(cfg) {
   return path.join(dir, 'archive.db');
 }
 
-/** 打开（必要时创建并迁移）归档库 */
+/** Open the archive database (creating and migrating it when necessary) */
 export function openArchive(cfg, { file = null } = {}) {
   const p = file ?? archivePath(cfg);
   if (p !== ':memory:') fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -97,7 +102,7 @@ export function openArchive(cfg, { file = null } = {}) {
   return db;
 }
 
-/** 按 user_version 逐级迁移 —— 老库必须能被新版本平滑接上 */
+/** Migrate step by step through user_version - an old database must be picked up smoothly by a new version */
 export function migrate(db) {
   const row = db.prepare('PRAGMA user_version').get();
   const current = Number(row?.user_version ?? 0);
@@ -108,7 +113,7 @@ export function migrate(db) {
   return { from: current, to: MIGRATIONS.length };
 }
 
-/** 条目里的日期 → 归档用的 day 列（UTC 日历日；没有就落到运行日） */
+/** The date carried by an item -> the day column used by the archive (UTC calendar day; the run day when there is none) */
 export function dayOf(item, fallbackDay) {
   const raw = item?.publishedAt ?? item?.at ?? item?.ts ?? item?.time ?? null;
   if (raw) {
@@ -121,8 +126,9 @@ export function dayOf(item, fallbackDay) {
 const asList = (v) => (Array.isArray(v) ? v : []);
 
 /**
- * 增量写入一批条目。
- * 幂等：同一条 id 重复写入会被忽略（并单独计数），因此补跑不会污染图表。
+ * Incrementally write a batch of items.
+ * Idempotent: writing the same id again is ignored (and counted separately), so a back-fill does not
+ * pollute the charts.
  * @returns {{inserted:number, skipped:number, days:string[]}}
  */
 export function ingestItems(db, items, { day, runId = null, now = new Date().toISOString() } = {}) {
@@ -145,8 +151,9 @@ export function ingestItems(db, items, { day, runId = null, now = new Date().toI
   let inserted = 0;
   let skipped = 0;
   const days = new Set();
-  // 整批一个事务：逐条 INSERT 会各起一个隐式事务（1000 条 = 1000 次 fsync，
-  // 实测 3.6 秒）。包起来之后是毫秒级，而且失败会整体回滚，不会留下一半数据。
+  // One transaction for the whole batch: inserting row by row opens an implicit transaction each time
+  // (1000 rows = 1000 fsyncs, measured at 3.6 seconds). Wrapped like this it takes milliseconds, and a
+  // failure rolls everything back instead of leaving half the data behind.
   db.exec('BEGIN');
   try {
     for (const it of items ?? []) {
@@ -168,7 +175,7 @@ export function ingestItems(db, items, { day, runId = null, now = new Date().toI
         media,
         runId
       );
-      // node:sqlite 的 run() 返回 { changes, lastInsertRowid }
+      // node:sqlite's run() returns { changes, lastInsertRowid }
       if (Number(res?.changes ?? 0) > 0) {
         inserted++;
         bump.run(d, it.sourceId ? String(it.sourceId) : '(unknown)', media > 0 ? 1 : 0, alerts, now);
@@ -182,7 +189,7 @@ export function ingestItems(db, items, { day, runId = null, now = new Date().toI
     try {
       db.exec('ROLLBACK');
     } catch {
-      /* 回滚失败也不再往上抛，交给调用方处理原始错误 */
+      /* a failed rollback is not re-thrown either; the caller handles the original error */
     }
     throw e;
   }
@@ -198,11 +205,12 @@ export function recordRun(db, { runId, day, mode, at = new Date().toISOString(),
 }
 
 /**
- * 记录一次来源健康检查（按天累加）。
+ * Record one source health check (accumulated per day).
  *
- * 注意不要用「时间戳当主键的一部分」：同一毫秒内的多次写入会被 OR REPLACE 覆盖
- * （自检里 4 次写入只剩 1 条就是这么来的）。健康度天然是**按天聚合**的，
- * 所以主键是 (day, source_id)，写入用累加。
+ * Note: never put a "timestamp into part of the primary key" - several writes within the same
+ * millisecond get overwritten by OR REPLACE (that is where the self-test's 4 writes leaving only 1
+ * record came from). Health is naturally **aggregated per day**, so the primary key is (day, source_id)
+ * and the write accumulates.
  */
 export function recordHealth(db, { day, sourceId, ok, ms = null, error = null, at = new Date().toISOString() }) {
   if (!sourceId) return;
@@ -212,22 +220,23 @@ export function recordHealth(db, { day, sourceId, ok, ms = null, error = null, a
      ON CONFLICT(day, source_id) DO UPDATE SET
        checks = checks + 1,
        ok = ok + excluded.ok,
-       -- 只累加**成功**的耗时：平均耗时是「成功那几次有多快」，
-       -- 把失败的那次也算进去会让数字没有意义（自检里 460/3=153 就是这么来的）
+       -- accumulate only the **successful** durations: the average duration means "how fast the
+       -- successful ones were", and counting the failed one in makes the number meaningless
+       -- (that is where the self-test's 460/3=153 came from)
        ms_sum = ms_sum + excluded.ms_sum,
        last_error = COALESCE(excluded.last_error, last_error),
        at = excluded.at`
   ).run(day, String(sourceId), ok ? 1 : 0, ok ? Number(ms ?? 0) : 0, error ? String(error).slice(0, 300) : null, at);
 }
 
-// ───────────────────────────────────────────── 查询（图表用）
+// --------------------------------------------- queries (for charts)
 
-/** 每天条目数；groupBy='source' 时按来源再分组 */
+/** Items per day; grouped by source as well when groupBy='source' */
 export function series(db, { days = 30, groupBy = 'day', endDay = null } = {}) {
   const end = endDay ?? new Date().toISOString().slice(0, 10);
   const from = new Date(Date.parse(end + 'T00:00:00Z') - (days - 1) * 86400000).toISOString().slice(0, 10);
   if (groupBy === 'source') {
-    // 参数化：来源 id 来自数据库，但日期来自调用方，一律绑定
+    // parameterized: the source id comes from the database but the date comes from the caller, so both are bound
     const rows = db
       .prepare(`SELECT day, source_id, items FROM daily WHERE day >= ? AND day <= ? ORDER BY day ASC, items DESC`)
       .all(from, end);
@@ -252,7 +261,7 @@ export function series(db, { days = 30, groupBy = 'day', endDay = null } = {}) {
     .prepare(`SELECT day, SUM(items) AS items, SUM(alerts) AS alerts, SUM(with_media) AS media FROM daily WHERE day >= ? AND day <= ? GROUP BY day ORDER BY day ASC`)
     .all(from, end);
   const byDay = new Map(rows.map((r) => [r.day, r]));
-  // 补齐空白日：图表不该因为某天没跑就断线
+  // fill in the blank days: a chart should not break its line just because nothing ran on some day
   const out = [];
   for (let i = 0; i < days; i++) {
     const d = new Date(Date.parse(from + 'T00:00:00Z') + i * 86400000).toISOString().slice(0, 10);
@@ -262,7 +271,7 @@ export function series(db, { days = 30, groupBy = 'day', endDay = null } = {}) {
   return { from, to: end, days: out };
 }
 
-/** 每天活跃的关注对象（按归档里存的人名） */
+/** People active on each day (by the person names stored in the archive) */
 export function peopleSeries(db, { days = 30, endDay = null } = {}) {
   const end = endDay ?? new Date().toISOString().slice(0, 10);
   const from = new Date(Date.parse(end + 'T00:00:00Z') - (days - 1) * 86400000).toISOString().slice(0, 10);
@@ -292,7 +301,7 @@ export function peopleSeries(db, { days = 30, endDay = null } = {}) {
   };
 }
 
-/** 关键词趋势：每个词在各天的出现次数 */
+/** Keyword trends: how many times each word appears on each day */
 export function keywordSeries(db, { days = 30, limit = 12, endDay = null } = {}) {
   const end = endDay ?? new Date().toISOString().slice(0, 10);
   const from = new Date(Date.parse(end + 'T00:00:00Z') - (days - 1) * 86400000).toISOString().slice(0, 10);
@@ -314,7 +323,7 @@ export function keywordSeries(db, { days = 30, limit = 12, endDay = null } = {})
   return { from, to: end, keywords: top.map((k) => ({ keyword: k, total: totals[k] })) };
 }
 
-/** 来源健康度：成功率与平均耗时（按天累加后的统计） */
+/** Source health: success rate and average duration (statistics accumulated per day) */
 export function healthSeries(db, { days = 30, endDay = null } = {}) {
   const end = endDay ?? new Date().toISOString().slice(0, 10);
   const from = new Date(Date.parse(end + 'T00:00:00Z') - (days - 1) * 86400000).toISOString().slice(0, 10);
@@ -335,14 +344,14 @@ export function healthSeries(db, { days = 30, endDay = null } = {}) {
         checks: n,
         ok,
         rate: n ? ok / n : null,
-        // 平均耗时只对成功的那些取，失败的没有耗时可言
+        // the average duration is taken over the successful ones only; a failure has no duration to speak of
         avgMs: ok ? Math.round(Number(r.ms_sum ?? 0) / ok) : null,
       };
     }),
   };
 }
 
-/** 归档概况 */
+/** Archive overview */
 export function stats(db) {
   const one = (sql, ...args) => {
     try {
@@ -369,7 +378,7 @@ export function stats(db) {
   };
 }
 
-/** 分页查询条目（参数化，外部值一律绑定） */
+/** Paginated item query (parameterized; external values are always bound) */
 export function queryItems(db, { day = null, sourceId = null, personId = null, q = null, limit = 100, offset = 0 } = {}) {
   const where = [];
   const args = [];
@@ -382,7 +391,7 @@ export function queryItems(db, { day = null, sourceId = null, personId = null, q
     args.push(String(sourceId));
   }
   if (personId) {
-    // people 列是 JSON 数组文本；用 LIKE 做包含判断（值仍然参数化）
+    // the people column is JSON array text; LIKE does the containment test (the value is still parameterized)
     where.push('people LIKE ?');
     args.push(`%"${String(personId)}"%`);
   }
@@ -414,24 +423,26 @@ function safeJson(s) {
   }
 }
 
-/** 把最近一次运行的结果写进归档（失败绝不影响运行本身） */
+/** Write the result of the latest run into the archive (a failure must never affect the run itself) */
 /**
- * 按人取「最新几条」内容 —— 给「停止活动/毕业」区块用。
+ * Fetch the "latest few" pieces of content per person - used by the "stopped activity / graduated" block.
  *
- * 注意跟 queryItems 的差别：这里要的是**每个人的最后一条**，而那条可能在很久以前
- * （半年、一年），所以不能按「最近 N 天」筛，只能按人查、按天倒序取前几条。
- * people 列是 JSON 数组，用带引号的 LIKE 匹配（personId 是我们自己生成的 id，不含通配符）。
+ * Note the difference from queryItems: here we want **each person's last item**, and that item may be
+ * long ago (half a year, a year), so it cannot be filtered by "the last N days" - only looked up per
+ * person and taken in day-descending order. The people column is a JSON array, matched with a quoted
+ * LIKE (personId is an id we generated ourselves and contains no wildcard).
  */
 export function latestItemsByPerson(db, { personIds = [], limit = 2 } = {}) {
   const out = {};
   const n = Math.max(1, Number(limit) || 2);
-  // 排序有两层讲究：
-  //   1. 用 COALESCE(published_at, day) —— 条目**自己的日期**在 published_at，
-  //      day 是**入库日**（回溯抓取时两者差很远）。只按 day 排会把「半年前发的内容
-  //      今天才入库」当成最新，对「他最后一条是什么」这种问题就是错的。
-  //   2. **有自己日期的排前面**：没有 published_at 的条目只能退回入库日，
-  //      而一次回溯抓取会让它们全部变成「今天」。对「他最后一条」这种问题，
-  //      宁可给一条日期确切的旧内容，也不要给一条日期不明的。
+  // The ordering has two subtleties:
+  //   1. COALESCE(published_at, day) - an item's **own date** lives in published_at, while day is the
+  //      **ingest day** (the two are far apart for a back-fill fetch). Ordering by day alone would treat
+  //      "content posted half a year ago and ingested today" as the newest, which is simply wrong for a
+  //      question like "what was his last item".
+  //   2. **items with their own date rank first**: items without published_at can only fall back to the
+  //      ingest day, and one back-fill fetch turns them all into "today". For a question like "his last
+  //      item", a piece of older content with a definite date is preferable to one with an unknown date.
   const stmt = db.prepare(
     `SELECT id, day, published_at, title, text, url FROM items
      WHERE people LIKE ?
@@ -477,7 +488,7 @@ export function archiveRun(cfg, { date, items, summary = {}, runId = null, healt
     try {
       db?.close();
     } catch {
-      /* 关不掉也没关系 */
+      /* it does not matter if it cannot be closed */
     }
   }
 }

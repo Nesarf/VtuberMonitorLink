@@ -1,5 +1,6 @@
-// cost-test.mjs — LLM 用量记账与预算闸门的自检
-// 记账最怕「假账」：拿不到用量却记成 0、坏行把整个文件读崩、预算算成负数。
+// cost-test.mjs — self-test for the LLM usage ledger and the budget gate
+// The worst thing for a ledger is "fake bookkeeping": usage that cannot be read gets recorded as 0,
+// a bad line crashes reading the whole file, the budget goes negative.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,9 +25,9 @@ const sandbox = () => {
   return { dir, cfg: { paths: { logsDir: dir } } };
 };
 
-process.stdout.write('\ncost: 记账\n');
+process.stdout.write('\ncost: ledger\n');
 
-t('记一条用量：字段归一化（usage 的 snake_case 也认）', () => {
+t('record one usage entry: fields are normalised (snake_case usage keys are accepted too)', () => {
   const { cfg } = sandbox();
   const row = recordUsage(cfg, {
     provider: 'deepseek',
@@ -43,14 +44,14 @@ t('记一条用量：字段归一化（usage 的 snake_case 也认）', () => {
   assert.equal(badLines, 0);
 });
 
-t('拿不到用量 → known=false（宁可标未知，也不记一个假 0）', () => {
+t('usage unavailable -> known=false (better to mark it unknown than to record a fake 0)', () => {
   const { cfg } = sandbox();
   const row = recordUsage(cfg, { provider: 'ollama', model: 'local', totalTokens: 0, usage: null });
   assert.equal(row.known, false);
   assert.equal(row.totalTokens, 0);
 });
 
-t('坏行不影响别的行（逐行容错）', () => {
+t('a bad line does not affect the other lines (per-line fault tolerance)', () => {
   const { cfg, dir } = sandbox();
   recordUsage(cfg, { provider: 'a', model: 'm', totalTokens: 10 });
   fs.appendFileSync(path.join(dir, 'cost.jsonl'), '{ 这不是 JSON\n', 'utf8');
@@ -60,12 +61,12 @@ t('坏行不影响别的行（逐行容错）', () => {
   assert.equal(badLines, 1);
 });
 
-t('没有文件时返回空，不抛错', () => {
+t('returns empty when there is no file, does not throw', () => {
   const { cfg } = sandbox();
   assert.deepEqual(loadUsage(cfg), { rows: [], badLines: 0 });
 });
 
-process.stdout.write('\ncost: 汇总\n');
+process.stdout.write('\ncost: summary\n');
 
 const NOW = new Date('2026-03-30T12:00:00Z');
 const rows = [
@@ -76,30 +77,30 @@ const rows = [
   { at: '2026-03-30T06:00:00Z', provider: 'ollama', model: 'local', totalTokens: 0, known: false, calls: 1 },
 ];
 
-t('今天 / 逐日 / 按模型：各自算对', () => {
+t('today / per-day / per-model: each one adds up correctly', () => {
   const s = summarizeUsage(rows, { days: 7, now: NOW });
-  assert.equal(s.today.tokens, 1500, '今天应当只有 3-30 的两条已知用量');
-  assert.equal(s.today.calls, 3, 'calls 是「真的调了几次」，含那次没拿到用量的（它确实是一次调用）');
+  assert.equal(s.today.tokens, 1500, 'today should only hold the two known usage entries from 3-30');
+  assert.equal(s.today.calls, 3, 'calls is "how many times we actually called", including the one whose usage was unavailable (it was still a call)');
   assert.equal(s.total.tokens, 1500 + 2000 + 9999);
-  assert.equal(s.unknown, 1, '未拿到用量的那条要单独计数');
+  assert.equal(s.unknown, 1, 'the entry whose usage was unavailable must be counted separately');
   assert.deepEqual(
     s.days.map((d) => d.day),
     ['2026-03-29', '2026-03-30'],
-    '7 天窗口应当排除 2 月那条',
+    'the 7-day window should exclude the February entry',
   );
   assert.equal(s.days.at(-1).tokens, 1500);
-  assert.equal(s.models[0].key, 'openai / gpt', '按 token 降序');
+  assert.equal(s.models[0].key, 'openai / gpt', 'sorted by tokens descending');
 });
 
-t('窗口外的不进 days，但仍计入总量（总量是「一共花了多少」）', () => {
+t('outside the window stays out of days, but still counts towards the total (the total is "how much was spent overall")', () => {
   const s = summarizeUsage(rows, { days: 2, now: NOW });
   assert.ok(!s.days.some((d) => d.day === '2026-02-01'));
   assert.equal(s.total.tokens, 13499);
 });
 
-process.stdout.write('\ncost: 预算\n');
+process.stdout.write('\ncost: budget\n');
 
-t('没设预算：不拦、不报超，并说明「未设」', () => {
+t('no budget set: no blocking, no over-limit report, and it says "not set"', () => {
   const s = summarizeUsage(rows, { now: NOW });
   const b = budgetStatus({ llm: {} }, s, { now: NOW });
   assert.equal(b.limit, 0);
@@ -108,33 +109,33 @@ t('没设预算：不拦、不报超，并说明「未设」', () => {
   assert.match(b.note, /未设每日预算/);
 });
 
-t('设了预算：用了多少、剩多少、超没超都对；默认只警告', () => {
+t('budget set: used, remaining and exceeded all come out right; it only warns by default', () => {
   const s = summarizeUsage(rows, { now: NOW });
   const b = budgetStatus({ llm: { budget: { dailyTokens: 2000 } } }, s, { now: NOW });
   assert.equal(b.used, 1500);
   assert.equal(b.remaining, 500);
   assert.equal(b.exceeded, false);
-  assert.equal(b.nearLimit, false, '1500/2000 = 75%，还没到 80% 的「接近上限」线');
-  assert.equal(b.action, 'warn', '默认只警告 —— 使用者自己开的工具，拦下来要先说清楚');
+  assert.equal(b.nearLimit, false, '1500/2000 = 75%, still short of the 80% "near the limit" line');
+  assert.equal(b.action, 'warn', 'warn only by default -- this is a tool the user turned on themselves, so blocking has to be explained first');
 
   const near = budgetStatus({ llm: { budget: { dailyTokens: 1800 } } }, s, { now: NOW });
-  assert.ok(near.nearLimit, '1500/1800 = 83%，应当算接近上限');
+  assert.ok(near.nearLimit, '1500/1800 = 83%, this should count as near the limit');
   assert.equal(near.exceeded, false);
 
   const over = budgetStatus({ llm: { budget: { dailyTokens: 1000, onExceed: 'stop' } } }, s, { now: NOW });
   assert.equal(over.exceeded, true);
-  assert.equal(over.remaining, 0, '剩余不该是负数');
+  assert.equal(over.remaining, 0, 'remaining must not go negative');
   assert.equal(over.action, 'stop');
 });
 
-t('超限时不把剩余算成负数（显示 -500 会让人以为欠费）', () => {
+t('over the limit does not turn the remaining amount negative (showing -500 makes people think they owe money)', () => {
   const s = { today: { tokens: 5000, calls: 1 }, unknown: 0 };
   const b = budgetStatus({ llm: { budget: { dailyTokens: 1000 } } }, s);
   assert.equal(b.remaining, 0);
   assert.equal(b.pct, 5);
 });
 
-t('摘要一行能读', () => {
+t('the summary line is readable', () => {
   const s = summarizeUsage(rows, { now: NOW });
   const b = budgetStatus({ llm: { budget: { dailyTokens: 2000 } } }, s, { now: NOW });
   const line = costSummary(s, b);

@@ -1,4 +1,4 @@
-// server.js — 本机 HTTP 服务 + REST API（仅监听 127.0.0.1）
+// server.js — local HTTP service + REST API (listens on 127.0.0.1 only)
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -103,15 +103,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.use(express.json({ limit: '8mb' }));
 
   /**
-   * 局部更新配置并落盘。
+   * Patch the config partially and write it to disk.
    *
-   * 这里踩了两次坑，值得写下来：
-   *  ① 最初我写的是 `saveConfig(...)` —— **这个函数根本不存在**；
-   *  ② 改成 `setConfig` 后仍然 `ReferenceError: setConfig is not defined`，
-   *     因为 getConfig/setConfig/onConfigChanged 是 **createApp 的参数**，
-   *     只有工厂内部的代码看得见，模块顶层的辅助函数看不见。
-   * `node --check` 对这两类都无感（语法没错），只有真的打到接口才会暴露 ——
-   * 所以巡检里必须有一条「新增纪念日」这种真正写配置的断言。
+   * Two traps were hit here, worth writing down:
+   *  ① the first version called `saveConfig(...)` — **that function simply does not exist**;
+   *  ② after switching to `setConfig` it still threw `ReferenceError: setConfig is not defined`,
+   *     because getConfig/setConfig/onConfigChanged are **parameters of createApp** and only code inside
+   *     the factory can see them, not a helper function at module top level.
+   * `node --check` is blind to both (the syntax is fine); only actually hitting the endpoint exposes them —
+   * which is why the traversal needs an assertion that really writes config, like "add an anniversary".
    */
   const patchConfig = (cfg, patch) => {
     const next = setConfig({ ...cfg, ...patch });
@@ -119,23 +119,24 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     return next;
   };
 
-  // ── 请求日志 / request log ───────────────────────────────────────
-  // 排查「UI 到底触发了什么」时，没有这个只能靠猜。/api/state 是 3 秒一次的轮询，
-  // 记下来会把日志淹掉，所以单独排除；写操作额外标出来，方便一眼看到。
+  // ── request log ──────────────────────────────────────────────────
+  // Without this, working out "what the UI actually triggered" is pure guesswork. /api/state is polled
+  // once every 3 seconds and logging it would drown the log, so it is excluded separately; writes are
+  // marked out extra clearly so they can be spotted at a glance.
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/') || req.path === '/api/state') return next();
     const t0 = Date.now();
     res.on('finish', () => {
       const ms = Date.now() - t0;
       const write = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
-      const line = (write ? '写入 ' : '') + req.method + ' ' + req.originalUrl + ' -> ' + res.statusCode + ' (' + ms + 'ms)';
-      if (res.statusCode >= 400) log?.warn('请求 / request: ' + line);
-      else log?.info('请求 / request: ' + line);
+      const line = (write ? 'write ' : '') + req.method + ' ' + req.originalUrl + ' -> ' + res.statusCode + ' (' + ms + 'ms)';
+      if (res.statusCode >= 400) log?.warn('request: ' + line);
+      else log?.info('request: ' + line);
     });
     next();
   });
 
-  // ── 配置 / config ────────────────────────────────────────────────
+  // ── config ───────────────────────────────────────────────────────
   app.get('/api/config', (_req, res) => res.json(getConfig()));
   app.put('/api/config', (req, res) => {
     const next = setConfig(req.body ?? {});
@@ -143,11 +144,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(next);
   });
 
-  // ── 来源目录 / source catalog ────────────────────────────────────
+  // ── source catalog ───────────────────────────────────────────────
   app.get('/api/sources', (_req, res) => {
     const cfg = getConfig();
-    // 「最近观测」：观测模式下每条来源上次被取到是什么时候。
-    // 只有取样比例的时候，使用者看不出「谁多久没被看到」—— 那恰恰是判断覆盖够不够的依据。
+    // "last observed": when each source was last picked while observation mode is on.
+    // Given nothing but a sampling ratio, the user cannot tell "who has not been looked at for how long" —
+    // and that is exactly the evidence for judging whether coverage is sufficient.
     const obs = loadObservationState(cfg);
     const sources = effectiveSources(cfg).map((s) => ({
       ...s,
@@ -180,7 +182,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       ...(enabled === undefined ? {} : { enabled: !!enabled }),
       ...(login ? { login } : {}),
     };
-    // 覆盖内置来源的少数可变字段（uid / 地址 / 出口）时，落到自定义来源列表里
+    // overriding the handful of mutable fields of a built-in source (uid / url / egress) lands in the custom source list
     const customIdx = (cfg.customSources ?? []).findIndex((s) => s.id === id);
     if (url !== undefined || uid !== undefined || proxy !== undefined || note !== undefined) {
       const base = customIdx >= 0 ? cfg.customSources[customIdx] : effectiveSources(cfg).find((s) => s.id === id);
@@ -192,7 +194,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, sources: effectiveSources(cfg) });
   });
 
-  // ── 自定义来源 / custom sources ──────────────────────────────────
+  // ── custom sources ───────────────────────────────────────────────
   app.post('/api/sources/custom', (req, res) => {
     const cfg = getConfig();
     const s = sanitizeCustomSource(req.body ?? {});
@@ -213,13 +215,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, removed: before - cfg.customSources.length, sources: effectiveSources(cfg) });
   });
 
-  // ── 浏览器探测 / browser detection ───────────────────────────────
+  // ── browser detection ────────────────────────────────────────────
   app.get('/api/browsers', (_req, res) => {
     res.json({ detected: detectBrowsers(), config: getConfig().browser });
   });
 
-  // ── 登录态探测 / login availability ──────────────────────────────
-  // 只回报「读到了哪些 cookie 的名字」，**绝不回传任何值**。
+  // ── login availability ───────────────────────────────────────────
+  // Only reports "which cookie names were read", and **never sends back any value**.
   app.post('/api/cookies/check', async (req, res) => {
     const cfg = getConfig();
     const profileDir = req.body?.profileDir ?? cfg.browser?.profileDir ?? '';
@@ -238,8 +240,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // ── 代理探测 / proxy detection ───────────────────────────────────
-  // 逐个试探本机常见代理端口，返回真正能出网的地址（不写死任何端口为唯一答案）
+  // ── proxy detection ──────────────────────────────────────────────
+  // Tries the common local proxy ports one by one and returns the addresses that really get out
+  // (no port is hard-coded as the one true answer)
   app.get('/api/proxy/detect', async (_req, res) => {
     const ports = [7890, 7891, 7897, 1080, 1081, 8118, 10809, 10808, 10090, 2080, 8889, 8888, 20171];
     const found = [];
@@ -253,13 +256,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         });
         if (r.ok) found.push(url);
       } catch {
-        /* 该端口不是可用代理，继续试探 / not a usable proxy, keep probing */
+        /* not a usable proxy, keep probing */
       }
     }
     res.json({ found, probed: ports.length });
   });
 
-  // ── LLM 档位 / LLM providers ─────────────────────────────────────
+  // ── LLM providers ────────────────────────────────────────────────
   app.get('/api/llm/presets', (_req, res) => {
     const cfg = getConfig();
     const p = activeProvider(cfg);
@@ -267,7 +270,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       presets: PRESETS,
       providers: cfg.llm?.providers ?? [],
       activeId: cfg.llm?.activeId ?? '',
-      active: { ...p, apiKey: p.apiKey ? '***' : '' }, // 不回传明文 Key
+      active: { ...p, apiKey: p.apiKey ? '***' : '' }, // never send the plaintext Key back
       hasKey: !!p.apiKey,
     });
   });
@@ -282,12 +285,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, provider: p });
   });
 
-  // 用「尚未保存的档位」测连通性：body 直接带 provider
+  // test connectivity with a "not yet saved provider": the body carries the provider directly
   app.post('/api/llm/test', async (req, res) => {
     const cfg = getConfig();
     const saved = activeProvider(cfg);
     const wanted = req.body?.provider ?? {};
-    // 前端回传的是掩码，别拿 *** 去测
+    // what the frontend sends back is a mask, never test with ***
     const provider = { ...saved, ...wanted, apiKey: wanted.apiKey && wanted.apiKey !== '***' ? wanted.apiKey : saved.apiKey };
     const r = await preflight(cfg, provider);
     res.json(r);
@@ -301,7 +304,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(await listModels(cfg, provider));
   });
 
-  // ── 监视对象 / watch targets ─────────────────────────────────────
+  // ── watch targets ────────────────────────────────────────────────
   app.get('/api/watch', (_req, res) => {
     const cfg = getConfig();
     const baselines = allBaselines(cfg);
@@ -381,11 +384,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, cleared: req.params.id, next: '下次检查会重建基线，不报变更' });
   });
 
-  // ── 运行 / run ───────────────────────────────────────────────────
+  // ── run ──────────────────────────────────────────────────────────
   app.post('/api/run', async (req, res) => {
     const mode = ['merch', 'watch'].includes(req.body?.mode) ? req.body.mode : 'daily';
     if (runState.running) return res.status(409).json({ error: 'a run is already in progress' });
-    // 立即返回，运行在后台继续；UI 轮询 /api/state
+    // return immediately, the run keeps going in the background; the UI polls /api/state
     res.json({ ok: true, started: mode });
     runOnce({ cfg: getConfig(), mode }).catch((e) => log?.error(`run failed — ${e.message}`));
   });
@@ -394,13 +397,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ...runState, nextFire: scheduler.nextFire(), schedule: getConfig().schedule })
   );
 
-  // ── 前置检查 / preflight ─────────────────────────────────────────
+  // ── preflight ────────────────────────────────────────────────────
   app.post('/api/preflight', async (_req, res) => {
     res.json(await preflight(getConfig()));
   });
 
-  // ── 自定义来源自检 / diagnostics for a user-added source ─────────
-  // 连通正常就不产出任何文件；只有明显异常才生成一份人可读的诊断 markdown。
+  // ── diagnostics for a user-added source ──────────────────────────
+  // A healthy connection produces no file at all; only a clear anomaly generates a human-readable diagnostic markdown.
   app.post('/api/sources/:id/diagnose', async (req, res) => {
     const cfg = getConfig();
     const source = effectiveSources(cfg).find((s) => s.id === req.params.id);
@@ -415,7 +418,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   app.get('/api/advice', (_req, res) => res.json({ files: listAdvice(getConfig()) }));
 
-  // 点开就是一份可读网页（?raw=1 拿原始 markdown）
+  // clicking it opens a readable web page (?raw=1 fetches the raw markdown)
   app.get('/api/advice/:file', (req, res) => {
     const raw = req.query.raw === '1';
     const got = readAdvice(getConfig(), req.params.file, !raw);
@@ -434,7 +437,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, removed: path.basename(req.params.file) });
   });
 
-  // ── 情报条目 / intel items ───────────────────────────────────────
+  // ── intel items ──────────────────────────────────────────────────
   app.get('/api/intel', (req, res) => {
     const cfg = getConfig();
     const data = latestIntel(cfg, Number(req.query.limit ?? 400));
@@ -443,11 +446,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const q = String(req.query.q ?? '').trim().toLowerCase();
     const onlyAlerts = req.query.alerts === '1';
     let items = (data.items ?? []).map((i) => ({ ...i, flag: flags[i.id] ?? null }));
-    // 归属到「人」：本地匹配，命中带证据（界面要能解释凭什么算他的）
+    // attribution to a "person": local matching, every hit carries evidence (the UI must be able to explain why it counts as theirs)
     const peopleCfg = cfg.people ?? [];
     const annotated = annotateItems(items, peopleCfg);
     items = annotated.items;
-    // 图片标签（来自缓存，读时合并）—— 有的话会顺带进 keywords，因此也能被检索命中
+    // image tags (from the cache, merged at read time) — when present they also join keywords, so search can hit them too
     let visionTagged = 0;
     try {
       if (cfg.vision?.enabled) {
@@ -456,7 +459,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         visionTagged = items.filter((i) => (i.imageTags ?? []).length).length;
       }
     } catch {
-      // 打标缓存坏了不该影响情报流
+      // a broken tagging cache must not affect the intel stream
     }
     const person = String(req.query.person ?? '').trim();
     if (person) items = items.filter((i) => (i.people ?? []).includes(person));
@@ -475,7 +478,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       sources: data.sources ?? [],
       total: (data.items ?? []).length,
       count: items.length,
-      // 按人关注的命中统计：界面用它显示「本次有几条命中关注对象」
+      // per-person hit stats: the UI uses them to show "how many items matched a followed person this time"
       peopleMatched: annotated.matched,
       followed: (items ?? []).filter((i) => (i.people ?? []).length > 0).length,
       visionTagged,
@@ -485,7 +488,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // 星标 / 已读 / 自定义标签
+  // star / read / custom tags
   app.patch('/api/intel/:id', (req, res) => {
     const cfg = getConfig();
     const { starred, read, note, tags } = req.body ?? {};
@@ -493,7 +496,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       ...(starred === undefined ? {} : { starred: !!starred }),
       ...(read === undefined ? {} : { read: !!read }),
       ...(note === undefined ? {} : { note: String(note).slice(0, 500) }),
-      // 自定义标签：检索会用它们（search.js 的 buildIndex 读 flags[id].tags）
+      // custom tags: search uses them (search.js buildIndex reads flags[id].tags)
       ...(tags === undefined
         ? {}
         : {
@@ -506,10 +509,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, id: req.params.id, flag });
   });
 
-  // 本次 vs 上次
+  // this round vs the previous one
   app.get('/api/intel/diff', (_req, res) => res.json(diffIntel(getConfig())));
 
-  // ── 连通性探测 / reachability ────────────────────────────────────
+  // ── reachability ─────────────────────────────────────────────────
   app.get('/api/probe', (_req, res) => {
     const cfg = getConfig();
     res.json({ cache: loadCache(cfg), ttlMinutes: cfg.ui?.probeTtlMinutes ?? 30 });
@@ -533,28 +536,29 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (!targets.length) return res.status(400).json({ error: '没有可测的目标 / nothing to probe' });
     if (targets.length > 40) targets.length = 40;
 
-    // 没指定出口时，按**这些来源实际用的出口**来测：来源把出口设成 Tor，
-    // 「测网络」就该测 Tor —— 否则拿直连的延迟去判断一个走 Tor 的来源该不该用 Tor，
-    // 结论是错的（这个坑真实存在过：界面上有 Tor 选项，探测却不认识它）。
+    // with no egress specified, probe by **the egress these sources actually use**: when a source is set to
+    // Tor, "test the network" has to test Tor — otherwise judging whether a Tor-routed source should use Tor
+    // from a direct-connection latency produces the wrong conclusion (this trap really existed: the UI had a
+    // Tor option while the probe did not recognize it).
     let effectiveModes = modes;
     const perTarget = new Map();
     if (!Array.isArray(req.body?.modes) || !req.body.modes.length) {
       for (const t of targets) {
-        const want = String(t.source?.proxy ?? ''); // 来源页那个下拉：''=自动 / direct / proxy / tor
+        const want = String(t.source?.proxy ?? ''); // that dropdown on the sources page: '' = auto / direct / proxy / tor
         const list = ['direct'];
         if (want === 'proxy' || want === 'tor') list.push(want);
         else {
           if (cfg.proxy?.enabled) list.push('proxy');
-          // Tor 只在**它真的会被用到**的时候才测：否则「全部测速」会给每条来源
-          // 多花一次 2.5 秒上下（Tor 出口建立链路本来就慢），纯属浪费 ——
-          // 而且那份 quota 应该留给真正需要 Tor 的入口。
+          // Tor is probed only when it **is genuinely going to be used**: otherwise "probe everything" makes
+          // every source pay one extra round of about 2.5s (bringing up a Tor circuit is slow to begin with),
+          // which is pure waste — and that quota should be kept for the entries that really need Tor.
           const torInPlay =
             cfg?.observation?.enabled === true || cfg?.proxy?.mode === 'tor' || cfg?.proxy?.enableTor === true;
           if (torInPlay && cfg.proxy?.torSocks) list.push('tor');
         }
         perTarget.set(t.id, list);
       }
-      effectiveModes = null; // 逐个目标决定
+      effectiveModes = null; // decided target by target
     }
 
     const out = [];
@@ -570,7 +574,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, probed: out.length, samples, results: out });
   });
 
-  // ── 站点健康看板 / source health board ───────────────────────────
+  // ── source health board ──────────────────────────────────────────
   app.get('/api/health', (_req, res) => {
     const cfg = getConfig();
     const cache = loadCache(cfg);
@@ -610,7 +614,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // ── 站点缩略图 / site thumbnails ─────────────────────────────────
+  // ── site thumbnails ──────────────────────────────────────────────
   app.get('/api/thumb', async (req, res) => {
     const cfg = getConfig();
     const url = String(req.query.url ?? '').trim();
@@ -625,7 +629,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       log,
     });
     if (req.query.json === '1') return res.json(r);
-    // 「这个站没有可用的缩略图」是正常结果，不是错误 —— 别用 404 让前端把它当请求失败
+    // "this site has no usable thumbnail" is a normal result, not an error — do not use 404 and make the frontend treat it as a failed request
     if (!r.ok) return res.json({ ok: false, error: r.error, site: url });
     res.json({ ok: true, ...r, image: `/api/thumb/file/${encodeURIComponent(r.file)}` });
   });
@@ -642,7 +646,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ dir: 'thumbs/', files: listThumbs(cfg) });
   });
 
-  // ── 计划任务 / schedules ─────────────────────────────────────────
+  // ── schedules ────────────────────────────────────────────────────
   app.get('/api/schedule', (_req, res) => {
     const cfg = getConfig();
     const tasks = (cfg.schedule?.tasks ?? []).map((t) => ({
@@ -672,7 +676,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       .catch((e) => log?.error(`manual scheduled run failed — ${e.message}`));
   });
 
-  // ── 通知推送 / alert destinations ────────────────────────────────
+  // ── alert destinations ───────────────────────────────────────────
   app.get('/api/notify', (_req, res) => {
     const cfg = getConfig();
     res.json({
@@ -680,14 +684,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       desktop: cfg.notify?.desktop !== false,
       targets: (cfg.notify?.targets ?? []).map(maskTarget),
       count: (cfg.notify?.targets ?? []).length,
-      // 静默状态与积压队列：界面要能一眼看到「现在是不是静默中、积了几条」
+      // quiet state and the backlog queue: the UI must see at a glance "are we quiet right now, and how many are queued"
       quiet: inQuietHours(cfg, { level: 'info' }),
       queue: readQueue(cfg),
       dedupeMinutes: cfg.notify?.dedupeMinutes ?? 0,
     });
   });
 
-  // 手动补发积压的通知（force 会无视静默时段）
+  // manually flush the queued notifications (force ignores the quiet hours)
   app.post('/api/notify/flush', async (req, res) => {
     const cfg = getConfig();
     const r = await flushNotifyQueue(cfg, log, { force: req.body?.force === true });
@@ -703,12 +707,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, target: maskTarget(t) });
   });
 
-  // 用「尚未保存的目标」试推一条
+  // try one push with a "not yet saved target"
   app.post('/api/notify/test', async (req, res) => {
     const cfg = getConfig();
     const wanted = sanitizeNotifyTarget(req.body?.target ?? {}, 0);
     const saved = (cfg.notify?.targets ?? []).find((t) => t.id === wanted.id);
-    // 前端回传的是掩码，别拿 *** 去发
+    // what the frontend sends back is a mask, never send with ***
     const merged = { ...(saved ?? {}), ...wanted, enabled: true, on: 'always' };
     for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
       if (!wanted[k] || /\*\*\*/.test(String(wanted[k]))) merged[k] = saved?.[k] ?? wanted[k] ?? '';
@@ -721,7 +725,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: r.results[0]?.ok === true, result: r.results[0] ?? null });
   });
 
-  // ── 代理内核控制 / proxy control (mihomo / Clash) ─────────────────
+  // ── proxy control (mihomo / Clash) ───────────────────────────────
   app.get('/api/proxy/control', async (_req, res) => {
     const cfg = getConfig();
     const d = await proxyctl.detectControl(cfg);
@@ -739,7 +743,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // 每个节点到**某个具体站点**的延迟 —— 「按站点挑最快节点」就靠这个
+  // the latency from every node to **one specific site** — "pick the fastest node per site" leans on exactly this
   app.post('/api/proxy/nodes/test', async (req, res) => {
     const cfg = getConfig();
     const { group, nodes, url, timeout } = req.body ?? {};
@@ -763,7 +767,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── 配置导入导出 / config import & export ────────────────────────
+  // ── config import & export ───────────────────────────────────────
   app.get('/api/config/export', (req, res) => {
     const cfg = getConfig();
     const withSecrets = req.query.secrets === '1';
@@ -789,9 +793,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'expected a config object' });
     const cur = getConfig();
 
-    // 按 id 合并数组里的对象（providers / targets / customSources / tasks …）。
-    // 不能简单地「数组整体替换」—— 那样脱敏导出里的 apiKey:'' 会把本机已有的 Key 抹掉，
-    // 而这正是导入自己刚导出的配置时最常见的用法。
+    // Merge the objects inside arrays by id (providers / targets / customSources / tasks …).
+    // A plain "replace the whole array" cannot work — the apiKey:'' of a redacted export would wipe the Key
+    // already on this machine, and importing a config you just exported is exactly the most common use.
     const mergeArray = (a, b) => {
       const aList = Array.isArray(a) ? a : [];
       const hasIds = b.every((x) => x && typeof x === 'object' && typeof x.id === 'string');
@@ -805,7 +809,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       if (b && typeof b === 'object') {
         const out = { ...(a ?? {}) };
         for (const [k, v] of Object.entries(b)) {
-          // 空字符串不覆盖已有的非空值：脱敏导出导入时不该抹掉密钥
+          // an empty string does not overwrite an existing non-empty value: importing a redacted export must not wipe secrets
           if (v === '' && typeof out[k] === 'string' && out[k]) continue;
           out[k] = merge(out[k], v);
         }
@@ -818,8 +822,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, config: next });
   });
 
-  // ── 检索 / search ────────────────────────────────────────────────
-  // 纯本地匹配：不需要 LLM，也不需要联网。LLM 只用于可选的「帮我认人」助手。
+  // ── search ───────────────────────────────────────────────────────
+  // Purely local matching: no LLM and no network required. The LLM is only used by the optional "help me recognise this person" assistant.
   app.post('/api/search', (req, res) => {
     const cfg = getConfig();
     const flags = loadFlags(cfg);
@@ -845,7 +849,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, tags: loadVocab(cfg) });
   });
 
-  // 可选助手：只记得特征、忘了名字时用。没有配 LLM 就明确告诉前端「用不了」。
+  // optional assistant: for when only the traits are remembered and the name is forgotten. With no LLM configured it tells the frontend plainly that it is unusable.
   app.post('/api/search/assist', async (req, res) => {
     const cfg = getConfig();
     const p = activeProvider(cfg);
@@ -890,7 +894,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       try {
         parsed = m ? JSON.parse(m[0]) : null;
       } catch {
-        /* 模型没给干净 JSON */
+        /* the model did not hand back clean JSON */
       }
       res.json({ ok: true, provider: { name: p.name, model: req2.body.model }, raw: content, ...(parsed ?? {}) });
     } catch (e) {
@@ -898,8 +902,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── Office 导出 / Word & Excel ───────────────────────────────────
-  // 纯 Node 手写 OOXML，不依赖 Office / COM / Python —— 便携 exe 不能假设目标机装了什么。
+  // ── Office export / Word & Excel ─────────────────────────────────
+  // OOXML hand-written in pure Node, with no dependency on Office / COM / Python — a portable exe cannot assume what the target machine has installed.
   app.get('/api/intel/export', (req, res) => {
     const cfg = getConfig();
     const format = ['xlsx', 'docx', 'md', 'html'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
@@ -924,7 +928,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
   });
 
-  // ── 特征抽取 / feature extraction (needs an LLM) ─────────────────
+  // ── feature extraction (needs an LLM) ────────────────────────────
   app.get('/api/features', (_req, res) => res.json(featureStats(getConfig())));
 
   app.post('/api/features/extract', async (req, res) => {
@@ -940,16 +944,17 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // ── Tor 无痕出口 / Tor egress ────────────────────────────────────
+  // ── Tor egress ───────────────────────────────────────────────────
   app.post('/api/proxy/tor', async (req, res) => {
     const cfg = getConfig();
     const socks = req.body?.socks ?? cfg.proxy?.torSocks;
     res.json(await probeTor(cfg, socks));
   });
 
-  // 若配置了 torExe，可以一键把它拉起来（不自带 tor，只是替你点一下）。
-  // 参数不是裸 spawn —— 见 torLaunchPlan 的注释：Tor Browser 的 tor 要带它自己的
-  // torrc（否则没有网桥、端口也不对），独立 tor 的数据目录要指到应用目录（别写 C 盘）。
+  // If torExe is configured, one click can bring it up (tor is not bundled, this just clicks for you).
+  // The arguments are not a bare spawn — see the comment on torLaunchPlan: Tor Browser's tor needs its own
+  // torrc (otherwise there are no bridges and the port is wrong), and a standalone tor's data directory has
+  // to point inside the app directory (never write to the C: drive).
   app.post('/api/proxy/tor/start', (req, res) => {
     const cfg = getConfig();
     const exe = String(req.body?.exe ?? cfg.proxy?.torExe ?? '').trim();
@@ -973,9 +978,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── 开播监测 / live status ───────────────────────────────────────
-  // 功能来源：dd-center/bilibili-dd-monitor（MIT）。上游用的 vtbs.moe /v1/live 已 404，
-  // 这里改用实测可用的 B 站批量开播接口，并区分「直播中」与「轮播」。
+  // ── live status ──────────────────────────────────────────────────
+  // Feature origin: dd-center/bilibili-dd-monitor (MIT). The vtbs.moe /v1/live that upstream uses is 404 now,
+  // so the bilibili batch live endpoint that does work here is used instead, and "live" is kept apart from "carousel".
   app.get('/api/live', async (req, res) => {
     const cfg = getConfig();
     const sources = effectiveSources(cfg).filter((s) => s.enabled);
@@ -991,14 +996,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(await searchRoster(getConfig(), req.query.q));
   });
 
-  // ── 登录账号与发弹幕 / accounts & danmaku ────────────────────────
-  // 账号发现只读；发送会用使用者本人身份公开发言，所以设计上层层设卡（见 danmaku.js）。
+  // ── accounts & danmaku ───────────────────────────────────────────
+  // Account discovery is read-only; sending speaks publicly as the user, so it is gated layer by layer (see danmaku.js).
   //
-  // **必须走 60 秒缓存**：listAccounts 是阻塞调用（同步 SQLite + execFileSync 解 DPAPI），
-  // 一次要 3~4 秒，而这期间整个 Node 事件循环是停的 —— 直播页一挂载就会请求这个接口，
-  // 于是「打开直播页 → 整个控制台卡住 4 秒、别的页面全停在『加载中』」。
-  // 这不是「慢」，是一个接口把服务冻住了（和 BUGS #37 同一类）。
-  // 对外发声前（发弹幕/发帖）仍然强制现读，见 danmaku.js 与 /api/share/post。
+  // **The 60-second cache is mandatory**: listAccounts is a blocking call (synchronous SQLite + execFileSync to
+  // unlock DPAPI) that takes 3~4 seconds, and during that time the whole Node event loop is stopped — the live
+  // page requests this endpoint the moment it mounts, so "open the live page → the whole console freezes for 4
+  // seconds and every other page sits at loading". This is not "slow", it is one endpoint freezing the service
+  // (the same category as BUGS #37).
+  // Before speaking outward (danmaku / posting) a fresh read is still forced, see danmaku.js and /api/share/post.
   app.get('/api/accounts', async (req, res) => {
     const cfg = getConfig();
     const { accounts, cached, error } = await getAccounts(cfg, { force: req.query.force === '1' });
@@ -1006,7 +1012,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       accounts,
       cached: !!cached,
       ...(error ? { error } : {}),
-      // 再强调一次：这里只回传身份信息与能力，绝不回传任何 cookie 值
+      // once more, for emphasis: only identity information and capabilities are returned here, never any cookie value
       canSendAny: accounts.some((a) => a.canSend),
       limits: { maxLen: MAX_LEN, minIntervalMs: MIN_INTERVAL_MS },
     });
@@ -1020,9 +1026,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   app.get('/api/danmaku/audit', (_req, res) => res.json({ entries: readAudit(getConfig(), 50) }));
 
-  // ── 客户端错误上报 / client error beacon ─────────────────────────
-  // 页面抛错时整棵树会被卸掉、页面变白，而服务端原本一无所知。
-  // 前端在 index.html 里就挂了监听，这里只负责落盘 + 进服务端日志。
+  // ── client error beacon ──────────────────────────────────────────
+  // When a page throws, the whole tree gets unmounted and the page turns blank, while the server knew nothing about it.
+  // The frontend already installs the listener in index.html; this side only persists to disk + writes the server log.
   app.post('/api/client-log', (req, res) => {
     const cfg = getConfig();
     const b = req.body ?? {};
@@ -1042,13 +1048,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       fs.mkdirSync(path.dirname(f), { recursive: true });
       fs.appendFileSync(f, JSON.stringify(entry) + '\n', 'utf8');
     } catch {
-      /* 落盘失败也要继续 */
+      /* keep going even when the write to disk fails */
     }
-    log?.warn(`前端错误 / client ${entry.kind}: ${entry.message}${entry.source ? ` @ ${entry.source}:${entry.line}` : ''}`);
+    log?.warn(`client ${entry.kind}: ${entry.message}${entry.source ? ` @ ${entry.source}:${entry.line}` : ''}`);
     res.json({ ok: true });
   });
 
-  // 读取已记录的前端错误（给排查用）
+  // read back the recorded frontend errors (handy for troubleshooting)
   app.get('/api/client-log', (_req, res) => {
     const cfg = getConfig();
     const f = path.join(resolveDir(cfg, 'logsDir'), 'client-errors.jsonl');
@@ -1077,8 +1083,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ count: entries.length, entries });
   });
 
-  // ── 人物档案 / entities ──────────────────────────────────────────
-  // 把特征抽取出来的人名聚合成对象：他/她出现过哪些条目、什么游戏、哪些事件。
+  // ── entities ─────────────────────────────────────────────────────
+  // Aggregate the names pulled out by feature extraction into objects: which items, which games, which events they showed up in.
   app.get('/api/entities', (req, res) => {
     const cfg = getConfig();
     res.json(entityStats(cfg, loadFlags(cfg)));
@@ -1091,8 +1097,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(detail);
   });
 
-  // ── 来源批量开关 / bulk source toggles ───────────────────────────
-  // 30 条来源一个个点太累，而且很容易在测试里忘了关（这个功能就是被这个坑逼出来的）
+  // ── bulk source toggles ──────────────────────────────────────────
+  // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature was forced into existence by exactly that trap)
   app.post('/api/sources/bulk', (req, res) => {
     const cfg = getConfig();
     const { action, category, ids } = req.body ?? {};
@@ -1110,10 +1116,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, changed: picked.length, action, sources: effectiveSources(cfg) });
   });
 
-  // ── 报告 / reports ───────────────────────────────────────────────
+  // ── reports ──────────────────────────────────────────────────────
   app.get('/api/reports', (_req, res) => res.json(listReports(getConfig())));
 
-  // 注意：必须排在 /api/reports/:name 之前，否则 search 会被当成文件名
+  // note: this has to be registered before /api/reports/:name, otherwise "search" gets taken for a file name
   app.get('/api/reports/search', (req, res) => {
     res.json({ query: req.query.q ?? '', hits: searchReports(getConfig(), req.query.q) });
   });
@@ -1123,16 +1129,16 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const out = exportReport(getConfig(), req.params.name, format);
     if (!out) return res.status(404).json({ error: 'not found' });
     res.setHeader('content-disposition', `attachment; filename="${out.file}"`);
-    // body 可能是字符串（html/json），也可能是 Buffer（docx）
+    // the body may be a string (html/json) or a Buffer (docx)
     res.type(out.mime).send(out.buffer ?? out.body);
   });
 
-  // 两份报告的逐行对比
+  // line-by-line comparison of two reports
   app.get('/api/reports/diff', (req, res) => {
     const cfg = getConfig();
     const a = String(req.query.from ?? '');
     const b = String(req.query.to ?? '');
-    // 用 markdown 源做对比：报告主文件是 html/adoc/json 都能对齐
+    // compare via the markdown source: that lines up no matter whether the report's main file is html/adoc/json
     const left = a ? markdownSource(cfg, a) : null;
     const right = b ? markdownSource(cfg, b) : null;
     if (left === null || right === null) return res.status(404).json({ error: 'one of the reports was not found' });
@@ -1141,8 +1147,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ from: a, to: b, stats, hunks: diffHunks(lines, 4) });
   });
 
-  // 报告主文件可能是 .html / .adoc / .md / .json，按扩展名给正确的 MIME，
-  // 前端就能直接把 .html 丢进 iframe 预览（VSCode 里也是同一种文件）。
+  // The report's main file may be .html / .adoc / .md / .json; give the right MIME by extension so the
+  // frontend can drop a .html straight into an iframe preview (the same kind of file you would open in VSCode).
   const REPORT_MIME = {
     html: 'text/html; charset=utf-8',
     json: 'application/json; charset=utf-8',
@@ -1157,9 +1163,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type(REPORT_MIME[ext] ?? 'text/plain; charset=utf-8').send(body);
   });
 
-  // ── 自动出口 / automatic per-site egress ──────────────────────────
-  // 每个站点按「等效延迟 = avg × (1 + 丢包 × 4)」自动挑直连或代理，
-  // 并带粘滞（优势不足 20% 就不换，避免抖动）。这里有判定 + 原因 + 得分。
+  // ── automatic per-site egress ────────────────────────────────────
+  // Every site picks direct or proxy automatically by "equivalent latency = avg × (1 + loss × 4)",
+  // with hysteresis (no switch unless the advantage is over 20%, to avoid flapping). The verdict + reason + scores live here.
   app.get('/api/egress', (_req, res) => {
     const cfg = getConfig();
     const snap = egressSnapshot(cfg);
@@ -1192,15 +1198,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true });
   });
 
-  // ── 图片理解打标 / image tagging ─────────────────────────────────
-  // 核心在 vision.js（按图 URL 缓存、解析宽容、并发受限），
-  // 自检 tools/vision-test.mjs 用本地假视觉模型做端到端验证（不花 Key、不发图）。
+  // ── image tagging ────────────────────────────────────────────────
+  // The core lives in vision.js (cache keyed by image URL, tolerant parsing, bounded concurrency),
+  // and tools/vision-test.mjs verifies the whole path end to end against a local fake vision model (no Key spent, no image sent out).
   app.get('/api/vision/stats', (_req, res) => {
     const cfg = getConfig();
     res.json({ ok: true, ...visionStats(cfg), ready: visionReady(cfg) });
   });
 
-  // 给最近一次情报里的配图打标（未启用时明确拒绝，不会偷偷把图发出去）
+  // tag the images attached to the latest intel (with the feature off it refuses outright and never quietly sends an image out)
   app.post('/api/vision/tag', async (req, res) => {
     const cfg = getConfig();
     const ready = visionReady(cfg);
@@ -1215,12 +1221,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ...r, ...visionStats(cfg) });
   });
 
-  // ── 一键分享 / one-click sharing ─────────────────────────────────
-  // 目标登记表在 share.js：每个目标如实声明是否需要登录、当前可不可用；
-  // 自检 tools/share-test.mjs（零外部引用的单文件 HTML / 登录需求 / 发声闸门 / 审计）。
+  // ── one-click sharing ────────────────────────────────────────────
+  // The target registry lives in share.js: every target states honestly whether login is needed and whether it is usable right now;
+  // self-tested by tools/share-test.mjs (single-file HTML with zero external references / login requirements / the post gates / the audit).
   app.get('/api/share/targets', async (_req, res) => {
     const cfg = getConfig();
-    // 用缓存：读登录态是阻塞的，每次开页面都现读会把服务卡住（原因见 share.js）
+    // use the cache: reading login state is blocking, and reading it fresh on every page open would freeze the service (the reason is in share.js)
     const { accounts, cached, error } = await getAccounts(cfg);
     res.json({
       ok: true,
@@ -1231,7 +1237,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  /** 按范围收集条目：latest / day / person */
+  /** collect items by scope: latest / day / person */
   function collectScope(cfg, scope = {}) {
     const kind = scope.kind ?? 'latest';
     if (kind === 'person') {
@@ -1251,10 +1257,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       try {
         db = openArchive(cfg);
         const rows = queryItems(db, { day, limit: 500 });
-        // 归档里有这一天就用它 —— 即使原始情报已被后面的运行覆盖
+        // if the archive has this day, use it — even when the raw intel has since been overwritten by a later run
         if (rows.length) return { items: rows, title: `Vtuber 情报 ${day}`, subtitle: '', contentDate: day };
       } catch {
-        /* 归档不可用就退回原始情报 */
+        /* the archive is unavailable, fall back to the raw intel */
       } finally {
         try {
           db?.close();
@@ -1269,7 +1275,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     return { items: data.items ?? [], title: 'Vtuber 情报分享', subtitle: '', contentDate: data.date ?? null };
   }
 
-  // 生成分享包（返回文件下载；format=text 时返回纯文本供复制）
+  // build the share bundle (returns a file download; format=text returns plain text to copy)
   app.post('/api/share/bundle', (req, res) => {
     const cfg = getConfig();
     const format = String(req.body?.format ?? cfg.share?.defaultFormat ?? 'html');
@@ -1282,21 +1288,21 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const out = renderBundle(bundle, format);
     appendAudit(cfg, { action: 'bundle', scope: bundle.scope, format, items: bundle.items.length });
     if (format === 'text') return res.json({ ok: true, text: out.body, items: bundle.items.length, title: bundle.title });
-    // 文件名可能含中文 → 必须走 RFC 5987 编码，否则 HTTP 头会抛 ERR_INVALID_CHAR
+    // the filename may contain Chinese → it must go through RFC 5987 encoding, otherwise the HTTP header throws ERR_INVALID_CHAR
     res.setHeader('content-disposition', contentDisposition(bundleFilename(bundle, out.ext)));
     res.type(out.mime).send(out.body);
   });
 
   app.get('/api/share/audit', (_req, res) => res.json({ ok: true, entries: readShareAudit(getConfig(), 50) }));
 
-  // 对外发声：确认 + 可做性 + 留痕，三道闸门缺一不可（见 share.js guardPost）
+  // speaking outward: confirmation + capability + a trail, all three gates are required (see share.js guardPost)
   app.post('/api/share/post', async (req, res) => {
     const cfg = getConfig();
     const target = String(req.body?.target ?? '');
-    // 对外发声前**强制重新读**登录态：拿过期的判断去发帖等于用旧钥匙开新锁
+    // before speaking outward, **force a fresh read** of the login state: posting on a stale verdict is opening a new lock with an old key
     const { accounts } = await getAccounts(cfg, { force: true });
     const verified = cfg.share?.verifiedTargets ?? [];
-    // verify:true 表示「这次就是为了验证这个目标」—— 成功后把它记进已验证列表
+    // verify:true means "this attempt exists precisely to verify this target" — on success it is recorded in the verified list
     const isVerifyAttempt = req.body?.verify === true && targetById(target)?.status === 'needs-verification';
     const allowed = isVerifyAttempt ? [...verified, target] : verified;
 
@@ -1330,9 +1336,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: !!result.ok, error: result.error ?? null, account: result.account ?? null, verified: result.ok && isVerifyAttempt ? true : undefined });
   });
 
-  // ── SQLite 增量归档与图表数据 / incremental archive & charts ─────
-  // 归档层在 archive.js，自检 tools/archive-test.mjs（幂等 / 参数化 / 迁移 / 性能）。
-  // 每次运行都会增量写入；这里只负责查询与手动补录。
+  // ── incremental archive & charts ─────────────────────────────────
+  // The archive layer is in archive.js, self-tested by tools/archive-test.mjs (idempotency / parameterization / migration / performance).
+  // Every run writes incrementally; this side only queries and backfills by hand.
   app.get('/api/archive/stats', (_req, res) => {
     const cfg = getConfig();
     let db = null;
@@ -1350,11 +1356,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── VDB 花名册 / VDB roster（多平台）───────────────────────────────
-  // 数据来源 github.com/dd-center/vdb（vtbs.moe 的上游），许可是 CC BY-NC-SA 4.0：
-  //   · 只运行时拉取、缓存在 app/vdb/，**绝不进发行包**（见 tools/make-zip.mjs 的排除清单）
-  //   · 界面与文档都要署名
-  // 它给的是我们缺的那一维：**社团（箱）** + 多语言名字 + 各平台账号。
+  // ── VDB roster (multi-platform) ──────────────────────────────────
+  // Data source github.com/dd-center/vdb (the upstream of vtbs.moe), licensed CC BY-NC-SA 4.0:
+  //   · fetched at runtime only and cached in app/vdb/, **never shipped in the release package** (see the exclusion list in tools/make-zip.mjs)
+  //   · both the UI and the docs have to carry the attribution
+  // It supplies the dimension we were missing: **agency (group)** + multilingual names + per-platform accounts.
   app.get('/api/vdb/status', (_req, res) => {
     const cfg = getConfig();
     const index = loadCachedIndex(cfg);
@@ -1371,7 +1377,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // 显式同步（会真的去下载，~0.5MB，一条请求）
+  // explicit sync (this one really downloads, ~0.5MB, one request)
   app.post('/api/vdb/sync', async (_req, res) => {
     const cfg = getConfig();
     try {
@@ -1382,13 +1388,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // 搜索：名字（任意语言/别名）与**任意平台**的账号 id、链接形态都能命中
+  // search: a name (any language/alias) and an account id or link shape on **any platform** all match
   app.get('/api/vdb/search', async (req, res) => {
     const cfg = getConfig();
     const q = String(req.query.q ?? '').trim();
     if (!q) return res.json({ ok: true, results: [], summary: indexSummary(loadCachedIndex(cfg)) });
     try {
-      // 第一次用就自动拉一次：0.5MB 一条请求，比让使用者先猜「要先同步」友好
+      // fetch once automatically on first use: 0.5MB in a single request is friendlier than making the user guess that they "have to sync first"
       let index = loadCachedIndex(cfg);
       if (!index) index = await ensureIndex(cfg, { log });
       const results = searchIndex(index, q, { limit: Number(req.query.limit ?? 20), group: req.query.group || null });
@@ -1403,7 +1409,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, groups: index?.groups ?? {}, summary: indexSummary(index) });
   });
 
-  // 导入：把选中的 VDB 记录变成「关注对象」（名字/别名/社团/各平台链接）
+  // import: turn the selected VDB records into "followed people" (name / aliases / agency / per-platform links)
   app.post('/api/vdb/import', (req, res) => {
     const cfg = getConfig();
     const keys = Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [];
@@ -1418,7 +1424,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const added = [];
     const skipped = [];
     for (const r of picked) {
-      // 走和手工新增同一条净化路径：VDB 的数据也要过校验，不搞后门
+      // go through the same sanitizing path as a manual add: VDB data has to pass validation too, no back door
       const { person, error } = sanitizePerson(toPerson(r), list.length + added.length);
       if (error) {
         skipped.push({ key: r.key, reason: error });
@@ -1433,14 +1439,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
     if (added.length) {
       patchConfig(cfg, { people: [...list, ...added] });
-      log?.info?.(`从 VDB 导入 ${added.length} 位关注对象（${list.length} → ${list.length + added.length}）`);
+      log?.info?.(`imported ${added.length} people from VDB (${list.length} → ${list.length + added.length})`);
     }
     res.json({ ok: true, added: added.length, skipped, people: (getConfig().people ?? []).length });
   });
 
-  // ── LLM 用量与预算 / cost ─────────────────────────────────────────
-  // 之前界面上看不到任何用量（usage 取回来了但没人聚合），而钱就花在这里。
-  // 只报**能看到的**：拿不到用量的一次单独计数，不猜数字。
+  // ── LLM usage & budget ───────────────────────────────────────────
+  // Before this no usage was visible in the UI at all (usage was fetched back but nobody aggregated it), yet this is where the money goes.
+  // Report only **what is visible**: a call whose usage cannot be read is counted separately, never guessed at.
   app.get('/api/cost', (req, res) => {
     const cfg = getConfig();
     const days = Math.max(1, Math.min(90, Number(req.query.days ?? 14)));
@@ -1454,9 +1460,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── 箱视角 / group view ───────────────────────────────────────────
-  // 「这个箱现在怎么样」—— 按 agency 把关注对象聚成一块：每日热力图、同刻出现、
-  // 共同沉默、每个人相对自己节奏的异常。逐条情报流回答不了这个问题。
+  // ── group view ───────────────────────────────────────────────────
+  // "how is this agency doing right now" — group the followed people by agency into one block: a daily heat map,
+  // simultaneous appearances, shared silence, and each person's anomaly relative to their own rhythm. A flat item
+  // stream simply cannot answer that question.
   app.get('/api/groups', (req, res) => {
     const cfg = getConfig();
     const days = Math.max(7, Math.min(180, Number(req.query.days ?? 30)));
@@ -1483,9 +1490,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── 静默检测 / silence ────────────────────────────────────────────
-  // 「没动静」也是一条情报：这里把「谁停了、停了多久、是不是整箱一起停」摆出来。
-  // 判据见 silence.js（相对各人自己的节奏），这里只负责取数、算、返回。
+  // ── silence ──────────────────────────────────────────────────────
+  // "no activity" is intel too: this lays out "who stopped, for how long, and whether the whole agency stopped together".
+  // The criteria are in silence.js (relative to each person's own rhythm); this side only fetches, computes and returns.
   app.get('/api/silence', (req, res) => {
     const cfg = getConfig();
     const days = Math.max(7, Math.min(365, Number(req.query.days ?? cfg?.silence?.basisDays ?? 60)));
@@ -1567,7 +1574,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // 把最近一次情报补录进归档（升级后补历史、或归档被删掉时重建）
+  // backfill the latest intel into the archive (to add history after an upgrade, or to rebuild when the archive was deleted)
   app.post('/api/archive/ingest', (req, res) => {
     const cfg = getConfig();
     const limit = Number(req.body?.limit ?? 500);
@@ -1576,9 +1583,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: r.ok, ...r });
   });
 
-  // ── 多源同事件合并 / 相似度去重 / 来源权重 ───────────────────────
-  // 算法与自检在 cluster.js + tools/cluster-test.mjs：IDF 加权 Dice + 单链接并查集 +
-  // 「必须共享罕见词」闸门 + 时间窗；来源权重从「谁先报」的历史里学。
+  // ── multi-source event merging / similarity dedupe / source weight ─
+  // The algorithm and its self-test live in cluster.js + tools/cluster-test.mjs: IDF-weighted Dice + single-link
+  // union-find + a "must share a rare term" gate + a time window; source weight is learned from the history of "who reported it first".
   app.get('/api/events', (req, res) => {
     const cfg = getConfig();
     const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
@@ -1606,7 +1613,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // 拿一段条目试一下合并效果（不动历史、不落盘）—— 方便调阈值，也让这条链路可端到端验证
+  // try the merge on a slice of items (touches no history, writes nothing) — handy for tuning the threshold, and it makes this path verifiable end to end
   app.post('/api/events/preview', (req, res) => {
     const cfg = getConfig();
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -1619,7 +1626,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, stats, weights, events: clusters.map((c) => ({ id: c.id, title: c.title, sourceCount: c.sourceCount, duplicateCount: c.duplicateCount, sources: c.sources, confirmed: c.confirmed, leadSourceId: c.leadSourceId })) });
   });
 
-  // 只做去重（保持信息流顺序，把重复的丢掉）
+  // dedupe only (keep the order of the item stream, drop the duplicates)
   app.get('/api/events/dedupe', (req, res) => {
     const cfg = getConfig();
     const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
@@ -1628,9 +1635,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, kept: r.kept.length, dropped: r.dropped.length, removed: r.dropped, items: r.kept });
   });
 
-  // ── 按「人」关注 / follow people ─────────────────────────────────
-  // 匹配全在 people.js 里做（本地字符串匹配，不联网不用 LLM），并有独立自检
-  // tools/people-test.mjs：中日文子串 + 拉丁词边界，避免假阴性/假阳性。
+  // ── follow people ────────────────────────────────────────────────
+  // All matching happens in people.js (local string matching, no network, no LLM) and has its own self-test
+  // tools/people-test.mjs: CJK substring + Latin word boundaries, to avoid false negatives and false positives.
   app.get('/api/people', (req, res) => {
     const cfg = getConfig();
     const people = cfg.people ?? [];
@@ -1683,7 +1690,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, people: list });
   });
 
-  // 按人聚合的信息流（谁刚有动静排在前面）
+  // the information stream aggregated by person (whoever just showed activity comes first)
   app.get('/api/people/feed', (req, res) => {
     const cfg = getConfig();
     const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
@@ -1691,7 +1698,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, feed });
   });
 
-  // 从已抽取的实体里推荐关注对象（本地统计，不需要 LLM 再跑一遍）
+  // suggest followed people from the entities already extracted (local statistics, no need to run the LLM again)
   app.get('/api/people/suggest', (req, res) => {
     const cfg = getConfig();
     const stats = entityStats(cfg, loadFlags(cfg));
@@ -1701,7 +1708,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, suggestions, scanned: stats.total ?? 0 });
   });
 
-  // 单人的情报导出（JSON / Markdown）—— 顺手也能喂给别的工具或直接发给朋友
+  // per-person intel export (JSON / Markdown) — also handy for feeding another tool or sending straight to a friend
   app.get('/api/people/:id/export', (req, res) => {
     const cfg = getConfig();
     const person = (cfg.people ?? []).find((p) => p.id === req.params.id);
@@ -1714,9 +1721,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type(out.mime).send(out.body);
   });
 
-  // ── 纪念日 / 生日 / 3D披露 倒计时 ────────────────────────────────
-  // 时间算术（闰日顺延、时区、夏令时）全在 calendar.js 里，并有独立自检：
-  // tools/calendar-test.mjs（26 项，含 2/29 与跨时区跨日）。
+  // ── anniversary / birthday / 3D reveal countdown ─────────────────
+  // The date arithmetic (leap-day shift, time zones, daylight saving) all lives in calendar.js with its own self-test:
+  // tools/calendar-test.mjs (26 checks, covering 2/29 and cross-time-zone, cross-day cases).
   app.get('/api/calendar', (req, res) => {
     const cfg = getConfig();
     const days = Math.max(1, Math.min(730, Number(req.query.days ?? cfg?.calendar?.reportDays ?? 60)));
@@ -1761,7 +1768,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, entries: list });
   });
 
-  // 一次把多个线索加进去（界面里勾选后提交）
+  // add several hints at once (ticked in the UI and then submitted)
   app.post('/api/calendar/import', (req, res) => {
     const cfg = getConfig();
     const incoming = Array.isArray(req.body?.entries) ? req.body.entries : [];
@@ -1774,7 +1781,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         skipped.push({ input: raw, error });
         continue;
       }
-      // 同一天同一类型视为重复（线索常有多个来源指向同一件事）
+      // the same day plus the same kind counts as a duplicate (hints often have several sources pointing at the same thing)
       if (list.some((e) => e.date === entry.date && e.kind === entry.kind && e.name === entry.name)) {
         skipped.push({ input: raw, error: 'duplicate' });
         continue;
@@ -1786,7 +1793,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, added: added.length, skipped, entries: list });
   });
 
-  // 从最近一次情报里找线索（**本地正则，不联网、不用 LLM**）
+  // look for hints in the latest intel (**local regex, no network, no LLM**)
   app.get('/api/calendar/detect', (req, res) => {
     const cfg = getConfig();
     const data = latestIntel(cfg, Number(req.query.limit ?? 300));
@@ -1799,23 +1806,21 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // 探测成功后立刻重算判定，界面不用等下一次运行
+  // once a probe succeeds the verdict is recomputed at once, so the UI need not wait for the next run
 
-  // ── JSON 错误兜底 / JSON error fallback ─────────────────────────
-  // 路由里抛异常时，Express 默认回一张 HTML 错误页 —— 前端拿它去 JSON.parse
-  // 只会得到 "Unexpected token '<'"，非常难查。这里统一改成 JSON。
+  // ── JSON error fallback ──────────────────────────────────────────
+  // When a route throws, Express replies with an HTML error page by default — the frontend's JSON.parse of it
+  // only ever yields "Unexpected token '<'", which is very hard to debug. Here it is uniformly turned into JSON.
   app.use((err, req, res, _next) => {
-    log?.error('API 异常 / route error — ' + req.method + ' ' + req.originalUrl + ': ' + (err.stack ?? err.message));
+    log?.error('route error — ' + req.method + ' ' + req.originalUrl + ': ' + (err.stack ?? err.message));
     if (res.headersSent) return;
     res.status(err.status ?? 500).json({ error: err.message ?? 'internal error', route: req.originalUrl });
   });
 
-  // ── 静态前端 / built web app ─────────────────────────────────────
+  // ── built web app ────────────────────────────────────────────────
   const webDist = path.join(APP_ROOT, 'web', 'dist');
   if (fs.existsSync(webDist)) {
     app.use(express.static(webDist));
-    // 未知的 /api/* 必须是 JSON 404，不能被 SPA 兜底吞成一张 HTML 页面，
-    // 否则调用方拿到 200 + HTML 会误判成功。
     // An unknown /api/* must answer with JSON, not fall through to the SPA
     // shell: a 200 + HTML would read as success to any caller.
     app.use('/api', (_req, res) => res.status(404).json({ error: 'unknown API route' }));

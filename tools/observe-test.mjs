@@ -1,7 +1,8 @@
-// observe-test.mjs — 观测模式的自检 / self-test for sampling, jitter and egress rules
+// observe-test.mjs — self-test for observation mode / sampling, jitter and egress rules
 //
-// 这个模式的价值全在「模式本身」上：取样的公平性与不可预测性、抖动的范围、
-// 出口分配的判据。这些都不该靠读代码相信，而是拿**固定随机源**把行为钉住。
+// The whole value of this mode lies in "the pattern itself": how fair and unpredictable the sampling is,
+// the range of the jitter, and the criteria for egress assignment. None of this should be taken on faith
+// by reading the code - it gets pinned down with a **fixed random source**.
 import assert from 'node:assert/strict';
 import {
   AGENCY_HOSTS,
@@ -29,66 +30,67 @@ const t = (name, fn) => {
   }
 };
 
-/** 固定随机源：让「随机」在测试里可复现 */
+/** Fixed random source: makes "random" reproducible in tests */
 const seeded = (seed) => () => {
   seed = (seed * 1103515245 + 12345) & 0x7fffffff;
   return seed / 0x7fffffff;
 };
 
-process.stdout.write('\nobserve: 日志归属与出口\n');
+process.stdout.write('\nobserve: log ownership and egress\n');
 
-t('箱自托管站点 vs 平台：按域名判定', () => {
+t('agency self-hosted site vs platform: decided by domain', () => {
   assert.equal(logOwnerOf({ url: 'https://hololivepro.com/talents/' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://www.anycolor.co.jp/news' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://vspo.jp/' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://api.bilibili.com/x/…' }), 'platform');
   assert.equal(logOwnerOf({ url: 'https://www.reddit.com/r/VirtualYoutubers/.rss' }), 'platform');
-  assert.equal(logOwnerOf({ url: 'not a url' }), 'platform', '认不出来就当平台（宁可少用 Tor）');
-  assert.equal(urlHost('https://HoloLivePro.com/x'), 'hololivepro.com', '域名要小写归一');
+  assert.equal(logOwnerOf({ url: 'not a url' }), 'platform', 'unrecognized counts as platform (better to use Tor less often)');
+  assert.equal(urlHost('https://HoloLivePro.com/x'), 'hololivepro.com', 'domains must be lowercased and normalized');
 });
 
-t('观测模式：箱自托管 → Tor；平台 → 不动它（沿用来源自己的设置）', () => {
+t('observation mode: agency self-hosted -> Tor; platform -> leave it alone (keep the source own setting)', () => {
   const cfg = { observation: { enabled: true } };
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', id: 'official-cover' }, cfg).mode, 'tor');
-  assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', id: 'bili' }, cfg), null, '平台源不该被强行改出口');
+  assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', id: 'bili' }, cfg), null, 'a platform source must not have its egress forced');
 });
 
-t('来源自己钉了出口就尊重它（per-source 那一列）', () => {
+t('if the source pinned its own egress, respect it (the per-source column)', () => {
   const cfg = { observation: { enabled: true } };
   assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', proxy: 'tor' }, cfg).mode, 'tor');
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', proxy: 'direct' }, cfg).mode, 'direct');
 });
 
-t('观测模式**不跑**需要登录态的来源，并给出原因', () => {
+t('observation mode does NOT run sources that need a login, and gives the reason', () => {
   const cfg = { observation: { enabled: true } };
   const r = resolveEgress({ url: 'https://api.bilibili.com/x/y', login: 'required' }, cfg);
   assert.equal(r.skip, true, JSON.stringify(r));
-  assert.match(r.reason, /登录态/);
-  assert.equal(isLoginRequired({ login: 'optional' }), false, 'optional 不算：那是不登录也能看');
-  // 关掉观测模式时，登录态来源照旧（由来源自己的设置决定）
+  // the reason string is diagnostic output (it reaches logs, not the UI), so it is English
+  assert.match(r.reason, /login required/);
+  assert.equal(isLoginRequired({ login: 'optional' }), false, 'optional does not count: that means it is viewable without logging in');
+  // With observation mode off, login-state sources stay as before (the source own setting decides)
   assert.equal(resolveEgress({ url: 'https://x.com/', login: 'required' }, { observation: { enabled: false } }), null);
 });
 
-process.stdout.write('\nobserve: 取样\n');
+process.stdout.write('\nobserve: sampling\n');
 
-t('取 k = ratio × n，且不超过总数', () => {
+t('takes k = ratio x n, never more than the total', () => {
   const items = Array.from({ length: 10 }, (_, i) => ({ id: 's' + i }));
   const r = pickSample(items, { ratio: 0.5, min: 1, rng: seeded(1) });
   assert.equal(r.k, 5);
   assert.equal(r.picked.length, 5);
   assert.equal(r.skipped.length, 5);
   const all = pickSample(items, { ratio: 1, rng: seeded(1) });
-  assert.equal(all.k, 10, '比例 1 时全取');
+  assert.equal(all.k, 10, 'a ratio of 1 takes everything');
   assert.equal(all.skipped.length, 0);
 });
 
-t('最少取样数生效（对象少的时候不会一轮只取 1 个）', () => {
+t('the minimum sample count takes effect (with few objects a round does not pick just 1)', () => {
   const items = Array.from({ length: 4 }, (_, i) => ({ id: 's' + i }));
   const r = pickSample(items, { ratio: 0.2, min: 3, rng: seeded(7) });
   assert.equal(r.k, 3);
 });
 
-t('轮转公平：最久没看过的优先，几轮下来人人都会被看到', () => {
+t('rotation fairness: whatever has gone unseen longest comes first, everyone is seen over a few rounds', () => {
   const items = Array.from({ length: 6 }, (_, i) => ({ id: 's' + i }));
   let history = {};
   const seen = new Set();
@@ -97,50 +99,51 @@ t('轮转公平：最久没看过的优先，几轮下来人人都会被看到',
     r.picked.forEach((x) => seen.add(x.id));
     history = recordPicked({ rounds: round, lastPicked: history }, r.picked.map((x) => x.id), new Date(2026, 0, 1 + round)).lastPicked;
   }
-  assert.equal(seen.size, 6, '8 轮之后 6 个对象都该被取到过，实际 ' + [...seen].join(','));
+  assert.equal(seen.size, 6, 'after 8 rounds all 6 objects should have been picked, actual ' + [...seen].join(','));
 });
 
-t('不可预测：同一份历史、不同随机源 → 取到的集合不同', () => {
+t('unpredictable: same history, different random source -> a different picked set', () => {
   const items = Array.from({ length: 12 }, (_, i) => ({ id: 's' + i }));
   const history = {};
   const a = pickSample(items, { ratio: 0.5, history, rng: seeded(1) }).picked.map((x) => x.id).sort();
   const b = pickSample(items, { ratio: 0.5, history, rng: seeded(99) }).picked.map((x) => x.id).sort();
-  assert.notDeepEqual(a, b, '纯 LRU 会让每轮取到的都是同一批，那就不叫取样了');
+  assert.notDeepEqual(a, b, 'pure LRU would pick the same batch every round, and that is not sampling');
 });
 
-t('顺序也被打乱（固定顺序本身就是特征）', () => {
+t('the order is shuffled too (a fixed order is itself a fingerprint)', () => {
   const items = Array.from({ length: 8 }, (_, i) => ({ id: 's' + i }));
   const picks = new Set();
   for (let s = 1; s <= 5; s++) picks.add(pickSample(items, { ratio: 0.6, min: 1, rng: seeded(s) }).picked.map((x) => x.id).join(','));
-  assert.ok(picks.size > 1, '多次取样的顺序不该完全一样');
+  assert.ok(picks.size > 1, 'the order should not come out identical across repeated samples');
 });
 
-process.stdout.write('\nobserve: 抖动\n');
+process.stdout.write('\nobserve: jitter\n');
 
-t('抖动范围落在 [max(base,min), max]，且显式的 0 就是 0', () => {
+t('the jitter range lands in [max(base,min), max], and an explicit 0 is 0', () => {
   const rng = seeded(5);
   for (let i = 0; i < 50; i++) {
     const g = gapWithJitter(2, [2, 9], rng);
-    assert.ok(g >= 2 && g <= 9, '实际 ' + g);
+    assert.ok(g >= 2 && g <= 9, 'actual ' + g);
   }
-  // base=0 是「不要等」的显式表达：诊断路径靠它跳过限流等待，抖动不能把等待塞回去
+  // base=0 is the explicit way of saying "do not wait": the diagnostic path uses it to skip rate-limit
+  // waiting, and the jitter must not put that wait back
   assert.equal(gapWithJitter(0, [2, 9], rng), 0);
-  // base 比区间下限还大时，不能反而等得更少
+  // When base is larger than the lower bound of the range, it must not end up waiting less
   const big = gapWithJitter(40, [2, 9], rng);
-  assert.ok(big >= 40, '实际 ' + big);
+  assert.ok(big >= 40, 'actual ' + big);
 });
 
-t('比例抖动：在 base 上下浮动，不会跑成负数', () => {
+t('proportional jitter: floats above and below base, never goes negative', () => {
   const rng = seeded(11);
   for (let i = 0; i < 50; i++) {
     const g = gapWithJitter(10, { spread: 0.5 }, rng);
-    assert.ok(g >= 5 && g <= 15, '实际 ' + g);
+    assert.ok(g >= 5 && g <= 15, 'actual ' + g);
   }
 });
 
-process.stdout.write('\nobserve: 一轮的计划\n');
+process.stdout.write('\nobserve: one round plan\n');
 
-t('未开启观测模式时，一切照旧（不取样、不改出口）', () => {
+t('with observation mode off everything stays as before (no sampling, no egress change)', () => {
   const sources = [{ id: 'a', url: 'https://api.bilibili.com/x' }, { id: 'b', url: 'https://cover-corp.com/' }];
   const plan = observationPlan({ cfg: { observation: { enabled: false } }, sources, watchTargets: [{ id: 'w1' }] });
   assert.equal(plan.enabled, false);
@@ -149,7 +152,7 @@ t('未开启观测模式时，一切照旧（不取样、不改出口）', () =>
   assert.deepEqual(plan.egress, {});
 });
 
-t('开启后：取一部分、箱站点改走 Tor、登录态来源被剔除并说明', () => {
+t('with it on: samples a subset, agency sites move to Tor, login-state sources are dropped with an explanation', () => {
   const cfg = {
     observation: { enabled: true, sampleRatio: 0.5, minSources: 1, minWatch: 1, torForAgency: true },
   };
@@ -165,26 +168,26 @@ t('开启后：取一部分、箱站点改走 Tor、登录态来源被剔除并�
   const plan = observationPlan({ cfg, sources, watchTargets, rng: seeded(3) });
 
   assert.equal(plan.enabled, true);
-  assert.equal(plan.sources.length, 3, '6 条里取一半（登录态那条先被剔掉后剩 5 条，取 3）');
-  assert.ok(plan.skippedLogin.some((x) => x.id === 'bili-dynamic-login'), '登录态来源该被剔除');
+  assert.equal(plan.sources.length, 3, 'half of the 6 (after the login-state one is dropped first, 5 remain and 3 are picked)');
+  assert.ok(plan.skippedLogin.some((x) => x.id === 'bili-dynamic-login'), 'the login-state source should be dropped');
   assert.ok(!plan.sources.some((x) => x.id === 'bili-dynamic-login'));
   assert.ok(plan.egress['official-hololive'] === 'tor' || plan.sampling.tor.length >= 0);
   for (const s of plan.sources) {
-    if (logOwnerOf(s) === 'agency') assert.equal(s.proxy, 'tor', s.id + ' 是箱自托管，该走 Tor');
-    else assert.ok(s.proxy !== 'tor', s.id + ' 是平台源，不该被强行改走 Tor');
+    if (logOwnerOf(s) === 'agency') assert.equal(s.proxy, 'tor', s.id + ' is agency self-hosted, so it should use Tor');
+    else assert.ok(s.proxy !== 'tor', s.id + ' is a platform source, its egress must not be forced to Tor');
   }
-  assert.equal(plan.watchTargets.length, 3, '监视对象同样取样');
-  assert.equal(plan.sampling.sources.n, 5, 'n 要反映剔除登录态之后的候选数');
+  assert.equal(plan.watchTargets.length, 3, 'watch targets go through the same sampling');
+  assert.equal(plan.sampling.sources.n, 5, 'n must reflect the candidate count after dropping login-state sources');
   assert.deepEqual(plan.sampling.sources.skipped.length, 2);
-  // sampling.tor 只该列**本轮真的会请求**的那几条（egress 里没被取到的不算）
+  // sampling.tor should list only the ones **actually requested this round** (not picked in egress does not count)
   assert.deepEqual(
     plan.sampling.tor.slice().sort(),
     plan.sources.filter((s) => s.proxy === 'tor').map((s) => s.id).sort(),
-    'tor 清单要和本轮实际取到的来源一致',
+    'the tor list must agree with the sources actually picked this round',
   );
 });
 
-t('Tor 断链时：本轮跳过要走 Tor 的来源，并说明「不计为失败」', () => {
+t('when Tor is down: skip the sources that need Tor this round, and state that it does not count as a failure', () => {
   const cfg = { observation: { enabled: true, sampleRatio: 1, minSources: 1, torForAgency: true } };
   const sources = [
     { id: 'official-hololive', url: 'https://hololivepro.com/talents/' },
@@ -192,34 +195,34 @@ t('Tor 断链时：本轮跳过要走 Tor 的来源，并说明「不计为失�
   ];
   const down = observationPlan({ cfg, sources, rng: seeded(2), torReachable: false });
   assert.deepEqual(down.sampling.skippedTor, ['official-hololive'], JSON.stringify(down.sampling));
-  assert.ok(!down.sources.some((s) => s.id === 'official-hololive'), 'Tor 断了就不该把它排进本轮');
-  assert.ok(down.sources.some((s) => s.id === 'bili-opus-jaran'), '平台源不受影响');
-  assert.match(down.skippedTor[0].reason, /不计为来源失败/);
+  assert.ok(!down.sources.some((s) => s.id === 'official-hololive'), 'if Tor is down it must not be scheduled into this round');
+  assert.ok(down.sources.some((s) => s.id === 'bili-opus-jaran'), 'platform sources are unaffected');
+  assert.match(down.skippedTor[0].reason, /not counted as a source failure/);
 
-  // Tor 通的时候就照常走 Tor
+  // When Tor is reachable, go through Tor as usual
   const up = observationPlan({ cfg, sources, rng: seeded(2), torReachable: true });
   const picked = up.sources.find((s) => s.id === 'official-hololive');
   assert.equal(picked?.proxy, 'tor');
   assert.deepEqual(up.sampling.skippedTor, []);
 });
 
-t('轮转状态能存能读（下一轮优先取没看过的）', () => {
+t('rotation state can be written and read back (the next round prefers what has not been seen)', () => {
   const items = Array.from({ length: 4 }, (_, i) => ({ id: 's' + i }));
   const st = recordPicked({ rounds: 0, lastPicked: {} }, ['s0', 's1'], new Date('2026-01-01T00:00:00Z'));
   assert.equal(st.rounds, 1);
   assert.equal(st.lastPicked.s0, '2026-01-01T00:00:00.000Z');
   const r = pickSample(items, { ratio: 0.5, min: 1, history: st.lastPicked, rng: seeded(4) });
   const ids = r.picked.map((x) => x.id);
-  assert.ok(!ids.includes('s0') || !ids.includes('s1'), '刚看过的两个不该又同时被取到：' + ids.join(','));
+  assert.ok(!ids.includes('s0') || !ids.includes('s1'), 'the two just seen should not both be picked again: ' + ids.join(','));
 });
 
-t('AGENCY_HOSTS 清单里的域名都能被识别（防止手误写错域名）', () => {
+t('every domain in the AGENCY_HOSTS list is recognized (guards against a typo in a domain)', () => {
   for (const h of AGENCY_HOSTS) {
     assert.equal(logOwnerOf({ url: `https://${h}/` }), 'agency', h);
   }
 });
 
-t('读取轮转状态：没有文件时给空状态，不抛错', () => {
+t('reading rotation state: an empty state when the file is missing, no throw', () => {
   const st = loadObservationState({ paths: { logsDir: 'E:\\No\\Such\\Dir\\vml-test' } });
   assert.deepEqual(st, { rounds: 0, lastPicked: {} });
 });

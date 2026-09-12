@@ -1,6 +1,8 @@
-// layout.js — 排版配置 → CSS 变量 / class
-// 用户可 DIY：呈现方式、列数、密度、字号缩放、主题色、显示哪些字段。
-// 单独放一个模块，避免 App 与各页面互相 import 造成循环依赖。
+// layout.js — layout config → CSS variables / class
+// User DIY-able: presentation mode, column count, density, font scaling, accent colour,
+// which fields are shown.
+// Kept in its own module so App and the individual pages don't import each other
+// and create a circular dependency.
 
 export const LAYOUT_MODES = ['cards', 'list', 'compact', 'timeline', 'table'];
 
@@ -20,7 +22,7 @@ export function normalizeLayout(layout) {
   return { ...DEFAULT_LAYOUT, ...(layout ?? {}) };
 }
 
-/** 把配置写成 CSS 变量，整站立刻生效 */
+/** Write the config out as CSS variables — the whole site picks it up immediately */
 export function applyLayout(layout) {
   const L = normalizeLayout(layout);
   if (typeof document === 'undefined') return;

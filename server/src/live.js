@@ -1,18 +1,19 @@
-// live.js — 开播监测 / live status
+// live.js — live status monitoring
 //
-// 功能来源：dd-center/bilibili-dd-monitor（MIT, (c) 2020 wdpm）—— 一个「DD 多屏看播」
-// 桌面工具。它的两个核心是「开播/下播实时检测」与「多播放器自动网格布局」。
-// 这里按本项目的栈（Express + React）重新实现，**没有复制上游代码或资源**：
-//   • 上游依赖 vtbs.moe 的 /v1/live，实测该端点已 404（项目停更），所以换成本机实测可用的
-//     B 站批量接口；
-//   • 播放器直接用 B 站官方的 blanc 内嵌页（实测无 X-Frame-Options，可嵌），不做转发与代理。
+// Feature origin: dd-center/bilibili-dd-monitor (MIT, (c) 2020 wdpm) — a "DD multi-screen live viewing"
+// desktop tool. Its two cores are "real-time live/offline detection" and "automatic grid layout for many players".
+// Reimplemented here on this project's stack (Express + React), **with no upstream code or asset copied**:
+//   • upstream depends on vtbs.moe /v1/live, which was measured to be 404 by now (the project stopped
+//     updating), so it was replaced by the bilibili batch endpoint that does work here;
+//   • the player uses bilibili's official blanc embed page directly (measured: no X-Frame-Options, so it
+//     can be embedded), with no forwarding and no proxying.
 //
-// 实测要点：
+// Measured points:
 //   GET https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids?uids[]=672328094
-//     -> code=0，data 以 uid 为键：{ room_id, live_status, title, uname, cover, online }
-//   live_status: 0 = 未开播，1 = 直播中，**2 = 轮播**（不是真开播，必须分开显示，
-//                否则会把一堆轮播误报成「开播了」）
-//   直连可用；走代理反而可能被风控（与本项目其它 bilibili 来源一致）。
+//     -> code=0, data keyed by uid: { room_id, live_status, title, uname, cover, online }
+//   live_status: 0 = not live, 1 = live, **2 = carousel** (not a real stream, so the two must be shown
+//                apart, otherwise a pile of carousels gets reported as "went live")
+//   direct works; going through the proxy may actually get risk-controlled instead (same as every other bilibili source in this project).
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -34,7 +35,7 @@ function headers() {
   };
 }
 
-/** 一份 uid 列表从哪来：live.uids 配置 + B 站动态来源的 uid + 监视对象里的 B 站 uid */
+/** where the uid list comes from: the live.uids config + the uids of bilibili dynamic sources + bilibili uids among the watch targets */
 export function liveUids(cfg, sources) {
   const out = new Map();
   for (const u of cfg?.live?.uids ?? []) {
@@ -70,11 +71,11 @@ function saveLiveState(cfg, state) {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, JSON.stringify(state, null, 1), 'utf8');
   } catch {
-    /* 状态写不进也不该影响运行 */
+    /* an unwritable state file must not affect the run either */
   }
 }
 
-/** 批量查询开播状态（一次最多 100 个 uid，超了分批） */
+/** batch-query live status (one call takes at most 100 uids, anything past that is split into batches) */
 export async function fetchLiveStatus(cfg, uids) {
   const list = [...new Set(uids.map((u) => String(u)).filter((u) => /^\d+$/.test(u)))];
   if (!list.length) return { ok: true, rooms: {}, batches: 0 };
@@ -88,7 +89,7 @@ export async function fetchLiveStatus(cfg, uids) {
       const r = await netFetch(
         `${API}/room/v1/Room/get_status_info_by_uids?${qs}`,
         { headers: headers(), signal: AbortSignal.timeout(25000) },
-        { cfg, mode: 'direct' } // 直播接口和动态接口一样：直连才通，走代理会被风控
+        { cfg, mode: 'direct' } // same as the dynamics endpoint: the live endpoint only works over direct, the proxy gets it risk-controlled
       );
       const j = await r.json().catch(() => null);
       if (j?.code !== 0) return { ok: false, error: `code=${j?.code ?? 'bad-json'} ${j?.message ?? ''}`, rooms };
@@ -103,7 +104,7 @@ export async function fetchLiveStatus(cfg, uids) {
           areaName: v.area_name ?? '',
           status: Number(v.live_status ?? 0),
           url: `https://live.bilibili.com/${v.room_id}`,
-          // 多屏用的官方内嵌页：实测无 X-Frame-Options，可安全 iframe
+          // the official embed page used by the multi-screen grid: measured to send no X-Frame-Options, safe to iframe
           embed: `https://live.bilibili.com/blanc/${v.room_id}?hidePanel=1`,
         };
       }
@@ -115,7 +116,7 @@ export async function fetchLiveStatus(cfg, uids) {
 }
 
 /**
- * 检查一轮开播状态，并与上次比对得出「刚开播 / 刚下播」。
+ * Check one round of live status and diff it against the previous round to derive "just went live / just went offline".
  * @returns {{ok:boolean, live:Array, round:Array, off:Array, wentLive:Array, wentOff:Array, checked:number, error?:string}}
  */
 export async function checkLive(cfg, sources, log) {
@@ -124,7 +125,7 @@ export async function checkLive(cfg, sources, log) {
 
   const r = await fetchLiveStatus(cfg, wanted.map((w) => w.uid));
   if (!r.ok) {
-    log?.warn(`开播检查失败 / live check failed — ${r.error}`);
+    log?.warn(`live check failed — ${r.error}`);
     return { ok: false, error: r.error, live: [], round: [], off: [], wentLive: [], wentOff: [], checked: 0 };
   }
 
@@ -154,13 +155,13 @@ export async function checkLive(cfg, sources, log) {
   }
 
   saveLiveState(cfg, next);
-  log?.info(`开播检查：直播中 ${live.length}、轮播 ${round.length}、未开播 ${off.length}${wentLive.length ? `，新开播 ${wentLive.length}` : ''}`);
+  log?.info(`live check: live ${live.length}, carousel ${round.length}, offline ${off.length}${wentLive.length ? `, newly live ${wentLive.length}` : ''}`);
   return { ok: true, live, round, off, wentLive, wentOff, checked: wanted.length, at: new Date().toISOString() };
 }
 
 /**
- * vtbs.moe 花名册（9762 条 mid -> roomid/uname），用于「按名字找 UID」。
- * 上游 dd-monitor 用的 /v1/live 已经 404，但这个花名册还活着，所以留着当辅助。
+ * vtbs.moe roster (9762 entries mid -> roomid/uname), used for "find the UID by name".
+ * The /v1/live that upstream dd-monitor uses is 404 by now, but this roster is still alive, so it is kept as a helper.
  */
 export async function searchRoster(cfg, keyword, limit = 20) {
   const key = String(keyword ?? '').trim().toLowerCase();
@@ -174,7 +175,7 @@ export async function searchRoster(cfg, keyword, limit = 20) {
       if (age < (Number(cfg?.live?.cacheRosterHours ?? 24) * 3600_000)) roster = c.list;
     }
   } catch {
-    /* 缓存坏了就重取 */
+    /* a corrupt cache simply means fetching again */
   }
   if (!roster) {
     try {

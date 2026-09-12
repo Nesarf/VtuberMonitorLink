@@ -1,4 +1,4 @@
-// reports.js — 报告与运行记录的存储 / report & run storage
+// reports.js — report & run storage
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -14,16 +14,16 @@ export function ensureDirs(cfg) {
   }
 }
 
-// ───────────────────────────────────────── 报告输出格式 / report output format
-// 每日情报不再默认写 .md：换成 VSCode 打开就好看的格式。
-// - html : 自带样式的单文件网页（VSCode 里可预览，无需任何插件）
-// - adoc : AsciiDoc（VSCode 装扩展后预览，纯文本也可读）
-// - md   : 旧行为，保留兼容
-// - json : 结构化，程序友好
+// ───────────────────────────────────────── report output format
+// Daily intel no longer writes .md by default: it switched to a format that looks good in VSCode.
+// - html : a self-styled single-file page (previewable in VSCode, no plugin needed)
+// - adoc : AsciiDoc (previewable in VSCode with an extension; readable as plain text too)
+// - md   : the old behaviour, kept for compatibility
+// - json : structured, program-friendly
 export const REPORT_FORMATS = ['html', 'adoc', 'md', 'json'];
 const REPORT_EXTS = REPORT_FORMATS;
 
-/** 报告主文件扩展名（不含点） */
+/** The report primary file's extension (without the dot) */
 export function reportFormat(cfg) {
   const f = String(cfg?.reports?.format ?? 'html').toLowerCase().replace(/^\./, '');
   return REPORT_FORMATS.includes(f) ? f : 'html';
@@ -40,7 +40,7 @@ blockquote { border-left: 3px solid #8886; margin: 0; padding-left: 12px; color:
 a { color: #3b82f6; }
 footer { margin-top: 48px; font-size: 12px; color: #8888; }`;
 
-/** markdown → 完整 HTML 文档（报告主文件与「导出 HTML」共用同一套样式） */
+/** markdown -> a complete HTML document (the report primary file and "export HTML" share the same styling) */
 export function htmlShell(title, md, footer = `由 Vtuber's Monitor Link 导出 · ${new Date().toISOString()}`) {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -59,7 +59,7 @@ ${markdownToHtml(md)}
 </html>`;
 }
 
-/** markdown → AsciiDoc：够用即可（标题 / 列表 / 引用 / 代码块 / 链接） */
+/** markdown -> AsciiDoc: good enough (headings / lists / quotes / code blocks / links) */
 export function markdownToAdoc(md) {
   const src = String(md ?? '').replace(/\r\n?/g, '\n');
   const out = [];
@@ -100,7 +100,7 @@ export function markdownToAdoc(md) {
   return out.join('\n');
 }
 
-/** 一次运行的源数据文件（累积当天多次运行），主文件由它渲染而来 */
+/** The run's source data file (accumulating several runs of the same day); the primary file is rendered from it */
 function sourceName(mode, date) {
   return `${mode === 'merch' ? 'merch-' : ''}${date}.json`;
 }
@@ -128,7 +128,7 @@ export function saveReport(cfg, { markdown, mode = 'daily', date = DATE() }) {
       const prev = JSON.parse(fs.readFileSync(srcFile, 'utf8'));
       if (prev && Array.isArray(prev.runs)) source = { ...prev, runs: prev.runs };
     } catch {
-      // 源文件坏了就当今天第一次跑，不阻塞出报告
+      // a corrupt source file counts as the first run of the day; it must not block the report
     }
   }
   source.runs.push({ at: new Date().toISOString(), markdown });
@@ -169,7 +169,7 @@ export function listReports(cfg) {
   return fs
     .readdirSync(dir)
     .filter((f) => REPORT_EXTS.some((e) => f.endsWith(`.${e}`)))
-    // 主文件本身就是 .json 时，它就是主文件，不再当侧车藏着
+    // when the primary file itself is .json, it is the primary file and is no longer hidden away as a sidecar
     .filter((f) => !f.endsWith('.json') || fmt === 'json')
     .map((f) => {
       const st = fs.statSync(path.join(dir, f));
@@ -179,7 +179,7 @@ export function listReports(cfg) {
     .sort((a, b) => (a.name < b.name ? 1 : -1));
 }
 
-/** 读取报告原文（html 会原样返回给 iframe 渲染，其它格式给文本） */
+/** Read a report's raw content (html is returned as-is for iframe rendering, other formats give text) */
 export function readReport(cfg, name) {
   const safe = path.basename(name);
   const file = path.join(resolveDir(cfg, 'reportsDir'), safe);
@@ -187,7 +187,7 @@ export function readReport(cfg, name) {
   return fs.readFileSync(file, 'utf8');
 }
 
-/** html → 纯文本（没有源文件时的兜底，够检索和导出用） */
+/** html -> plain text (the fallback when there is no source file; good enough for search and export) */
 function htmlToText(html) {
   return String(html ?? '')
     .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
@@ -204,8 +204,9 @@ function htmlToText(html) {
 }
 
 /**
- * 取任意报告对应的 markdown 源文。
- * 这是「换格式不影响导出/检索/对比」的关键：一切主文件都由 .json 源渲染而来。
+ * Get the markdown source text behind any report.
+ * This is the key to "changing the format does not affect export/search/diff": every primary file is
+ * rendered from a .json source.
  */
 export function markdownSource(cfg, name) {
   const dir = resolveDir(cfg, 'reportsDir');
@@ -229,7 +230,7 @@ export function markdownSource(cfg, name) {
       const j = JSON.parse(fs.readFileSync(sibling, 'utf8'));
       if (Array.isArray(j.runs)) return j.runs.map((r) => r.markdown).join('\n\n---\n\n');
     } catch {
-      // 落到下面的按扩展名兜底
+      // fall through to the extension-based fallback below
     }
   }
   if (safe.endsWith('.md')) return raw;
@@ -243,25 +244,26 @@ export function runLogPath(cfg, label = 'run') {
   return path.join(dir, `${label}-${STAMP()}.log`);
 }
 
-// ───────────────────────────────────────── 情报条目 / intel items
+// ───────────────────────────────────────── intel items
 
-/** 落盘本次运行的结构化情报条目（网页卡片流吃这份） */
+/** Persist this run's structured intel items (the web card stream consumes this) */
 export function saveItems(cfg, date, items, meta = {}) {
   const dir = path.join(resolveDir(cfg, 'feedsDir'), date);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, '_items.json');
   const payload = { generatedAt: new Date().toISOString(), date, count: items.length, ...meta, items };
-  // 上一次的结果留一份，供「本次 vs 上次」对比用；只留一份，不无限堆积
+  // keep one copy of the previous result for the "this run vs last run" comparison; one copy only,
+  // never piling up
   try {
     if (fs.existsSync(file)) fs.copyFileSync(file, path.join(dir, '_items-prev.json'));
   } catch {
-    /* 留不下就算了，不影响本次落盘 */
+    /* if it cannot be kept, so be it; it does not affect this write */
   }
   fs.writeFileSync(file, JSON.stringify(payload, null, 1), 'utf8');
   return file;
 }
 
-/** 读最近一次运行的情报条目 / read the newest intel snapshot */
+/** Read the intel items of the most recent run */
 export function latestIntel(cfg, limit = 400) {
   const root = resolveDir(cfg, 'feedsDir');
   if (!fs.existsSync(root)) return { generatedAt: null, items: [], runs: [] };
@@ -285,13 +287,13 @@ export function latestIntel(cfg, limit = 400) {
       const j = JSON.parse(fs.readFileSync(f, 'utf8'));
       return { ...j, items: (j.items ?? []).slice(0, limit), runs };
     } catch {
-      /* 损坏就继续往前找 */
+      /* corrupt, keep looking further back */
     }
   }
   return { generatedAt: null, items: [], runs };
 }
 
-/** 上一次运行的情报条目（对比用）/ the previous run's items */
+/** The previous run's intel items (used for the comparison) */
 export function previousIntel(cfg) {
   const root = resolveDir(cfg, 'feedsDir');
   if (!fs.existsSync(root)) return { generatedAt: null, items: [] };
@@ -313,7 +315,7 @@ export function previousIntel(cfg) {
   return { generatedAt: null, items: [] };
 }
 
-/** 本次 vs 上次：新增 / 消失 / 仍在 / 变化的条目 */
+/** This run vs last run: added / removed / still present / changed items */
 export function diffIntel(cfg) {
   const cur = latestIntel(cfg, 1000);
   const prev = previousIntel(cfg);
@@ -329,7 +331,7 @@ export function diffIntel(cfg) {
     if (String(before.text ?? '') === String(now.text ?? '')) continue;
     changed.push({ id, before, after: now });
   }
-  // 关注量增长之类的「同 id 但数值变了」也算变化
+  // changes like a follower-count increase ("same id but the number moved") count as changes too
   return {
     current: { at: cur.generatedAt ?? null, date: cur.date ?? null, count: (cur.items ?? []).length },
     previous: { at: prev.generatedAt ?? null, date: prev.date ?? null, count: (prev.items ?? []).length },
@@ -340,7 +342,7 @@ export function diffIntel(cfg) {
   };
 }
 
-// ───────────────────────────────────────── 星标 / 已读 / flags
+// ───────────────────────────────────────── star / read / flags
 
 function flagsPath(cfg) {
   return path.join(resolveDir(cfg, 'feedsDir'), 'flags.json');
@@ -369,9 +371,9 @@ export function setFlag(cfg, id, patch) {
   return flags[id] ?? null;
 }
 
-// ───────────────────────────────────────── 导出与检索 / export & search
+// ───────────────────────────────────────── export & search
 
-/** 极简 Markdown → HTML（导出用；先转义再替换，不做任何危险注入） */
+/** Minimal Markdown -> HTML (for export; escape first and substitute after, with no dangerous injection at all) */
 export function markdownToHtml(md) {
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inline = (s) =>
@@ -447,7 +449,8 @@ export function markdownToHtml(md) {
 }
 
 export function exportReport(cfg, name, format = 'html') {
-  // 导出永远基于 markdown 源文，所以报告主文件换任何格式（html/adoc/json）都不影响导出
+  // Export is always based on the markdown source, so switching the primary report file to any format
+  // (html/adoc/json) does not affect export
   const md = markdownSource(cfg, name);
   if (md === null) return null;
   const base = path.basename(name).replace(/\.[^.]+$/, '');
@@ -468,7 +471,7 @@ export function exportReport(cfg, name, format = 'html') {
   return { file: `${base}.html`, mime: 'text/html; charset=utf-8', body: htmlShell(base, md) };
 }
 
-/** 报告全文检索 / full-text search across reports */
+/** Full-text search across reports */
 export function searchReports(cfg, query, limit = 50) {
   const q = String(query ?? '').trim();
   if (!q) return [];
@@ -476,7 +479,7 @@ export function searchReports(cfg, query, limit = 50) {
   if (!fs.existsSync(dir)) return [];
   const needle = q.toLowerCase();
   const hits = [];
-  // 不再只搜 .md：源 .json 也在内，这样换任何输出格式都搜得到
+  // no longer searches .md only: the .json source is covered too, so any output format stays findable
   for (const f of fs.readdirSync(dir).filter((x) => REPORT_EXTS.some((e) => x.endsWith(`.${e}`)))) {
     const text = fs.readFileSync(path.join(dir, f), 'utf8');
     const lines = text.split(/\r?\n/);

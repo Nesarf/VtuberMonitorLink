@@ -1,11 +1,12 @@
-// llm.js — LLM 提供商档位 / LLM provider profiles
+// llm.js — LLM provider profiles
 //
-// 设计目标：网页里能「选提供商 → 填 Key → 选模型 → 测连通性」，也可以存多套档位
-// 随时切换（例如平时用便宜的、出报告时用贵的）。
-// 只依赖 OpenAI 兼容的 /chat/completions 与 /models，不引入任何厂商 SDK。
+// Design goal: the web UI can "pick a provider -> fill in the key -> pick a model -> test
+// connectivity", and can also store several profiles to switch between at any time
+// (for example a cheap one day to day and an expensive one when writing reports).
+// Depends only on the OpenAI-compatible /chat/completions and /models, with no vendor SDK.
 import { netFetch } from './net.js';
 
-/** 常见提供商预设（baseUrl 均可改，模型列表也会在网页里实时拉取） */
+/** Common provider presets (every baseUrl can be edited, and the model list is fetched live in the UI) */
 export const PRESETS = [
   {
     id: 'deepseek',
@@ -68,7 +69,7 @@ export function presetOf(id) {
   return PRESETS.find((p) => p.id === id) ?? null;
 }
 
-/** 新建一个档位 / build a new provider profile from a preset */
+/** Build a new provider profile from a preset */
 export function newProvider(presetId = 'deepseek', overrides = {}) {
   const p = presetOf(presetId) ?? presetOf('custom');
   const base = {
@@ -87,9 +88,10 @@ export function newProvider(presetId = 'deepseek', overrides = {}) {
 }
 
 /**
- * 取当前生效的档位。
- * 同时兼容 v1.0.0 的扁平写法（cfg.llm.apiKey / baseUrl / model …），
- * 老配置读到就自动升级成「单档位」，不需要使用者手动改文件。
+ * Get the currently active profile.
+ * Also accepts the flat v1.0.0 layout (cfg.llm.apiKey / baseUrl / model ...):
+ * an old config is upgraded to a "single profile" on read, so the user never has to
+ * edit the file by hand.
  */
 export function activeProvider(cfg) {
   const llm = cfg?.llm ?? {};
@@ -98,7 +100,7 @@ export function activeProvider(cfg) {
     const id = llm.activeId ?? list[0].id;
     return list.find((p) => p.id === id) ?? list[0];
   }
-  // 旧格式 → 即时降级成一个临时档位
+  // old format -> degrade it into a temporary profile on the fly
   if (llm.apiKey || llm.baseUrl) {
     return {
       id: '__legacy__',
@@ -120,10 +122,10 @@ function endpoint(baseUrl, suffix) {
   return `${String(baseUrl ?? '').trim().replace(/\/+$/, '')}${suffix}`;
 }
 
-/** 拉取提供商暴露的模型清单 / list models from an OpenAI-compatible endpoint */
+/** List models from an OpenAI-compatible endpoint */
 export async function listModels(cfg, provider) {
   const p = provider ?? activeProvider(cfg);
-  if (!p.baseUrl) return { ok: false, error: '未填写接口地址 / baseUrl is empty', models: [] };
+  if (!p.baseUrl) return { ok: false, error: 'baseUrl is empty', models: [] };
   try {
     const r = await netFetch(
       endpoint(p.baseUrl, '/models'),
@@ -146,7 +148,7 @@ export async function listModels(cfg, provider) {
   }
 }
 
-/** 单次对话请求的公共部分 / shared request bits */
+/** Shared request bits for a single chat request */
 export function chatRequest(p, messages, extra = {}) {
   const body = {
     model: p.model || 'deepseek-chat',

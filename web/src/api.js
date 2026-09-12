@@ -1,4 +1,4 @@
-// api.js — 后端接口封装 / thin wrapper over the local REST API
+// api.js — thin wrapper over the local REST API
 async function j(url, opts) {
   const res = await fetch(url, opts);
   const text = await res.text();
@@ -21,12 +21,12 @@ export const api = {
   getConfig: () => j('/api/config'),
   putConfig: (cfg) => put('/api/config', cfg),
 
-  // 每个站点的自动出口判定
+  // per-site automatic exit selection
   getEgress: () => j('/api/egress'),
   decideEgress: (ids) => post('/api/egress/decide', { ids }),
   clearEgress: () => post('/api/egress/clear', {}),
 
-  // 按「人」关注
+  // following by "person"
   getPeople: (limit) => j(`/api/people?limit=${limit ?? 300}`),
   addPerson: (person) => post('/api/people', person),
   patchPerson: (id, patch) =>
@@ -40,7 +40,7 @@ export const api = {
   suggestPeople: (min) => j(`/api/people/suggest?min=${min ?? 2}`),
   personExportUrl: (id, format) => `/api/people/${encodeURIComponent(id)}/export?format=${format ?? 'json'}`,
 
-  // 纪念日 / 生日 / 3D披露 倒计时
+  // anniversary / birthday / 3D debut countdown
   getCalendar: ({ days, month, year, weekStart } = {}) =>
     j(`/api/calendar?days=${days ?? 400}&month=${month ?? ''}&year=${year ?? ''}&weekStart=${weekStart ?? 1}`),
   addCalendarEntry: (entry) => post('/api/calendar/entry', entry),
@@ -54,7 +54,7 @@ export const api = {
   detectCalendar: (limit) => j(`/api/calendar/detect?limit=${limit ?? 300}`),
   importCalendar: (entries) => post('/api/calendar/import', { entries }),
 
-  // 来源
+  // sources
   getSources: () => j('/api/sources'),
   patchSource: (id, patch) =>
     j(`/api/sources/${id}`, {
@@ -65,30 +65,30 @@ export const api = {
   addCustomSource: (source) => post('/api/sources/custom', source),
   deleteCustomSource: (id) => j(`/api/sources/custom/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  // 环境
+  // environment
   getBrowsers: () => j('/api/browsers'),
   detectProxy: () => j('/api/proxy/detect'),
   checkCookies: (payload) => post('/api/cookies/check', payload),
 
-  // 运行
+  // run
   getState: () => j('/api/state'),
   run: (mode = 'daily') => post('/api/run', { mode }),
   preflight: () => post('/api/preflight'),
 
-  // LLM 档位
+  // LLM profiles
   getLlm: () => j('/api/llm/presets'),
   newLlmProvider: (preset, overrides) => post('/api/llm/new', { preset, overrides }),
   testLlmProvider: (provider) => post('/api/llm/test', { provider }),
   listLlmModels: (provider) => post('/api/llm/models', { provider }),
 
-  // 监视对象
+  // watch targets
   getWatch: () => j('/api/watch'),
   putWatch: (payload) => put('/api/watch', payload),
   checkWatch: (id) => post('/api/watch/check', id ? { id } : {}),
   watchHistory: (id, limit = 50) => j(`/api/watch/${encodeURIComponent(id)}/history?limit=${limit}`),
   clearBaseline: (id) => j(`/api/watch/${encodeURIComponent(id)}/baseline`, { method: 'DELETE' }),
 
-  // 情报条目
+  // intel items
   getIntel: (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== '' && v !== false)
@@ -96,26 +96,26 @@ export const api = {
     return j(`/api/intel${qs ? `?${qs}` : ''}`);
   },
 
-  // 报告
+  // reports
   getReports: () => j('/api/reports'),
 
-  // 一键分享
+  // one-click sharing
   shareTargets: () => j('/api/share/targets'),
   shareText: ({ scope, note } = {}) => post('/api/share/bundle', { scope, format: 'text', note }),
   sharePost: (body) => post('/api/share/post', body),
   shareAudit: () => j('/api/share/audit'),
 
-  // 图片理解打标
+  // image understanding tagging
   visionStats: () => j('/api/vision/stats'),
   tagImages: (body) => post('/api/vision/tag', body ?? {}),
 
-  // SQLite 归档与图表
+  // SQLite archive and charts
   archiveStats: () => j('/api/archive/stats'),
   archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),
   groups: (days) => j(`/api/groups?days=${days ?? 30}`),
   silence: (days) => j(`/api/silence?days=${days ?? 60}`),
   cost: (days) => j(`/api/cost?days=${days ?? 14}`),
-  // VDB 花名册（多平台：社团 + 各平台账号）
+  // VDB roster (multi-platform: agency + the accounts on each platform)
   vdbStatus: () => j('/api/vdb/status'),
   vdbSync: () => post('/api/vdb/sync', {}),
   vdbSearch: (q, group) => j(`/api/vdb/search?q=${encodeURIComponent(q)}${group ? `&group=${encodeURIComponent(group)}` : ''}`),
@@ -133,40 +133,40 @@ export const api = {
   exportUrl: (name, format = 'html') =>
     `/api/reports/${encodeURIComponent(name)}/export?format=${format}`,
 
-  // 连通性探测
+  // connectivity probes
   getProbe: () => j('/api/probe'),
   probe: (payload) => post('/api/probe', payload),
   getHealth: () => j('/api/health'),
 
-  // 站点缩略图
+  // site thumbnails
   thumbMeta: (url, sourceId, mode) =>
     j(`/api/thumb?url=${encodeURIComponent(url)}${sourceId ? `&sourceId=${encodeURIComponent(sourceId)}` : ''}${mode ? `&mode=${mode}` : ''}`),
 
-  // 自检与诊断文件
+  // self-checks and diagnostic files
   diagnose: (id) => post(`/api/sources/${encodeURIComponent(id)}/diagnose`, {}),
   listAdvice: () => j('/api/advice'),
   deleteAdvice: (file) => j(`/api/advice/${encodeURIComponent(file)}`, { method: 'DELETE' }),
 
-  // 计划任务
+  // scheduled tasks
   getSchedule: () => j('/api/schedule'),
   runSchedule: (id) => post('/api/schedule/run', { id }),
 
-  // 通知推送
+  // notification targets
   getNotify: () => j('/api/notify'),
   newNotify: (kind, overrides) => post('/api/notify/new', { kind, overrides }),
   testNotify: (target) => post('/api/notify/test', { target }),
 
-  // 代理内核
+  // proxy core
   proxyControl: () => j('/api/proxy/control'),
   proxyNodes: (control) => j(`/api/proxy/nodes${control ? `?control=${encodeURIComponent(control)}` : ''}`),
   proxyNodeTest: (payload) => post('/api/proxy/nodes/test', payload),
   proxyNodeSelect: (payload) => post('/api/proxy/node', payload),
 
-  // 配置导入导出
+  // config import / export
   exportConfigUrl: (secrets) => `/api/config/export${secrets ? '?secrets=1' : ''}`,
   importConfig: (config) => post('/api/config/import', { config }),
 
-  // 情报
+  // intel
   getIntelDiff: () => j('/api/intel/diff'),
   flagIntel: (id, patch) =>
     j(`/api/intel/${encodeURIComponent(id)}`, {
@@ -175,37 +175,37 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  // 检索（纯本地匹配，不需要 LLM）
+  // search (purely local matching, no LLM needed)
   search: (query) => post('/api/search', query),
   searchTags: () => j('/api/search/tags'),
   saveSearchTags: (tags) => put('/api/search/tags', { tags }),
-  // 可选助手：只在「忘了名字」时用
+  // optional assistant: only pulled in when the name has been forgotten
   assist: (description) => post('/api/search/assist', { description }),
 
-  // 导出（Office 可读写）
+  // export (readable and writable by Office)
   intelExportUrl: (format, limit = 500) => `/api/intel/export?format=${format}&limit=${limit}`,
 
-  // 特征抽取（需要 LLM）
+  // feature extraction (needs an LLM)
   getFeatures: () => j('/api/features'),
   extractFeatures: () => post('/api/features/extract', {}),
 
-  // 开播监测（功能来源：dd-center/bilibili-dd-monitor，MIT）
+  // live-stream monitoring (feature origin: dd-center/bilibili-dd-monitor, MIT)
   getLive: (fresh) => j('/api/live' + (fresh ? '?fresh=1' : '')),
   searchRoster: (q) => j('/api/live/roster?q=' + encodeURIComponent(q)),
 
-  // 登录账号与发弹幕（发送是写操作，必须显式确认）
+  // login accounts and danmaku sending (sending is a write, so it must be confirmed explicitly)
   getAccounts: () => j('/api/accounts'),
   sendDanmaku: (payload) => post('/api/danmaku', payload),
   getDanmakuAudit: () => j('/api/danmaku/audit'),
 
-  // 人物档案（由特征抽取聚合）
+  // person profiles (aggregated by feature extraction)
   getEntities: () => j('/api/entities'),
   getEntity: (name) => j('/api/entities/' + encodeURIComponent(name)),
 
-  // 来源批量开关
+  // bulk source toggles
   bulkSources: (payload) => post('/api/sources/bulk', payload),
 
-  // Tor 无痕出口
+  // Tor anonymizing exit
   probeTor: (socks) => post('/api/proxy/tor', { socks }),
   startTor: (exe) => post('/api/proxy/tor/start', { exe }),
 };

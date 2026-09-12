@@ -13,6 +13,7 @@
 //   flaky   前一半请求 500，后一半正常（验证失败重试/记录）
 const http = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 function arg(name, dflt) {
@@ -75,11 +76,15 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const out = path.join(process.cwd(), 'mock-vision-port.txt');
+  // 端口写进一个**运行期**文件，方便人和脚本查（路径可用环境变量改）。
+  // 教训：这东西原来写在 process.cwd()（就是仓库根目录），结果被误提交进了 git ——
+  // 运行期产物不该落在仓库里，现在默认写到系统临时目录，`.gitignore` 那边也堵住了。
+  const out = process.env.VML_MOCK_VISION_PORT_FILE || path.join(os.tmpdir(), 'vml-mock-vision-port.txt');
   try {
     fs.writeFileSync(out, String(PORT), 'utf8');
   } catch {
     /* 写不了就算了 */
   }
   process.stdout.write(`mock vision (${MODE}) listening on http://127.0.0.1:${PORT}\n`);
+  process.stdout.write(`  port file: ${out}\n`);
 });

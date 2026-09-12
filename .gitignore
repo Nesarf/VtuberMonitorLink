@@ -4,10 +4,17 @@ dist/
 .vite/
 
 # runtime data (never commit)
+# 这几个是**应用跑起来才会产生**的目录（监视历史、缩略图、自检诊断、端口文件）。
+# 漏掉任何一个都会重演同一个错误：某个工具有一天把它们写进仓库根目录，
+# 然后被 `git add -A` 顺手提交（advice/ 与 mock-vision-port.txt 都真的发生过）。
 config.json
 reports/
 feeds/
 logs/
+watch/
+thumbs/
+advice/
+mock-vision-port.txt
 *.log
 
 # secrets

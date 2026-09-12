@@ -98,6 +98,8 @@ export const api = {
 
   // 报告
   getReports: () => j('/api/reports'),
+  getEvents: ({ limit, per } = {}) => j(`/api/events?limit=${limit ?? 500}&per=${per ?? 60}`),
+  dedupeEvents: (limit) => j(`/api/events/dedupe?limit=${limit ?? 500}`),
   flushNotify: () => post('/api/notify/flush', { force: true }),
   getReport: (name) => fetch(`/api/reports/${encodeURIComponent(name)}`).then((r) => r.text()),
   searchReports: (q) => j(`/api/reports/search?q=${encodeURIComponent(q)}`),

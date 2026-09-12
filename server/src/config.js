@@ -98,6 +98,17 @@ export const DEFAULT_CONFIG = {
     // 日报里列出关注对象的动态
     reportMatches: true,
   },
+  // 多源同事件合并 / 相似度去重 / 来源权重
+  cluster: {
+    enabled: true,
+    // IDF 加权 Dice 阈值：太低会把不相干的事并起来（信息被吞），太高等于没合并
+    threshold: 0.52,
+    // 超过这个时间差就不算同一件事（防止把去年的同一活动并进来）
+    windowHours: 72,
+  },
+  // 来源权重的静态基准（按分类给默认值），可在这里按来源 id 覆盖
+  // 例：{ "news-ann": 1.4, "community-reddit": 0.6 }
+  sourceWeights: {},
   notify: {
     desktop: true,
     // 同一条内容在 N 分钟内只推一次（0 = 不去重）。报告标题往往每次都一样，

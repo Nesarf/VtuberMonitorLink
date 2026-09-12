@@ -43,6 +43,7 @@ import {
   sanitizePerson,
   suggestFromPeople,
 } from './people.js';
+import { dedupe, loadWeightHistory, makeWeighter, runClustering } from './cluster.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
 import { listAccounts } from './accounts.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
@@ -1086,6 +1087,58 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     egressClear(cfg);
     res.json({ ok: true });
+  });
+
+  // ── 多源同事件合并 / 相似度去重 / 来源权重 ───────────────────────
+  // 算法与自检在 cluster.js + tools/cluster-test.mjs：IDF 加权 Dice + 单链接并查集 +
+  // 「必须共享罕见词」闸门 + 时间窗；来源权重从「谁先报」的历史里学。
+  app.get('/api/events', (req, res) => {
+    const cfg = getConfig();
+    const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
+    const { clusters, stats, weights } = runClustering(cfg, items, { learn: req.query.learn !== '0' });
+    res.json({
+      ok: true,
+      stats,
+      weights,
+      events: clusters.slice(0, Number(req.query.per ?? 60)).map((c) => ({
+        id: c.id,
+        title: c.title,
+        url: c.url,
+        firstAt: c.firstAt,
+        lastAt: c.lastAt,
+        sources: c.sources,
+        sourceCount: c.sourceCount,
+        duplicateCount: c.duplicateCount,
+        confirmed: c.confirmed,
+        weight: c.weight,
+        leadSourceId: c.leadSourceId,
+        firstSourceId: c.firstSourceId,
+        people: c.people,
+        items: c.items.map((i) => ({ id: i.id, title: i.title, sourceId: i.sourceId, url: i.url, publishedAt: i.publishedAt ?? i.at ?? null })),
+      })),
+    });
+  });
+
+  // 拿一段条目试一下合并效果（不动历史、不落盘）—— 方便调阈值，也让这条链路可端到端验证
+  app.post('/api/events/preview', (req, res) => {
+    const cfg = getConfig();
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: 'items[] is required' });
+    const { clusters, stats, weights } = runClustering(cfg, items, {
+      learn: false,
+      threshold: req.body?.threshold,
+      windowHours: req.body?.windowHours,
+    });
+    res.json({ ok: true, stats, weights, events: clusters.map((c) => ({ id: c.id, title: c.title, sourceCount: c.sourceCount, duplicateCount: c.duplicateCount, sources: c.sources, confirmed: c.confirmed, leadSourceId: c.leadSourceId })) });
+  });
+
+  // 只做去重（保持信息流顺序，把重复的丢掉）
+  app.get('/api/events/dedupe', (req, res) => {
+    const cfg = getConfig();
+    const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
+    const weigh = makeWeighter(cfg, loadWeightHistory(cfg));
+    const r = dedupe(items, { weight: weigh });
+    res.json({ ok: true, kept: r.kept.length, dropped: r.dropped.length, removed: r.dropped, items: r.kept });
   });
 
   // ── 按「人」关注 / follow people ─────────────────────────────────

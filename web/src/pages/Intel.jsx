@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { layoutClass, normalizeLayout } from '../layout.js';
+import Collapsible from '../Collapsible.jsx';
 
 function fmtTime(t) {
   if (!t) return '';
@@ -24,6 +25,21 @@ export default function Intel({ layout }) {
   const [starredOnly, setStarredOnly] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 多源同事件合并：打开后信息流按「事件」而不是按「条目」呈现
+  const [merge, setMerge] = useState(false);
+  const [events, setEvents] = useState(null);
+
+  const loadEvents = async (on) => {
+    if (!on) return;
+    setBusy(true);
+    try {
+      setEvents(await api.getEvents({ per: 40 }));
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const load = async () => {
     setBusy(true);
@@ -190,6 +206,20 @@ export default function Intel({ layout }) {
               <option value="true">on</option>
             </select>
           </div>
+          <div className="field" style={{ flex: '0 0 150px' }}>
+            <label>{t('mergeEvents')}</label>
+            <select
+              value={String(merge)}
+              onChange={(e) => {
+                const on = e.target.value === 'true';
+                setMerge(on);
+                loadEvents(on);
+              }}
+            >
+              <option value="false">off</option>
+              <option value="true">on</option>
+            </select>
+          </div>
           <div className="field" style={{ flex: '0 0 auto' }}>
             <button className="ghost" onClick={load} disabled={busy}>
               {busy ? t('loading') : t('refresh')}
@@ -308,6 +338,50 @@ export default function Intel({ layout }) {
           </ul>
         </section>
       )}
+
+      {merge && events ? (
+        <section className="panel">
+          <h2>
+            {t('eventsTitle')}
+            <span className="muted small" style={{ marginLeft: 12 }}>
+              {t('eventsStats')}: {events.stats.events} · {t('eventsMerged')}: {events.stats.duplicatesRemoved} · {t('eventsConfirmed')}:{' '}
+              {events.stats.confirmedEvents}
+            </span>
+          </h2>
+          <div className="hint">{t('eventsHint')}</div>
+          {(events.events ?? []).map((ev) => (
+            <div key={ev.id} className={'event-row' + (ev.confirmed ? ' confirmed' : '')}>
+              <div className="event-head">
+                {ev.confirmed ? <span className="badge optional">✔ {t('eventsConfirmedBadge')}</span> : null}
+                <b>{ev.title}</b>
+              </div>
+              <div className="muted small">
+                {t('eventsSources')}: {ev.sourceCount}（{ev.sources.join('、')}）
+                {ev.duplicateCount ? ` · ${t('eventsMergedShort')} ${ev.duplicateCount}` : ''}
+                {ev.leadSourceId ? ` · lead: ${ev.leadSourceId}` : ''}
+                {ev.firstAt ? ` · ${ev.firstAt.slice(0, 16).replace('T', ' ')}` : ''}
+              </div>
+              {ev.items.length > 1 ? (
+                <Collapsible id={'ev-' + ev.id} title={t('eventsItems')} count={ev.items.length} summary={t('eventsItemsHint')}>
+                  {ev.items.map((it, i) => (
+                    <div key={it.id ?? i} className="small">
+                      · {String(it.title ?? '').slice(0, 100)} <span className="muted">({it.sourceId})</span>
+                      {it.url ? (
+                        <>
+                          {' '}
+                          <a href={it.url} target="_blank" rel="noreferrer noopener">
+                            {t('open')}
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+                  ))}
+                </Collapsible>
+              ) : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       {L.mode === 'table' ? (
         <section className="panel">

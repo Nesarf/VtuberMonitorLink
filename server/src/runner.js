@@ -13,6 +13,7 @@ import { applyProxy } from './net.js';
 import { notify } from './notify.js';
 import { flushQueue } from './notify.js';
 import { feedByPerson } from './people.js';
+import { runClustering } from './cluster.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
@@ -276,6 +277,25 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       }
     } catch (e) {
       log.warn(`关注对象匹配失败（不影响报告）/ people match failed: ${e.message}`);
+    }
+
+    // 多源同事件合并：同一件事被几个来源各报一遍时，报告里只留一条，
+    // 并标出「几个来源确认」—— 这既省地方，也是可信度的直接证据。
+    try {
+      if (cfg?.cluster?.enabled !== false && items.length > 1) {
+        const { stats, clusters } = runClustering(cfg, items);
+        runState.clusterStats = stats;
+        const confirmed = clusters.filter((c) => c.confirmed).slice(0, 12);
+        if (stats.duplicatesRemoved > 0) {
+          const lines = confirmed.map((c) => {
+            const n = c.items.length;
+            return `- **${String(c.title).slice(0, 90)}** — ${c.sourceCount} 个来源${n > 1 ? `，合并 ${n - 1} 条重复` : ''}${c.leadSourceId ? `（首发/主源：${c.leadSourceId}）` : ''}`;
+          });
+          markdown = `## 🧩 多源确认事件（${confirmed.length}）\n\n${lines.join('\n')}\n\n> 共去掉 ${stats.duplicatesRemoved} 条重复报道。/ ${stats.events} events, ${stats.duplicatesRemoved} duplicates merged.\n\n${markdown}`;
+        }
+      }
+    } catch (e) {
+      log.warn(`事件合并失败（不影响报告）/ clustering failed: ${e.message}`);
     }
 
     const file = saveReport(cfg, { markdown, mode, date });

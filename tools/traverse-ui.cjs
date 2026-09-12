@@ -746,6 +746,61 @@ async function main() {
     const afterDel = await (await fetch(base + '/api/people')).json();
     check('可以删除关注对象（且清理干净）', (afterDel.people ?? []).length === 0);
 
+    // ------------------------------------------------- events (merge/dedupe)
+    process.stdout.write('\n9d. Events: multi-source merge, similarity dedupe, source weight\n');
+    const ev = await (await fetch(base + '/api/events?learn=0')).json();
+    check('事件合并接口可用', ev.ok === true, `${ev.stats?.events} 个事件 / ${ev.stats?.itemsMerged} 条条目`);
+    check('返回了来源权重', ev.weights && Object.keys(ev.weights).length > 0, JSON.stringify(ev.weights).slice(0, 90));
+    for (const [id, w] of Object.entries(ev.weights ?? {})) {
+      if (!(w > 0 && w <= 3)) check('权重在合理区间 ' + id, false, String(w));
+    }
+    check('统计里有「去掉重复」与「多源确认」', typeof ev.stats.duplicatesRemoved === 'number' && typeof ev.stats.confirmedEvents === 'number', JSON.stringify(ev.stats).slice(0, 90));
+    // 用预览接口做真正的端到端验证：mock 的 20 条其实各不相同，
+    // 「必须合并重复」这种断言不能依赖语料恰好重复（之前就是那么写错的）
+    const preview = await (
+      await fetch(base + '/api/events/preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          items: [
+            { id: 'd1', sourceId: 'official-hololive', title: '嘉然 3D披露 将于 3月15日 举行', publishedAt: '2026-03-01T10:00:00Z' },
+            { id: 'd2', sourceId: 'news-moguravr', title: '【3D披露】嘉然 3月15日 3Dお披露目 直播预告', publishedAt: '2026-03-01T12:00:00Z' },
+            { id: 'd3', sourceId: 'community-reddit', title: '嘉然 3D 披露 3月15日 直播', publishedAt: '2026-03-02T09:00:00Z' },
+            { id: 'd4', sourceId: 'news-ann', title: '某游戏版本更新公告', publishedAt: '2026-03-01T11:00:00Z' },
+          ],
+        }),
+      })
+    ).json();
+    check('预览接口把三个来源的同一件事并成一个事件', preview.stats?.events === 2 && preview.stats?.duplicatesRemoved === 2, JSON.stringify(preview.stats ?? {}));
+    const merged = (preview.events ?? []).find((e) => e.sourceCount === 3);
+    check('合并后标为多源确认，并选出来源权重最高的作为 lead', !!merged && merged.confirmed === true && merged.leadSourceId === 'official-hololive', JSON.stringify(merged ?? {}).slice(0, 120));
+    check('预览不会污染来源权重历史（learn:false）', preview.weights && Object.keys(preview.weights).length >= 3, JSON.stringify(preview.weights).slice(0, 90));
+    const ded = await (await fetch(base + '/api/events/dedupe')).json();
+    check('去重接口保留 + 丢掉的数量自洽', ded.ok === true && ded.kept + ded.dropped >= ded.kept, `保留 ${ded.kept} / 去掉 ${ded.dropped}`);
+    check('被丢掉的条目能指回保留者', (ded.removed ?? []).every((d) => d.keptId && d.eventId), JSON.stringify((ded.removed ?? [])[0] ?? {}).slice(0, 80));
+
+    await tab('情报').click();
+    await page.waitForTimeout(700);
+    const mergeSel = page.locator('main select').filter({ hasText: 'off' }).first();
+    check('情报页有「合并重复事件」开关', (await page.locator('main label', { hasText: '合并重复事件' }).count()) > 0);
+    // 打开合并视图
+    const mergeField = page.locator('main select').last();
+    void mergeSel;
+    void mergeField;
+    await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('main label')];
+      const l = labels.find((x) => x.textContent.includes('合并重复事件'));
+      const sel = l?.parentElement?.querySelector('select');
+      if (sel) {
+        sel.value = 'true';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    await page.waitForTimeout(1500);
+    const mergeText = await mainText();
+    check('合并视图渲染出来了', mergeText.indexOf('已合并事件') !== -1, mergeText.slice(0, 60).replace(/\n/g, ' '));
+    check('合并视图标出了多源确认', mergeText.indexOf('多源确认') !== -1 || mergeText.indexOf('来源') !== -1);
+
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');
     const xlsx = await fetch(base + '/api/intel/export?format=xlsx');

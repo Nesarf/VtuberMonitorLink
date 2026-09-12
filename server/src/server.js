@@ -528,7 +528,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         if (want === 'proxy' || want === 'tor') list.push(want);
         else {
           if (cfg.proxy?.enabled) list.push('proxy');
-          if (cfg.proxy?.torSocks) list.push('tor');
+          // Tor 只在**它真的会被用到**的时候才测：否则「全部测速」会给每条来源
+          // 多花一次 2.5 秒上下（Tor 出口建立链路本来就慢），纯属浪费 ——
+          // 而且那份 quota 应该留给真正需要 Tor 的入口。
+          const torInPlay =
+            cfg?.observation?.enabled === true || cfg?.proxy?.mode === 'tor' || cfg?.proxy?.enableTor === true;
+          if (torInPlay && cfg.proxy?.torSocks) list.push('tor');
         }
         perTarget.set(t.id, list);
       }

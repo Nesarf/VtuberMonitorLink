@@ -216,6 +216,40 @@ for (const f of ['README.md', 'LICENSE', 'docs/DESIGN.md', 'docs/PRIVACY.md', 'd
 }
 process.stdout.write(`   [ok]   关键文件齐全\n`);
 
+// ───────────────────────────────────────────── 6. bug 表编号
+//
+// 我三次把「新增一行」写成「替换掉相邻那行」，导致 bug 表悄悄丢记录。
+// 人会犯的错不该靠自觉避免 —— 让检查来抓。
+const bugsPath = path.join(ROOT, 'docs', 'BUGS.md');
+if (fs.existsSync(bugsPath)) {
+  const nums = [];
+  const lines = fs.readFileSync(bugsPath, 'utf8').split(/\r?\n/);
+  lines.forEach((l, i) => {
+    const m = /^\|\s*(\d+[a-z]?)\s*\|/.exec(l);
+    if (m) nums.push({ n: m[1], line: i + 1 });
+  });
+  const seen = new Map();
+  for (const { n, line } of nums) {
+    if (seen.has(n)) problems.push(`BUGS.md 编号重复: #${n}（第 ${seen.get(n)} 行与第 ${line} 行）`);
+    seen.set(n, line);
+  }
+  const plain = [...new Set(nums.filter((x) => /^\d+$/.test(x.n)).map((x) => Number(x.n)))].sort((a, b) => a - b);
+  // 把缺号折叠成区间：注入一个 #99 时不该列出 66 个孤立数字，而应报「20..98 缺失」
+  const gaps = [];
+  for (let i = 1; i < plain.length; i++) {
+    if (plain[i] - plain[i - 1] > 1) gaps.push([plain[i - 1] + 1, plain[i] - 1]);
+  }
+  if (gaps.length) {
+    const shown = gaps
+      .slice(0, 5)
+      .map(([a, b]) => (a === b ? '#' + a : `#${a}..#${b}`))
+      .join(', ');
+    problems.push(`BUGS.md 编号缺号: ${shown}${gaps.length > 5 ? ` 等 ${gaps.length} 段` : ''}（是不是把新增行写成了替换？）`);
+  }
+  if (!nums.length) notes.push('docs/BUGS.md 里没有解析到条目（表结构变了？）');
+  else process.stdout.write(`   [ok]   bug 表 ${nums.length} 条，编号唯一且连续\n`);
+}
+
 // ───────────────────────────────────────────── 结果
 
 process.stdout.write('\n6. 结果\n');

@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-09-12T01:34:05.194Z",
+  "total": 562,
+  "locales": {
+    "en-AU": 562,
+    "en-CA": 562,
+    "en-GB": 562,
+    "en-US": 562,
+    "zh-Hans": 562,
+    "zh-Hant": 562,
+    "zh-HK": 562,
+    "zh-TW": 562,
+    "ja-JP": 48,
+    "es-419": 47,
+    "es-AR": 47,
+    "es-ES": 47,
+    "es-MX": 47,
+    "ko-KR": 47,
+    "ar-SA": 46,
+    "de-DE": 46,
+    "fr-CA": 46,
+    "fr-FR": 46,
+    "it-IT": 46,
+    "ru-RU": 46,
+    "pt-BR": 40,
+    "pt-PT": 36,
+    "pl-PL": 23,
+    "uk-UA": 23,
+    "sr-RS": 19
+  }
+}

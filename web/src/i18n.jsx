@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { LOCALES, byCode, negotiate } from './locales/index.js';
 import { GENERATED } from './locales/generated.js';
-import { GB_SPELL, GB_STEMS, HAND } from './locales/overlays.js';
+import { GB_SPELL, GB_STEMS, HAND, HAND_COMMON } from './locales/overlays.js';
 
 /** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
 export const OVERLAY = HAND;
@@ -1381,6 +1381,20 @@ function resolveChain(code, seen = new Set()) {
   return out;
 }
 
+/**
+ * 真正可用的回落链：**只在同一语言内继承地区差异**，跨语言一律落到英文。
+ *
+ * 为什么必须这样：uk-UA / pl-PL / sr-RS 的 chain 里写了 ru-RU（最初只是想「缺键时有个兜底」），
+ * 结果它们把**俄语字符串**当成了自己的界面文案显示给使用者 —— 把俄语当乌克兰语是明确的错误，
+ * 不只是「翻译不够好」。同语言内的地区继承是对的（es-MX→es-419→es-ES、
+ * fr-CA→fr-FR、pt-BR→pt-PT、zh-TW→zh-Hant→zh-Hans、en-AU→en-GB→en-US），
+ * 跨语言则必须走英文兜底 —— 英文没翻译至少不冒犯任何人。
+ */
+function usableChain(code) {
+  const base = String(code).split('-')[0];
+  return resolveChain(code).filter((c) => String(c).split('-')[0] === base);
+}
+
 const Ctx = createContext(null);
 
 /** 应用主题到 <html> / apply the theme to <html> */
@@ -1416,12 +1430,17 @@ export function I18nProvider({ children }) {
   }, []);
 
   const dict = useMemo(() => {
-    // 逐级合并回落链：后面的补前面缺的键
+    // 逐级合并：**同语言**内的地区继承（usableChain）→ 该地区自己的词条 →
+    // 最后用英文兜底。注意不能跨语言继承：那会把俄语当成乌克兰语显示。
     let out = {};
-    for (const c of resolveChain(loc.code)) {
+    for (const c of usableChain(loc.code)) {
+      const common = HAND_COMMON[c];
+      if (common) out = { ...out, ...common };
       const d = OVERLAY[c] ?? derived[c] ?? STRINGS[c];
       if (d) out = { ...out, ...d };
     }
+    // 英文兜底：只补前面都没有的键
+    out = { ...STRINGS.en, ...out };
     return out;
   }, [loc, derived]);
 

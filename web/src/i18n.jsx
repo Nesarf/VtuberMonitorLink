@@ -1439,16 +1439,15 @@ export function I18nProvider({ children }) {
   }, []);
 
   const dict = useMemo(() => {
-    // 合并顺序必须是**父 → 子**（所以先 reverse）：子地区的词条要压过父地区。
-    // 之前是正向合并、后写的赢，于是父地区把子地区的区域用词盖掉了 ——
-    // es-MX 自己写的 Monitoreo/Reportes 一直被 es-ES 的 Vigilancia/Informes 覆盖，等于白写。
+    // 合并顺序：usableChain 返回的是**基础 → 具体**（zh → zh-Hans → zh-Hant → zh-TW），
+    // 正向合并、后面的压前面的 ⇒ **具体地区永远压过基础**。这一条必须保持正向：
+    // 我一度以为「父覆盖了子」而把顺序反过来，结果繁体三变体全部退回简体（被巡检当场抓到）。
     //
     // 每一级内部优先级（后面的压前面的）：
     //   机器译文 → 人工通用词条 → 该地区自己的词条
-    // 也就是「机器翻译永远压不过人工」，但**子地区的机器译文能压过父地区的人工词条**
-    // （它更贴近使用者所在地区，这是对的方向）。
+    // 也就是「机器翻译永远压不过人工」。
     let out = {};
-    for (const c of [...usableChain(loc.code)].reverse()) {
+    for (const c of usableChain(loc.code)) {
       const level = {
         ...(MACHINE[c] ?? {}),
         ...(HAND_COMMON[c] ?? {}),

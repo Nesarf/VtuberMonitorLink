@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-09-12T01:34:05.194Z",
-  "total": 562,
+  "generatedAt": "2026-09-12T01:56:34.593Z",
+  "total": 565,
   "locales": {
-    "en-AU": 562,
-    "en-CA": 562,
-    "en-GB": 562,
-    "en-US": 562,
-    "zh-Hans": 562,
-    "zh-Hant": 562,
-    "zh-HK": 562,
-    "zh-TW": 562,
+    "en-AU": 565,
+    "en-CA": 565,
+    "en-GB": 565,
+    "en-US": 565,
+    "zh-Hans": 565,
+    "zh-Hant": 565,
+    "zh-HK": 565,
+    "zh-TW": 565,
     "ja-JP": 48,
     "es-419": 47,
     "es-AR": 47,
@@ -22,10 +22,10 @@
     "fr-FR": 46,
     "it-IT": 46,
     "ru-RU": 46,
+    "pl-PL": 44,
+    "uk-UA": 44,
     "pt-BR": 40,
-    "pt-PT": 36,
-    "pl-PL": 23,
-    "uk-UA": 23,
-    "sr-RS": 19
+    "sr-RS": 40,
+    "pt-PT": 36
   }
 }

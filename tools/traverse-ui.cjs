@@ -219,6 +219,21 @@ async function main() {
     await page.waitForTimeout(400);
     const hantTabs = await page.locator('nav.tabs button').allInnerTexts();
     check('通用繁体可用', hantTabs.join('|').indexOf('情報') !== -1 || hantTabs.join('|').indexOf('資訊') !== -1, hantTabs.join(' | '));
+
+    // 乌克兰语必须是乌克兰语，不能因为「缺键」就显示俄语。
+    // （防的是真实发生过的错误：uk/pl/sr 的回落链里写了 ru-RU，
+    //   于是俄语字符串被当成它们的界面文案显示给使用者。）
+    await langSel.selectOption('uk-UA');
+    await page.waitForTimeout(400);
+    const ukTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('乌克兰语界面用乌克兰语', ukTabs.includes('Зведення'), ukTabs);
+    // 判据只用**俄语专有**的词形：Запуск 在乌克兰语里也是同一个词（第一版把它当俄语特征，
+    // 结果误报了自己的正确输出 —— 共享词不能当语言指纹）
+    check('乌克兰语界面里没有混入俄语', !/Сводка|Настройки|Источники|Отчёты|Наблюдение/.test(ukTabs), ukTabs);
+    await langSel.selectOption('pl-PL');
+    await page.waitForTimeout(400);
+    const plTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('波兰语界面用波兰语且没有混入俄语', plTabs.includes('Informacje') && !/Сводка|Настройки/.test(plTabs), plTabs);
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();

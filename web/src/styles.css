@@ -205,6 +205,12 @@ pre.report {
 }
 .sug-row input { margin-top: 2px; }
 
+/* 关注对象：名单 + 单人情报 */
+.people-feed { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.people-feed-row { padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.people-feed-row:last-child { border-bottom: 0; }
+.ok-text { color: #16a34a; font-weight: 600; }
+
 .save-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 4px; padding: 10px 12px;

@@ -14,8 +14,9 @@ import Watch from './pages/Watch.jsx';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 import Calendar from './pages/Calendar.jsx';
+import People from './pages/People.jsx';
 
-const TABS = ['intel', 'search', 'live', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
 export default function App() {
   const { t, localeCode, setLang } = useI18n();
@@ -83,6 +84,7 @@ export default function App() {
     search: t('tab_search'),
     live: t('tab_live'),
     calendar: t('tab_calendar'),
+    people: t('tab_people'),
     llm: t('tab_llm'),
     run: t('tab_run'),
     sources: t('tab_sources'),
@@ -144,6 +146,7 @@ export default function App() {
         {tab === 'settings' && <Settings onLayout={applyLayoutNow} />}
         {tab === 'reports' && <Reports layout={layout} />}
         {tab === 'calendar' && <Calendar />}
+        {tab === 'people' && <People />}
       </main>
     </>
   );

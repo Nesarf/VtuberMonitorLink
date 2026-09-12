@@ -12,6 +12,7 @@ import { createLogger } from './logger.js';
 import { applyProxy } from './net.js';
 import { notify } from './notify.js';
 import { flushQueue } from './notify.js';
+import { feedByPerson } from './people.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
@@ -252,6 +253,31 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     } catch (e) {
       log.warn(`纪念日计算失败（不影响报告）/ calendar failed: ${e.message}`);
     }
+
+    // 按「人」关注：把命中关注对象的条目单独成块。使用者心里盯的是人，
+    // 所以「这 20 个人今天有什么动静」要比「33 个来源抓到了什么」有用得多。
+    const followMatched = [];
+    try {
+      if (cfg?.peopleOptions?.reportMatches !== false && (cfg.people ?? []).length) {
+        const feed = feedByPerson(items, cfg.people, { limit: 200 }).filter((f) => f.count > 0);
+        if (feed.length) {
+          const lines = [];
+          for (const f of feed) {
+            lines.push(`- **${f.person.name}**${f.person.agency ? `（${f.person.agency}）` : ''} — ${f.count} 条`);
+            for (const it of f.items.slice(0, 3)) {
+              const title = String(it.title ?? it.text ?? '').slice(0, 90);
+              lines.push(`    - ${title}${it.url ? ` — ${it.url}` : ''}`);
+            }
+          }
+          markdown = `## 👤 关注对象动态\n\n${lines.join('\n')}\n\n${markdown}`;
+          followMatched.push(...feed.map((f) => ({ id: f.person.id, name: f.person.name, count: f.count, level: f.person.notifyLevel })));
+          runState.followMatched = followMatched;
+        }
+      }
+    } catch (e) {
+      log.warn(`关注对象匹配失败（不影响报告）/ people match failed: ${e.message}`);
+    }
+
     const file = saveReport(cfg, { markdown, mode, date });
     log.info(`报告已保存 / report saved: ${file}`);
 
@@ -314,14 +340,26 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     }
     const kwHits = items.filter((i) => i.keywords?.length);
     const dueCal = runState.calendarDue ?? [];
+    const follow = runState.followMatched ?? [];
+    // 关注对象的通知级别可以到 urgent（豁免静默时段）：既然专门盯这个人，
+    // 他的消息就不该被压到早上。
+    const followLevel = follow.some((f) => f.level === 'urgent') ? 'urgent' : null;
     const headline =
-      dueCal.length && dueCal.some((c) => c.days <= 1)
-        ? `🎂 ${dueCal[0].days === 0 ? '今天' : dueCal[0].days === 1 ? '明天' : `${dueCal[0].days} 天后`}：${dueCal[0].name}`
-        : alerts || kwHits.length
-          ? `⚠ 命中 ${alerts + kwHits.length} 条告警`
-          : '运行完成';
+      follow.length && followLevel
+        ? `👤 ${follow[0].name} 等 ${follow.length} 位关注对象有新动态`
+        : dueCal.length && dueCal.some((c) => c.days <= 1)
+          ? `🎂 ${dueCal[0].days === 0 ? '今天' : dueCal[0].days === 1 ? '明天' : `${dueCal[0].days} 天后`}：${dueCal[0].name}`
+          : alerts || kwHits.length
+            ? `⚠ 命中 ${alerts + kwHits.length} 条告警`
+            : '运行完成';
     const body = [
       `来源 ${okCount}/${results.length}，情报 ${items.length} 条，监视 ${watchResults.length} 个`,
+      follow.length
+        ? `\n【关注对象】\n${follow
+            .slice(0, 10)
+            .map((f) => `· ${f.name} — ${f.count} 条`)
+            .join('\n')}`
+        : '',
       dueCal.length
         ? `\n【纪念日提醒】\n${dueCal
             .slice(0, 8)
@@ -335,7 +373,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     ]
       .filter(Boolean)
       .join('\n');
-    await pushNotify(headline, body, dueCal.length || alerts || kwHits.length ? 'alert' : 'info');
+    await pushNotify(headline, body, followLevel ?? (dueCal.length || alerts || kwHits.length ? 'alert' : 'info'));
     // 静默时段积压的通知：每次运行结束补发一次（明确的时间点，不在投递路径里做竞态）
     try {
       const flushed = await flushQueue(cfg, log);

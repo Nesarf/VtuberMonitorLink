@@ -26,6 +26,20 @@ export const api = {
   decideEgress: (ids) => post('/api/egress/decide', { ids }),
   clearEgress: () => post('/api/egress/clear', {}),
 
+  // 按「人」关注
+  getPeople: (limit) => j(`/api/people?limit=${limit ?? 300}`),
+  addPerson: (person) => post('/api/people', person),
+  patchPerson: (id, patch) =>
+    j(`/api/people/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+  deletePerson: (id) => j(`/api/people/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  peopleFeed: (id, per) => j(`/api/people/feed?id=${encodeURIComponent(id)}&per=${per ?? 50}`),
+  suggestPeople: (min) => j(`/api/people/suggest?min=${min ?? 2}`),
+  personExportUrl: (id, format) => `/api/people/${encodeURIComponent(id)}/export?format=${format ?? 'json'}`,
+
   // 纪念日 / 生日 / 3D披露 倒计时
   getCalendar: ({ days, month, year, weekStart } = {}) =>
     j(`/api/calendar?days=${days ?? 400}&month=${month ?? ''}&year=${year ?? ''}&weekStart=${weekStart ?? 1}`),

@@ -222,7 +222,7 @@ async function main() {
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('ten navigation tabs render', tabs.length === 10, tabs.join(' | '));
+    check('eleven navigation tabs render', tabs.length === 11, tabs.join(' | '));
     check(
       'the Intel, Search, Live and Watch tabs are present',
       ['情报', '检索', '直播', '监视', 'LLM'].every((x) => tabs.includes(x)),
@@ -686,6 +686,65 @@ async function main() {
     check('日报里带上了纪念日倒计时区块', body.indexOf('纪念日倒计时') !== -1, newest ? newest.name : 'no report');
     check('日报里列出了那条纪念日', body.indexOf('日报倒计时测试') !== -1);
     await fetch(base + '/api/calendar/entry/ui-report-cal', { method: 'DELETE' });
+
+    // ------------------------------------------------------------- people
+    process.stdout.write('\n9c. People: follow by person, not by source\n');
+    const emptyPeople = await (await fetch(base + '/api/people')).json();
+    check('关注名单接口可用', emptyPeople.ok === true, `扫描 ${emptyPeople.scanned} 条`);
+
+    // 加一个关注对象，名字要在已有的 mock 情报里真的出现，才能验证匹配
+    // 加一个关注对象，别名取自**条目里真实存在的文本**，否则匹配无从验证
+    // （之前我用来源名当别名，结果 0/20 命中 —— 那是我探针写错，不是功能坏）
+    const mockIntel = await (await fetch(base + '/api/intel?limit=200')).json();
+    const firstItem = (mockIntel.items ?? [])[0] ?? {};
+    // sourceName 是本地化对象 {zh,en}；用 || 而不是 ?? —— 空字符串也要继续往下取
+    const src = firstItem.sourceName ?? {};
+    const sampleText = String(src.zh || src.en || firstItem.title || firstItem.text || '').trim();
+    const probeName = sampleText || 'Mock 关注对象';
+    const addPerson = await fetch(base + '/api/people', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'ui-follow', name: probeName, aliases: ['Mock Chan'], links: { bilibili: '672328094' } }),
+    });
+    check('可以新增关注对象', addPerson.ok === true, 'name=' + probeName);
+
+    const withPeople = await (await fetch(base + '/api/intel?limit=200')).json();
+    const attributed = (withPeople.items ?? []).filter((i) => (i.people ?? []).length);
+    check(
+      '情报条目被归属到人（本地匹配）',
+      attributed.length > 0,
+      `${attributed.length}/${(withPeople.items ?? []).length} 条命中（别名「${probeName}」）`,
+    );
+    if (attributed.length) {
+      const hits = attributed[0].peopleHits ?? [];
+      check('归属带证据（哪个别名、哪个字段）', hits.length > 0 && !!hits[0].alias && !!hits[0].field, JSON.stringify(hits[0] ?? {}));
+    } else {
+      check('归属带证据（哪个别名、哪个字段）', false, '没有命中，无法验证证据');
+    }
+
+    const feed = await (await fetch(base + '/api/people/feed?id=ui-follow')).json();
+    check('单人信息流可用', feed.ok === true && Array.isArray(feed.feed), JSON.stringify(feed).slice(0, 60));
+
+    const byPerson = await (await fetch(base + '/api/intel?limit=200&person=ui-follow')).json();
+    check('情报流可以按人筛选', (byPerson.items ?? []).length > 0 && (byPerson.items ?? []).every((i) => (i.people ?? []).includes('ui-follow')), `${(byPerson.items ?? []).length} 条`);
+
+    const exp = await fetch(base + '/api/people/ui-follow/export?format=md');
+    const expText = await exp.text();
+    check('单人可导出（Markdown）', exp.ok && expText.includes('#'), expText.split('\n')[0]?.slice(0, 40));
+
+    const sugRes = await (await fetch(base + '/api/people/suggest?min=2')).json();
+    check('关注对象建议接口可用', sugRes.ok === true, `已统计实体 ${sugRes.scanned}`);
+
+    // 页面上也要真的渲染出来
+    await tab('关注').click();
+    await page.waitForTimeout(900);
+    const peopleText = await mainText();
+    check('关注页渲染出名单', peopleText.indexOf(probeName) !== -1, peopleText.slice(0, 60).replace(/\n/g, ' '));
+    check('关注页说明了匹配依据', peopleText.indexOf('命中依据') !== -1 || peopleText.indexOf('别名') !== -1);
+
+    await fetch(base + '/api/people/ui-follow', { method: 'DELETE' });
+    const afterDel = await (await fetch(base + '/api/people')).json();
+    check('可以删除关注对象（且清理干净）', (afterDel.people ?? []).length === 0);
 
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');

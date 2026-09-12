@@ -86,6 +86,18 @@ export const DEFAULT_CONFIG = {
     // vtbs.moe 花名册缓存时长（小时）
     cacheRosterHours: 24,
   },
+  // 按「人」关注：名单本身就是配置（谁的名字、别名、账号在哪）
+  // [{ id, name, enName, agency, aliases[], tags[], notes, links{bilibili,twitter,youtube,twitch},
+  //    enabled, notifyLevel: info|alert|urgent }]
+  people: [],
+  peopleOptions: {
+    // 情报页默认是否只看关注对象（默认关：先让人看到全量，再自己决定收窄）
+    onlyFollowed: false,
+    // 命中关注对象时，按那个人的 notifyLevel 推送
+    notifyOnMatch: true,
+    // 日报里列出关注对象的动态
+    reportMatches: true,
+  },
   notify: {
     desktop: true,
     // 同一条内容在 N 分钟内只推一次（0 = 不去重）。报告标题往往每次都一样，

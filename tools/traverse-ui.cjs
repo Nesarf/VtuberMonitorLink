@@ -195,6 +195,15 @@ async function main() {
     const langIsHant = page.locator('html');
     check('html lang is set', (await langIsHant.getAttribute('lang')) === 'zh-Hans');
     check('html dir is ltr for chinese', (await langIsHant.getAttribute('dir')) === 'ltr');
+
+    // 默认主题是深色（使用者指定）：配置里没写 theme 时也要是深色，
+    // 而且**真的**画成深色 —— 只断言属性会漏掉「CSS 没跟上」这种情况。
+    const darkAttr = await langIsHant.getAttribute('data-theme');
+    const bgDark = await page.evaluate(() => {
+      const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g);
+      return m ? Number(m[0]) + Number(m[1]) + Number(m[2]) : 999;
+    });
+    check('默认主题是深色', darkAttr === 'dark' && bgDark < 240, 'data-theme=' + darkAttr + ' 背景亮度和=' + bgDark);
     // 切到阿拉伯语：RTL 与另一套文案都要真的生效
     await langSel.selectOption('ar-SA');
     await page.waitForTimeout(400);
@@ -363,6 +372,28 @@ async function main() {
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
 
+    // 主题选择器要真的生效，并且记住选择（记住是为了刷新时不白闪 —— index.html 里那段
+    // 同步脚本会先按记忆上色，服务端配置到了再覆盖）。
+    const themeRow = page.locator('main .field', { hasText: '主题' }).first();
+    const themeSel = themeRow.locator('select').first();
+    const themeAttr = () => page.locator('html').getAttribute('data-theme');
+    const bgLuma = () =>
+      page.evaluate(() => {
+        const m = getComputedStyle(document.body).backgroundColor.match(/\d+/g);
+        return m ? Number(m[0]) + Number(m[1]) + Number(m[2]) : 0;
+      });
+    check('主题选中值就是默认的深色', (await themeSel.inputValue()) === 'dark', await themeSel.inputValue());
+    const bgDarkNow = await bgLuma();
+    await themeSel.selectOption('light');
+    await page.waitForTimeout(300);
+    const bgLight = await bgLuma();
+    check('选浅色会真的变浅', (await themeAttr()) === 'light' && bgLight > bgDarkNow, 'data-theme=' + (await themeAttr()) + ' 亮度 ' + bgDarkNow + ' -> ' + bgLight);
+    check('主题被记住（刷新不白闪）', (await page.evaluate(() => localStorage.getItem('vml-theme'))) === 'light');
+    await themeSel.selectOption('dark');
+    await page.waitForTimeout(300);
+    const bgBack = await bgLuma();
+    check('切回深色', (await themeAttr()) === 'dark' && bgBack < 240, '亮度 ' + bgBack);
+
     // ── 推送渠道与静默时段 ──
     const notifyInfo = await (await fetch(base + '/api/notify')).json();
     const kindIds = (notifyInfo.kinds ?? []).map((k) => k.id);
@@ -429,12 +460,23 @@ async function main() {
     check('Watch page renders the seeded targets', main.indexOf('example.com') !== -1 && main.indexOf('嘉然动态') !== -1);
     check('the alarm-rules panel can be opened', (await page.locator('main button', { hasText: '告警规则' }).count()) > 0);
     await page.locator('main button', { hasText: '全部检查一次' }).click();
-    await page.waitForTimeout(6000);
+    // 等到基线真的建立，而不是死等 6 秒：检查要联网（bilibili 那条），
+    // 固定等待在网络上快慢不定时就变成运气测试（这条断言就是因此红过两次）。
+    let baselineReady = false;
+    let watchMain = '';
+    for (let i = 0; i < 25; i++) {
+      await page.waitForTimeout(1000);
+      watchMain = await mainText();
+      if (watchMain.indexOf('尚未建立') === -1) {
+        baselineReady = true;
+        break;
+      }
+    }
     const watchRows = await page.locator('main table tbody tr').count();
     check('both targets are listed', watchRows === 2, watchRows + ' rows');
-    main = await mainText();
+    main = watchMain;
     const baselined = (main.match(/已建立|revid|粉丝|条/g) || []).length;
-    check('baseline info shows up after a check', main.indexOf('尚未建立') === -1, baselined + ' baseline markers');
+    check('baseline info shows up after a check', baselineReady, baselined + ' baseline markers');
     const ruleBtn = page.locator('main button', { hasText: '告警规则' }).first();
     await ruleBtn.click();
     await page.waitForTimeout(400);

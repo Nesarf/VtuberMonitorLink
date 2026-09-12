@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import Collapsible from '../Collapsible.jsx';
+import { Inline } from '../markdown.jsx';
 
 export default function Share({ people = [] }) {
   const { t } = useI18n();
@@ -124,7 +125,7 @@ export default function Share({ people = [] }) {
   return (
     <section className="panel">
       <h2>{t('shareTitle')}</h2>
-      <div className="hint">{t('shareHint')}</div>
+      <div className="hint"><Inline text={t('shareHint')} /></div>
       {err && <div className="hint warn-text">{err}</div>}
 
       <div className="row">

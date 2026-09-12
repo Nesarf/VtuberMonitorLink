@@ -175,7 +175,9 @@ export const DEFAULT_CONFIG = {
     },
   },
   ui: {
-    theme: 'auto', // auto | light | dark
+    // 默认深色（使用者指定）。auto = 跟随系统；浅色只在显式选 light 时出现，
+    // 因为夜间看推送/情报流是主要场景，默认深色更不刺眼。
+    theme: 'dark', // auto | light | dark
     notify: true, // 兼容字段，实际看 notify.desktop
     intelPerSource: 24,
     probeSamples: 3,

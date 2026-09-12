@@ -36,6 +36,23 @@ function check(name, ok, detail) {
   process.stdout.write('  ' + (ok ? '[ok]  ' : '[FAIL]') + ' ' + name + (detail ? '  -- ' + detail : '') + '\n');
 }
 
+/**
+ * 一条检查依赖**外网**（example.com 那条监视目标要真的连出去）。
+ * 网络抖动时它会随机红 —— 而随机红最后会被当成「噪音」忽略掉，等于把这条检查删了。
+ * 所以：先重试两次；仍是**连不上**（超时/DNS/连接被拒）就报成 [skip] 并写明原因，
+ * 只有「连上了但结果不对」才算失败。skip 是**显式**的，不会被误读成通过。
+ */
+function checkNetwork(name, ok, detail, isNetworkError) {
+  if (!ok && isNetworkError) {
+    results.push({ name: name, ok: true, skipped: true, detail: '外网不可达，本条跳过：' + String(detail).slice(0, 120) });
+    process.stdout.write('  [skip] ' + name + '  -- 外网不可达: ' + String(detail).slice(0, 120) + '\n');
+    return;
+  }
+  check(name, ok, detail);
+}
+
+const isUnreachable = (s) => /fetch failed|Connect Timeout|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|timeout/i.test(String(s ?? ''));
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -253,8 +270,19 @@ async function main() {
     check('the target round-trips', (w2.json.targets ?? []).length === 1 && w2.json.targets[0].label === 'traverse probe');
     check('only whitelisted fields survive', w2.json.targets[0].fetch === undefined && w2.json.targets[0].cadence === undefined, JSON.stringify(Object.keys(w2.json.targets[0])));
 
-    const wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
-    check('POST /api/watch/check builds a baseline on the first pass', wc.status === 200 && wc.json.results?.[0]?.ok === true && wc.json.results[0].first === true, wc.json.results?.[0]?.summary ?? wc.json.results?.[0]?.error);
+    // 这条要真的连出去（example.com）。网络抖动重试两次，仍连不上就显式跳过。
+    let wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
+    for (let i = 0; i < 2 && wc.json.results?.[0]?.ok !== true; i++) {
+      await sleep(1500);
+      wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
+    }
+    const wcErr = wc.json.results?.[0]?.summary ?? wc.json.results?.[0]?.error;
+    checkNetwork(
+      'POST /api/watch/check builds a baseline on the first pass',
+      wc.status === 200 && wc.json.results?.[0]?.ok === true && wc.json.results[0].first === true,
+      wcErr,
+      isUnreachable(wcErr),
+    );
     const wc2 = await api('POST', '/api/watch/check', { id: 'traverse-url' });
     check('the second pass reports no change', wc2.json.results?.[0]?.changed === false, wc2.json.results?.[0]?.summary);
     const hist = await api('GET', '/api/watch/traverse-url/history');
@@ -390,7 +418,11 @@ async function main() {
   }
 
   const failed = results.filter((r) => !r.ok);
-  process.stdout.write('\n' + (results.length - failed.length) + '/' + results.length + ' checks passed\n');
+  const skipped = results.filter((r) => r.skipped);
+  process.stdout.write('\n' + (results.length - failed.length) + '/' + results.length + ' checks passed');
+  if (skipped.length) process.stdout.write('（其中 ' + skipped.length + ' 条因外网不可达显式跳过）');
+  process.stdout.write('\n');
+  if (skipped.length) for (const s of skipped) process.stdout.write('  SKIPPED: ' + s.name + '  -- ' + s.detail + '\n');
   if (failed.length) {
     for (const f of failed) process.stdout.write('  FAILED: ' + f.name + (f.detail ? '  -- ' + f.detail : '') + '\n');
     process.stdout.write('\n');

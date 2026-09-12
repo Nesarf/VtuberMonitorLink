@@ -68,6 +68,21 @@
         };
       })();
     </script>
+    <!--
+      上色先于首帧 / paint the theme before the first frame
+
+      默认主题是深色（CSS 里 :root 本身就是深色），但配置要从 API 拿，中间会先画一帧：
+      系统是浅色、而使用者选过深色的情况下，那一帧就是白的 —— 刷新时一道白闪。
+      这里**同步**读一次上次用过的值，服务端配置到了再覆盖（它才是权威）。
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('vml-theme');
+          if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

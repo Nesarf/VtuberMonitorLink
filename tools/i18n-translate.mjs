@@ -34,6 +34,7 @@ const GLOSSARY_FILE = path.join(ROOT, 'web/src/locales/glossary.json');
 const args = {
   engine: 'mock',
   locales: [],
+  keys: [],
   limit: 0,
   dryRun: false,
   review: null,
@@ -55,6 +56,8 @@ for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--engine') args.engine = process.argv[++i];
   else if (a === '--locales') args.locales = String(process.argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  // 只修某几个键：校对发现「这一个键在十个语言里都坏了」时，没必要把整本重跑一遍
+  else if (a === '--keys') args.keys = String(process.argv[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   else if (a === '--limit') args.limit = Number(process.argv[++i]);
   else if (a === '--batch') args.batch = Number(process.argv[++i]);
   else if (a === '--concurrency') args.concurrency = Number(process.argv[++i]);
@@ -176,6 +179,23 @@ export function looksUntranslated(text, locale, glossary = {}) {
 }
 
 /**
+ * 译文里躺着**没被还原的哨兵**吗？
+ *
+ * 这是真实事故：源串「天后」里根本没有占位符（tokens 为空），模型却自己写了个 ⟦0⟧
+ * 出来（提示词里见过这个东西），而 restore() 只检查「发出的哨兵有没有丢」，
+ * 不管「译文里有没有多出来的哨兵」—— 于是「daqui a ⟦0⟧ dias」就这么写进了葡语界面，
+ * 四个语言中招。判据：译文里出现任何 ⟦数字⟧ 都不允许（还原之后本不该存在）。
+ */
+export function hasStraySentinel(text) {
+  return /⟦\s*\d+\s*⟧/.test(String(text ?? ''));
+}
+
+/** 「这条译文坏了」的统一判据：没翻完（还留着汉字）或残留哨兵 */
+export function looksBroken(text, locale, glossary = {}) {
+  return hasStraySentinel(text) || looksUntranslated(text, locale, glossary);
+}
+
+/**
  * 缓存失效策略。
  *
  * 为什么需要：缓存键是「源串 + 语言」，所以**改了提示词或术语表，旧译文仍然会被命中** ——
@@ -187,7 +207,8 @@ export function looksUntranslated(text, locale, glossary = {}) {
  */
 export function needsRetranslate(sourceText, mode, glossary = {}, existing = null, locale = '') {
   if (mode === 'all') return true;
-  if (mode === 'suspicious') return looksUntranslated(existing, locale, glossary);
+  // 坏译文（没翻完 / 残留哨兵）一律重译 —— 这两个都是「有值但没法看」的典型
+  if (mode === 'suspicious') return looksBroken(existing, locale, glossary);
   if (mode !== 'terms') return false;
   for (const term of Object.keys(glossary)) if (String(sourceText).includes(term)) return true;
   // 含「看起来像品牌名」的拉丁片段：连续 ≥2 个字符且带大写（Telegram / SQLite / X）
@@ -251,6 +272,8 @@ async function translateBatchMock({ texts, locale }) {
   await new Promise((r) => setTimeout(r, 5));
   // --mock-mode echo：模拟「模型原样回原文」的坏行为，用来端到端验证「补译 → 仍不合格 → 不写入」。
   if (args.mockMode === 'echo') return texts.map((s) => String(s));
+  // --mock-mode sentinel：模拟「模型凭空造哨兵」（真实事故：葡语界面出现 daqui a ⟦0⟧ dias）
+  if (args.mockMode === 'sentinel') return texts.map((s) => marker + String(s).replace(/[\u4e00-\u9fff]/g, '~') + ' ⟦0⟧');
   // 正常假引擎把汉字去掉：假翻译也该「看起来翻好了」，否则 25 种语言的巡检会被自己的假数据卡住
   return texts.map((s) => marker + String(s).replace(/[\u4e00-\u9fff]/g, '~'));
 }
@@ -392,6 +415,7 @@ async function main() {
     let skippedHuman = 0;
     let skippedNeutral = 0;
     for (const key of used) {
+      if (args.keys.length && !args.keys.includes(key)) continue;
       if (human.has(key)) {
         skippedHuman++;
         continue;
@@ -453,9 +477,9 @@ async function main() {
           return restored.ok ? { ok: true, text: restored.text } : { ok: false, missing: restored.missing };
         });
 
-        // 第二遍（只对「看起来没翻完」的条目）：把这些半成品当输入再要一次。
+        // 第二遍（只对「看起来坏了」的条目）：把这些半成品当输入再要一次。
         // 为什么不重发原文：温度 0，输入与提示词都不变 → 模型原样再给一遍坏译文。
-        const leftover = draft.map((d, i) => (d.ok && looksUntranslated(d.text, locale, glossary) ? i : -1)).filter((i) => i >= 0);
+        const leftover = draft.map((d, i) => (d.ok && looksBroken(d.text, locale, glossary) ? i : -1)).filter((i) => i >= 0);
         if (leftover.length) {
           const again = leftover.map((i) => protect(draft[i].text, glossary, locale));
           let out2 = null;
@@ -480,20 +504,22 @@ async function main() {
             log(`  ✕ ${b[i].key}: 占位符缺失 ${d.missing.join(',')}，已丢弃`);
             continue;
           }
-          if (looksUntranslated(d.text, locale, glossary)) {
-            // 补译之后**仍然**没翻完 → 不写进机器层。
-            // 写了会是什么后果：韩语界面上出现一整句中文（真实发生过），而且因为是「有值」，
-            // 覆盖度还会显示 100%。不写则回落英文 —— 英文没翻译至少不冒犯任何人。
+          if (looksBroken(d.text, locale, glossary)) {
+            // 补译之后**仍然**不合格 → 不写进机器层。
+            // 写了会是什么后果：韩语界面上出现一整句中文（真实发生过），
+            // 葡语界面上出现「daqui a ⟦0⟧ dias」（哨兵残留，真实发生过），
+            // 而且因为「有值」，覆盖度还会显示 100%。不写则回落英文。
             failed++;
             const prev = machine[locale]?.[b[i].key];
-            if (looksUntranslated(prev, locale, glossary)) {
+            const why = hasStraySentinel(d.text) ? '残留哨兵' : '仍含原文';
+            if (looksBroken(prev, locale, glossary)) {
               // 旧值同样是坏的 → 一并清掉，否则「宁缺勿坏」只是句口号：
-              // 坏值留在 machine.json 里，界面还是那句中文。
+              // 坏值留在 machine.json 里，界面还是那句中文 / 那个 ⟦0⟧。
               // （旧值是好的话绝不动它 —— 不能因为模型今天状态差就把译文删了。）
               delete machine[locale][b[i].key];
-              log(`  ✕ ${b[i].key}: 补译后仍含原文，已从机器层移除（界面回落英文，下次再试）`);
+              log(`  ✕ ${b[i].key}: 补译后${why}，已从机器层移除（界面回落英文，下次再试）`);
             } else {
-              log(`  ✕ ${b[i].key}: 补译后仍含原文，未写入（保留原有译文，界面回落英文，下次再试）`);
+              log(`  ✕ ${b[i].key}: 补译后${why}，未写入（保留原有译文，界面回落英文，下次再试）`);
             }
             continue;
           }

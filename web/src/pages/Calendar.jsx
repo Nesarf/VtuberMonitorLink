@@ -136,7 +136,12 @@ export default function Calendar() {
     if (m === 1) setYear((y) => y + 1);
   };
 
-  const when = (d) => (d === 0 ? t('calToday') : d === 1 ? t('calTomorrow') : `${d} ${t('calDaysLater')}`);
+  // 天数必须进句子，不能拼在后面：「天后」这种后缀式标签在别的语言里位置不一样
+  // （pt「daqui a 3 dias」/ ru「через 3 дня」/ ar「بعد 3 أيام」都在前面），
+  // 而且「天后」单独看还有歧义 —— 模型把它当成「歌后」，翻出了 Diva / Королева。
+  // 所以源串写成带占位符的整句（{n} 会被管线保护起来，模型不能动它）。
+  const when = (d) =>
+    d === 0 ? t('calToday') : d === 1 ? t('calTomorrow') : t('calDaysLater').replace('{n}', String(d));
 
   return (
     <>

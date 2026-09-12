@@ -18,7 +18,7 @@ import { LOCALES, byCode } from '../web/src/locales/index.js';
 import { HAND, HAND_COMMON } from '../web/src/locales/overlays.js';
 import { usableChain } from './lib/locale-chain.mjs';
 import { readDicts } from './lib/i18n-source.mjs';
-import { looksUntranslated, humanKeys } from './i18n-translate.mjs';
+import { looksBroken, humanKeys } from './i18n-translate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const I18N = path.join(ROOT, 'web/src/i18n.jsx');
@@ -124,8 +124,9 @@ const rows = [];
 for (const loc of LOCALES) {
   const own = ownKeys(loc.code);
   const covered = localizable.filter((k) => own.has(k)).length;
-  // 「有值」不等于「翻好了」：机翻漏译会留下汉字原文。日语例外（汉字是正常书写）。
-  // 判据直接用管线里的那一个函数 —— 这里原先复制了一份，连「先剔长词还是短词」都不一样。
+  // 「有值」不等于「能用」：机翻漏译会留下汉字原文，模型还会凭空写哨兵
+  // （真实事故：葡语界面出现「daqui a ⟦0⟧ dias」）。判据直接用管线里的那一个函数 ——
+  // 这里原先复制了一份，连「先剔长词还是短词」都不一样。
   // 被人图层压住的机器词条不算：它**不会显示**，报出来只会让人去修一条看不见的东西。
   const mach = MACHINE[loc.code] ?? (loc.code.split('-')[0] === 'en' ? {} : null);
   const shadowed = humanKeys(loc.code);
@@ -133,7 +134,7 @@ for (const loc of LOCALES) {
   if (mach) {
     for (const [k, v] of Object.entries(mach)) {
       if (shadowed.has(k)) continue;
-      if (looksUntranslated(v, loc.code, GLOSSARY)) suspicious++;
+      if (looksBroken(v, loc.code, GLOSSARY)) suspicious++;
     }
   }
   rows.push({ code: loc.code, name: loc.name, covered, total, pct: total ? covered / total : 0, suspicious });
@@ -148,12 +149,12 @@ const bar = (p) => {
 process.stdout.write(`\n界面用到的词条: ${used.size} 个（其中 ${langNeutral.length} 条简中原文与英文逐字相同，各语言都不需要翻译：${langNeutral.join(' / ')}）\n`);
 process.stdout.write(`需要本地化的词条: ${total} 个\n\n`);
 for (const r of rows) {
-  const warn = r.suspicious ? `   ⚠ 疑似未翻译 ${r.suspicious}` : '';
+  const warn = r.suspicious ? `   ⚠ 坏译文 ${r.suspicious}` : '';
   process.stdout.write(`  ${r.code.padEnd(9)} ${bar(r.pct)} ${String(Math.round(r.pct * 100)).padStart(3)}%  ${r.covered}/${r.total}  ${r.name}${warn}\n`);
 }
 const suspiciousTotal = rows.reduce((n, r) => n + r.suspicious, 0);
 if (suspiciousTotal) {
-  process.stdout.write(`\n  ⚠ ${suspiciousTotal} 条机翻里还留着汉字原文（覆盖率只算「有值」，这份才是「翻好了」）\n`);
+  process.stdout.write(`\n  ⚠ ${suspiciousTotal} 条机翻是坏的（还留着原文，或残留 ⟦n⟧ 哨兵 —— 覆盖率只算「有值」，这份才算「能用」）\n`);
   process.stdout.write(`     修法：node tools/i18n-translate.mjs --engine app --bust suspicious --locales <...>\n`);
 }
 

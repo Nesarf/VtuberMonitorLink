@@ -1,7 +1,7 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-12T01:50:09.413Z
+// 生成时间：2026-09-12T11:48:40.846Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
@@ -112,7 +112,7 @@ export const GENERATED = {
     "calEmpty": "還沒有紀念日。展開下面的「添加」或「從情報裏找線索」開始。",
     "calToday": "今天",
     "calTomorrow": "明天",
-    "calDaysLater": "天後",
+    "calDaysLater": "{n} 天後",
     "calYearN": "第幾年",
     "calLeap": "閏日順延到 3/1",
     "calTotal": "共",
@@ -532,7 +532,7 @@ export const GENERATED = {
     "added": "已加入監測",
     "tab_search": "檢索",
     "searchTitle": "情報檢索",
-    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。不需要 LLM，也不需要聯網 —— 沒配 AI 一樣能用。",
+    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。**不需要 LLM，也不需要聯網**，沒配 AI 一樣能用。",
     "searchPlaceholder2": "關鍵詞，空格分隔爲 AND（例：2434 畢業）",
     "searchField": "檢索範圍",
     "field_any": "全部字段",
@@ -711,7 +711,7 @@ export const GENERATED = {
     "calEmpty": "還沒有紀念日。展開下面的「添加」或「從情報裏找線索」開始。",
     "calToday": "今天",
     "calTomorrow": "明天",
-    "calDaysLater": "天後",
+    "calDaysLater": "{n} 天後",
     "calYearN": "第幾年",
     "calLeap": "閏日順延到 3/1",
     "calTotal": "共",
@@ -1131,7 +1131,7 @@ export const GENERATED = {
     "added": "已加入監測",
     "tab_search": "檢索",
     "searchTitle": "情報檢索",
-    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。不需要 LLM，也不需要聯網 —— 沒配 AI 一樣能用。",
+    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。**不需要 LLM，也不需要聯網**，沒配 AI 一樣能用。",
     "searchPlaceholder2": "關鍵詞，空格分隔為 AND（例：2434 畢業）",
     "searchField": "檢索範圍",
     "field_any": "全部字段",
@@ -1310,7 +1310,7 @@ export const GENERATED = {
     "calEmpty": "還沒有紀念日。展開下面的「新增」或「從情報裡找線索」開始。",
     "calToday": "今天",
     "calTomorrow": "明天",
-    "calDaysLater": "天後",
+    "calDaysLater": "{n} 天後",
     "calYearN": "第幾年",
     "calLeap": "閏日順延到 3/1",
     "calTotal": "共",
@@ -1730,7 +1730,7 @@ export const GENERATED = {
     "added": "已加入監測",
     "tab_search": "檢索",
     "searchTitle": "情報檢索",
-    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。不需要 LLM，也不需要聯網 —— 沒配 AI 一樣能用。",
+    "searchHint": "純本地匹配：關鍵詞 + 標籤 + 時間區間，像查論文那樣組條件。**不需要 LLM，也不需要聯網**，沒配 AI 一樣能用。",
     "searchPlaceholder2": "關鍵詞，空格分隔為 AND（例：2434 畢業）",
     "searchField": "檢索範圍",
     "field_any": "全部欄位",

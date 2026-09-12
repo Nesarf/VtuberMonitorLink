@@ -36,5 +36,15 @@
     "feedsDir": "feeds",
     "logsDir": "logs"
   },
-  "sources": {}
+  "sources": {},
+  "ui": {
+    "theme": "dark",
+    "notify": true,
+    "layout": {
+      "mode": "cards",
+      "columns": "auto",
+      "density": "comfortable",
+      "fontScale": 1
+    }
+  }
 }

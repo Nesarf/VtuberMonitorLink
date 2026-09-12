@@ -182,7 +182,8 @@
 | 发行包校对 | `npm run verify` | clean —— 必需文件齐全、文本全部 UTF-8 合法、`README.txt`/`package.json` 纯 ASCII、0 份运行数据（含新增的 `watch/`） |
 | exe 自检 | `VtuberMonitorLink.exe --doctor` | All checks passed（sea=true, mode=inline） |
 | HTTP 端点遍历 | `npm run traverse` | **70/70** —— 新增 LLM 档位、监视对象 CRUD 与基线、情报流过滤、报告检索与导出、自定义来源等阶段 |
-| UI 遍历 | `npm run traverse:ui` | **48/48** —— 真实 Chrome 走完六个页面；用 mock LLM **真跑一次**（20 条 B 站动态入情报流），验证 Markdown 渲染成真实元素、导出可下载、桌面通知与主题选项存在、0 控制台错误、0 失败 API 调用 |
+| 界面逐条校对 | `npm run i18n:proofread` | **565 个词条 × 25 个语言，结构性破坏 0 条** —— 占位符/加粗标记/换行/首尾空格/残留哨兵逐条与源串比对；可疑项 14 条（记账，不许变多） |
+| UI 遍历 | `npm run traverse:ui` | **184/184** —— 真实 Chrome 走完六个页面；用 mock LLM **真跑一次**（20 条 B 站动态入情报流），验证 Markdown 渲染成真实元素、导出可下载、**默认深色主题**（含切浅色/记回选择）、韩语界面无中文残留、桌面通知存在、0 控制台错误、0 失败 API 调用 |
 | 抓取层冒烟 | `npm run smoke` | 2/2（Reddit `.rss`、Fandom MediaWiki API） |
 
 ### 校对/遍历期间发现并修掉的问题

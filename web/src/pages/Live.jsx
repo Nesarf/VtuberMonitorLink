@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
+import { Inline } from '../markdown.jsx';
 
 const LS_KEY = 'vml-live-grid';
 const LS_COLS = 'vml-live-cols';
@@ -407,14 +408,14 @@ export default function Live() {
             </button>
           </div>
         </div>
-        <div className="hint" style={{ margin: 0 }}>{t('liveProxyCaveat')}</div>
+        <div className="hint" style={{ margin: 0 }}><Inline text={t('liveProxyCaveat')} /></div>
       </section>
 
       {/* 发评论 —— 用使用者本人身份公开发言，所以必须手动确认 */}
       <section className="panel">
         <h2>{t('danmakuTitle')}</h2>
         <div className="problems" style={{ marginBottom: 10 }}>
-          {t('danmakuWarn')}
+          <Inline text={t('danmakuWarn')} />
         </div>
         <div className="row">
           <div className="field" style={{ flex: '0 0 260px' }}>
@@ -434,7 +435,7 @@ export default function Live() {
               {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}
             </div>
             {/* 还没主动去读登录态时，把「要去读浏览器 cookie 库」这件事说清楚（复用人写过的文案，不新增词条） */}
-            {accounts === null ? <div className="hint" style={{ margin: '4px 0 0' }}>{t('loginHint')}</div> : null}
+            {accounts === null ? <div className="hint" style={{ margin: '4px 0 0' }}><Inline text={t('loginHint')} /></div> : null}
           </div>
           <div className="field" style={{ flex: '0 0 140px' }}>
             <label>{t('danmakuRoom')}</label>

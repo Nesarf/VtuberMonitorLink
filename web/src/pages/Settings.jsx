@@ -6,6 +6,7 @@ import { useI18n, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 import { SaveBar, useSaveState } from '../savebar.jsx';
 import Collapsible from '../Collapsible.jsx';
+import { Inline } from '../markdown.jsx';
 
 export default function Settings({ onLayout }) {
   const { t, lang, weekdaysSunFirst: WEEKDAYS } = useI18n();
@@ -473,7 +474,7 @@ export default function Settings({ onLayout }) {
             </button>
           </div>
           <div className="field" style={{ flex: 1 }}>
-            <div className="hint" style={{ margin: 0 }}>{t('loginHint')}</div>
+            <div className="hint" style={{ margin: 0 }}><Inline text={t('loginHint')} /></div>
             {loginMsg && <div className={loginOk ? 'hint ok-text' : 'hint warn-text'} style={{ margin: 0 }}>{loginMsg}</div>}
           </div>
         </div>
@@ -620,7 +621,7 @@ export default function Settings({ onLayout }) {
           <div className="field" style={{ flex: '0 0 180px' }}>
             <label>{t('theme')}</label>
             <select
-              value={cfg.ui?.theme ?? 'auto'}
+              value={cfg.ui?.theme ?? 'dark'}
               onChange={(e) => {
                 patch('ui.theme', e.target.value);
                 applyTheme(e.target.value);

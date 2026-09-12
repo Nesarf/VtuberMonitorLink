@@ -220,6 +220,28 @@ t('模型原样回原文 → 补译一次，仍不合格就**不写入**（宁�
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
+t('模型凭空造哨兵（源串里根本没有占位符）→ 同样不写入', () => {
+  // 真实事故：zh「天后」没有占位符，模型自己写了个 ⟦0⟧，而 restore() 只查「发出的哨兵丢了没」，
+  // 不查「译文里多出来的哨兵」—— 于是「daqui a ⟦0⟧ dias」进了葡语界面。
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-sent-'));
+  const outFile = path.join(sandbox, 'machine.json');
+  const out = execFileSync(
+    process.execPath,
+    [
+      path.join(ROOT, 'tools/i18n-translate.mjs'),
+      '--engine', 'mock', '--mock-mode', 'sentinel',
+      '--locales', 'pt-PT', '--limit', '3',
+      '--cache-dir', sandbox, '--out', outFile,
+    ],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  assert.ok(/残留哨兵/.test(out), '应当报告「残留哨兵」: ' + out.slice(-300));
+  const machine = JSON.parse(fs.readFileSync(outFile, 'utf8'))['pt-PT'] ?? {};
+  const stray = Object.entries(machine).filter(([, v]) => /⟦\d+⟧/.test(String(v)));
+  assert.equal(stray.length, 0, '残留哨兵的条目不该进机器层，实际 ' + JSON.stringify(stray.slice(0, 2)));
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
 t('--bust terms 的判据：含专有名词才重译（纯逻辑，按单元测而不是跑命令行）', () => {  const glossary = { Telegram: { default: 'Telegram' } };
   // none：永远走缓存
   assert.equal(needsRetranslate('Telegram 推送失败', 'none', glossary), false);

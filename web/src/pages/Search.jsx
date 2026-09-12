@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { layoutClass, normalizeLayout } from '../layout.js';
+import { Inline } from '../markdown.jsx';
 
 const FIELDS = ['any', 'title', 'text', 'tag', 'source', 'url'];
 const RANGES = [
@@ -115,7 +116,7 @@ export default function Search({ layout }) {
     <>
       <section className="panel">
         <h2>{t('searchTitle')}</h2>
-        <div className="hint">{t('searchHint')}</div>
+        <div className="hint"><Inline text={t('searchHint')} /></div>
 
         <div className="row">
           <div className="field" style={{ flex: '1 1 320px' }}>

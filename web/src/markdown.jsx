@@ -65,6 +65,17 @@ function renderInline(text, keyPrefix = 'i') {
 const IMG_RE = /^!\[([^\]]*)\]\((https?:[^)\s]+)\)$/;
 
 /**
+ * 行内 Markdown（**粗体** / `code` / 链接 / 【强调】），**不产生块级元素**。
+ *
+ * 用途：界面上的提示句（`.hint`）里写了 `**浏览器**` 这种强调，但它们以前是当纯文本渲染的 ——
+ * 于是使用者看到的是一串星号（实测确认：`.hint` 里 0 个 <strong>，字面 3 处 `**`）。
+ * 提示句本来就是一句话，不需要 <p> 包裹，所以只放行行内样式。
+ */
+export function Inline({ text }) {
+  return <>{renderInline(String(text ?? ''))}</>;
+}
+
+/**
  * 把 Markdown 渲染成 React 元素。
  * 支持：# 标题 / 列表 / 表格 / 引用 / 分隔线 / 代码块 / 图片 / 行内样式
  */

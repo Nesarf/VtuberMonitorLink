@@ -9,39 +9,11 @@ import { GENERATED } from './locales/generated.js';
 // 机器译文层：由 tools/i18n-translate.mjs 产出，优先级最低（人工词条永远压过它）。
 // 文件先以空表 `{}` 提交 —— 这样构建期就能解析到它，没配 Key 之前界面完全不受影响。
 import MACHINE from './locales/machine.json';
-import { GB_SPELL, GB_STEMS, HAND, HAND_COMMON } from './locales/overlays.js';
+import { HAND, HAND_COMMON } from './locales/overlays.js';
+import { convertDict, toBritish } from './locales/spelling.js';
 
 /** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
 export const OVERLAY = HAND;
-
-/** 整词替换（用 \b 边界，绝不动子串：parameter 不会被改成 parametre） */
-function spell(word, map) {
-  const hit = map.find(([a]) => a === word);
-  return hit ? hit[1] : word;
-}
-
-/** 英式拼写推导：color→colour、organize→organise、analyze→analyse */
-export function toBritish(s) {
-  const map = new Map(GB_SPELL);
-  let out = String(s).replace(/\b[A-Za-z]+\b/g, (w) => {
-    const lower = w.toLowerCase();
-    const hit = map.get(lower) ?? map.get(w);
-    if (!hit) return w;
-    // 保持首字母大小写
-    return w[0] === w[0].toUpperCase() ? hit[0].toUpperCase() + hit.slice(1) : hit;
-  });
-  for (const stem of GB_STEMS) {
-    const re = new RegExp(`\\b(${stem}(?:e|es|ed|ing|er|ers|ation|ations|ational)?)\\b`, 'gi');
-    out = out.replace(re, (m) => m.replace(/z/i, 's').replace(/ze$/i, 'se'));
-  }
-  return out;
-}
-
-function convertDict(dict, fn) {
-  const out = {};
-  for (const [k, v] of Object.entries(dict)) out[k] = typeof v === 'string' ? fn(v) : v;
-  return out;
-}
 
 export const STRINGS = {
   zh: {
@@ -159,7 +131,7 @@ export const STRINGS = {
     calEmpty: '还没有纪念日。展开下面的「添加」或「从情报里找线索」开始。',
     calToday: '今天',
     calTomorrow: '明天',
-    calDaysLater: '天后',
+    calDaysLater: '{n} 天后',
     calYearN: '第几年',
     calLeap: '闰日顺延到 3/1',
     calTotal: '共',
@@ -631,7 +603,7 @@ export const STRINGS = {
     tab_search: '检索',
     searchTitle: '情报检索',
     searchHint:
-      '纯本地匹配：关键词 + 标签 + 时间区间，像查论文那样组条件。不需要 LLM，也不需要联网 —— 没配 AI 一样能用。',
+      '纯本地匹配：关键词 + 标签 + 时间区间，像查论文那样组条件。**不需要 LLM，也不需要联网**，没配 AI 一样能用。',
     searchPlaceholder2: '关键词，空格分隔为 AND（例：2434 毕业）',
     searchField: '检索范围',
     field_any: '全部字段',
@@ -725,7 +697,7 @@ export const STRINGS = {
     visionCached: 'cache hits',
     shareTitle: 'Share',
     shareHint:
-      'Turn the intel into a single file to send someone: styled, with no external references, so it opens by double-click even offline. Ways that need no login always work; ways that need one tell you exactly what is missing, and unsupported platforms are labelled rather than offered as a dead button. Posting to bilibili is speaking in public — it requires two confirmations and stays unavailable until one post has actually succeeded.',
+      'Turn the intel into a **single file** to send someone: styled, with no external references, so it opens by double-click even offline. Ways that need no login always work; ways that need one tell you exactly what is missing, and unsupported platforms are labelled rather than offered as a dead button. Posting to bilibili is speaking in public — it requires two confirmations and stays unavailable until one post has actually succeeded.',
     shareScope: 'Scope',
     shareScopeLatest: 'Latest intel',
     shareScopeDay: 'A specific day',
@@ -823,7 +795,7 @@ export const STRINGS = {
     calEmpty: 'No dates yet. Expand "Add" or "Find leads in the intel" below to start.',
     calToday: 'Today',
     calTomorrow: 'Tomorrow',
-    calDaysLater: 'days away',
+    calDaysLater: '{n} days away',
     calYearN: 'year',
     calLeap: 'leap day → Mar 1',
     calTotal: 'Total',
@@ -1236,14 +1208,14 @@ export const STRINGS = {
       'Going live is the most time-sensitive intel there is. This shows the live status of everything you monitor, and tiles several rooms into a grid (the official bilibili embed player - no relay, no login involved). Note that a rerun/carousel is NOT a real broadcast, so it is labelled separately.',
     danmakuTitle: 'Post a comment (danmaku)',
     danmakuWarn:
-      'Careful: unlike everything else here, this POSTS PUBLICLY under your own account identity and cannot be undone. It is not wired into any automation (scheduled tasks and collection runs never call it) and every single send needs your explicit confirmation.',
+      'Careful: unlike everything else here, it **posts publicly under your own account identity** and cannot be undone. It is not wired into any automation (scheduled tasks and collection runs never call it) and every single send needs your explicit confirmation.',
     danmakuAccount: 'Send as',
     danmakuNoAccount: 'No usable login found (sign in to bilibili in some browser, and keep that profile readable)',
     danmakuRoom: 'Room id',
     danmakuText: 'Message',
     danmakuConfirm: 'I confirm sending as this account, and that this is a public post',
     danmakuSend: 'Send',
-    danmakuSending: 'Sending...',
+    danmakuSending: 'Sending…',
     danmakuOk: 'Sent',
     danmakuAudit: 'Send history',
     danmakuAuditHint: 'Local audit log (account / room / text / result only - no credentials)',
@@ -1255,7 +1227,7 @@ export const STRINGS = {
     livePlatform: 'Platform',
     liveId: 'Channel / room / video id',
     liveProxyCaveat:
-      'Platforms marked * (Twitch / YouTube) need your BROWSER to be able to reach them. This machine cannot reach them directly, so the browser must go through the system proxy, otherwise the tile stays blank. bilibili needs no proxy.',
+      'Platforms marked * (Twitch / YouTube) need your **browser** to be able to reach them. This machine cannot reach them directly, so the browser must go through the system proxy, otherwise the tile stays blank. bilibili needs no proxy.',
       liveProbe: 'Probe network',
     liveQualityUnavailable: 'Bitrate / FPS: not measurable through a cross-origin embed (same-origin policy) - not unimplemented',
     liveQualityWhy:
@@ -1350,7 +1322,7 @@ export const STRINGS = {
     tempDir: 'Temp directory',
     tempDirPh: 'empty = system temp dir',
     tempDirHint:
-      'Reading browser cookies copies the cookie DB to a temp directory first. Point this elsewhere (e.g. E:\\YourCache\\tmp) if you do not want it written to the system drive (C:\\...\\Temp on Windows).',
+      'Reading browser cookies copies the cookie DB to a temp directory first. Point this elsewhere if you do not want it written to the system drive (on Windows that is %TEMP% on C:), for example E:\\YourCache\\tmp.',
     browsersDir: 'Browser engines directory',
     browsersDirPh: 'empty = platform default',
     browsersDirHint: 'Where Playwright keeps browser engines. On Windows the default is under %LOCALAPPDATA% (the C drive); point it elsewhere to avoid writing to C:.',
@@ -1406,11 +1378,23 @@ function usableChain(code) {
 
 const Ctx = createContext(null);
 
-/** 应用主题到 <html> / apply the theme to <html> */
+/**
+ * 应用主题到 <html>。
+ *
+ * 顺带记进 localStorage：config.json 要等一个 API 往返才拿到，在那之前页面已经画了一帧 ——
+ * 「系统是浅色 + 我选了深色」的人每次刷新都会看到一道白闪。index.html 里有一小段
+ * **同步**脚本先按记忆里的值上色，这里再把服务端配置（唯一权威）覆盖上去。
+ */
 export function applyTheme(theme) {
   const root = document.documentElement;
-  if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
-  else root.removeAttribute('data-theme');
+  const value = theme === 'light' || theme === 'dark' ? theme : 'auto';
+  if (value === 'auto') root.removeAttribute('data-theme');
+  else root.setAttribute('data-theme', value);
+  try {
+    localStorage.setItem('vml-theme', value);
+  } catch (e) {
+    /* 隐私模式下写不了就算了，不影响显示 */
+  }
 }
 
 export function I18nProvider({ children }) {

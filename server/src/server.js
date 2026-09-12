@@ -63,6 +63,9 @@ import {
   stats as archiveStats,
 } from './archive.js';
 import { detectSilence, silenceSummary } from './silence.js';
+import { groupView } from './groups.js';
+import { budgetStatus, costSummary, loadUsage, summarizeUsage } from './cost.js';
+import { loadObservationState } from './observe.js';
 import {
   appendAudit,
   buildBundle,
@@ -142,10 +145,22 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // ── 来源目录 / source catalog ────────────────────────────────────
   app.get('/api/sources', (_req, res) => {
     const cfg = getConfig();
+    // 「最近观测」：观测模式下每条来源上次被取到是什么时候。
+    // 只有取样比例的时候，使用者看不出「谁多久没被看到」—— 那恰恰是判断覆盖够不够的依据。
+    const obs = loadObservationState(cfg);
+    const sources = effectiveSources(cfg).map((s) => ({
+      ...s,
+      lastObserved: obs.lastPicked?.[s.id] ?? null,
+    }));
     res.json({
       categories: CATEGORIES,
       fetchKinds: FETCH_KINDS,
-      sources: effectiveSources(cfg),
+      sources,
+      observation: {
+        enabled: cfg?.observation?.enabled === true,
+        rounds: obs.rounds ?? 0,
+        ratio: cfg?.observation?.sampleRatio ?? null,
+      },
       selected: {
         daily: selectSources(cfg, 'daily').length,
         merch: selectSources(cfg, 'merch').length,
@@ -1325,6 +1340,51 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       res.json({ ok: true, ...archiveStats(db), file: path.basename(archivePath(cfg)) });
     } catch (e) {
       res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // ── LLM 用量与预算 / cost ─────────────────────────────────────────
+  // 之前界面上看不到任何用量（usage 取回来了但没人聚合），而钱就花在这里。
+  // 只报**能看到的**：拿不到用量的一次单独计数，不猜数字。
+  app.get('/api/cost', (req, res) => {
+    const cfg = getConfig();
+    const days = Math.max(1, Math.min(90, Number(req.query.days ?? 14)));
+    try {
+      const { rows, badLines } = loadUsage(cfg);
+      const summary = summarizeUsage(rows, { days });
+      const budget = budgetStatus(cfg, summary);
+      res.json({ ok: true, ...summary, budget, badLines, summary: costSummary(summary, budget) });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, today: { tokens: 0, calls: 0 }, total: { tokens: 0, calls: 0 }, days: [], models: [] });
+    }
+  });
+
+  // ── 箱视角 / group view ───────────────────────────────────────────
+  // 「这个箱现在怎么样」—— 按 agency 把关注对象聚成一块：每日热力图、同刻出现、
+  // 共同沉默、每个人相对自己节奏的异常。逐条情报流回答不了这个问题。
+  app.get('/api/groups', (req, res) => {
+    const cfg = getConfig();
+    const days = Math.max(7, Math.min(180, Number(req.query.days ?? 30)));
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      const series = peopleSeries(db, { days });
+      const view = groupView({
+        byDay: series.byDay,
+        people: cfg.people ?? [],
+        days,
+        rules: cfg.silence ?? {},
+        now: new Date(),
+      });
+      res.json({ ok: true, ...view, hasAgency: view.groups.length > 0 });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, groups: [], ungrouped: null, people: (cfg.people ?? []).length });
     } finally {
       try {
         db?.close();

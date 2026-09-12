@@ -35,6 +35,7 @@ export default function People() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
+  const [gv, setGv] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -43,6 +44,12 @@ export default function People() {
       setErr('');
     } catch (e) {
       setErr(e.message);
+    }
+    // 箱视角单独取（它读归档，跟关注对象列表不是一个数据源）
+    try {
+      setGv(await api.groups(30));
+    } catch (e) {
+      setGv({ ok: false, groups: [], people: 0, error: e.message });
     }
   }, []);
 
@@ -136,6 +143,75 @@ export default function People() {
           <div className="hint warn-text">{err}</div>
         </section>
       )}
+
+      {/* ── 箱视角 / group view ──
+          逐条情报流回答不了「这个箱现在怎么样」。这里按 agency 聚成一块：
+          每日热力图（谁在动、谁停了）、同刻出现（企划/联动）、共同沉默（整箱安静）、
+          以及每个人相对**自己**节奏的异常。 */}
+      <section className="panel">
+        <h2>
+          {t('groupViewTitle')}
+          <span className="muted small" style={{ marginLeft: 12 }}>
+            {t('groupWindow')}: {gv?.days ?? 30} {t('groupDays')}
+          </span>
+        </h2>
+        <div className="hint">{t('groupViewHint')}</div>
+        {gv && gv.groups.length === 0 && (
+          <p className="muted">
+            {t('groupNoAgency')} —— {gv.people} {t('groupPeopleCount')}
+          </p>
+        )}
+        {(gv?.groups ?? []).map((g) => (
+          <div key={g.agency} className="group-card">
+            <div className="row" style={{ alignItems: 'baseline', gap: 10 }}>
+              <b style={{ fontSize: 15 }}>{g.agency}</b>
+              <span className="muted small">
+                {g.totals.members} {t('groupMembers')} · {t('groupActive7')} {g.activeLast7}/{g.totals.members} · {t('items')} {g.totals.items}
+              </span>
+              {g.groupSignal && (
+                <span className={`chip ${g.groupSignal.level === 'high' ? 'alert' : 'optional'}`}>{g.groupSignal.reason}</span>
+              )}
+            </div>
+            {/* 热力图：一行一个人，一格一天（越深的格子条目越多） */}
+            <div className="heat">
+              {g.members.map((m) => (
+                <div key={m.id} className="heat-row">
+                  <span className="heat-name" title={`${m.name}${m.quietDays !== null ? ` · ${t('groupQuiet')} ${m.quietDays} ${t('groupDays')}` : ''}`}>
+                    {m.level === 'high' ? '🔴' : m.level === 'warn' ? '🟡' : m.level === 'unknown' ? '⚪' : '🟢'} {m.name}
+                  </span>
+                  <span className="heat-cells">
+                    {m.counts.map((n, i) => (
+                      <i
+                        key={i}
+                        className={n > 0 ? 'heat-on' : 'heat-off'}
+                        style={n > 0 ? { opacity: Math.min(1, 0.35 + n * 0.25) } : undefined}
+                        title={`${gv.axis[i]} · ${n} ${t('items')}`}
+                      />
+                    ))}
+                  </span>
+                  <span className="muted small" style={{ minWidth: 120 }}>
+                    {m.lastDay ? `${t('groupLast')} ${m.lastDay}` : t('groupNever')}
+                    {m.toleranceDays ? ` · ${t('groupTolerance')} ${m.toleranceDays}${t('groupDays')}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="muted small" style={{ marginTop: 6 }}>
+              {t('groupCoActive')}: {g.coActiveDays}
+              {g.coActive.length
+                ? `（${g.coActive.map((c) => `${c.day.slice(5)} ${c.count}${t('groupPeopleUnit')}`).join(' / ')}）`
+                : ''}
+              {g.quietStreak ? ` · ${t('groupQuietStreak')} ${g.quietStreak} ${t('groupDays')}` : ''}
+              {g.fullHouseDays ? ` · ${t('groupFullHouse')} ${g.fullHouseDays} ${t('groupDays')}` : ''}
+            </div>
+          </div>
+        ))}
+        {gv?.ungrouped && gv.ungrouped.totals.members > 0 && (
+          <div className="muted small" style={{ marginTop: 8 }}>
+            {t('groupUngrouped')}: {gv.ungrouped.totals.members} {t('groupPeopleCount')}（{t('groupUngroupedHint')}）
+          </div>
+        )}
+      </section>
 
       <section className="panel">
         <h2>

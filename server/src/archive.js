@@ -415,6 +415,46 @@ function safeJson(s) {
 }
 
 /** 把最近一次运行的结果写进归档（失败绝不影响运行本身） */
+/**
+ * 按人取「最新几条」内容 —— 给「停止活动/毕业」区块用。
+ *
+ * 注意跟 queryItems 的差别：这里要的是**每个人的最后一条**，而那条可能在很久以前
+ * （半年、一年），所以不能按「最近 N 天」筛，只能按人查、按天倒序取前几条。
+ * people 列是 JSON 数组，用带引号的 LIKE 匹配（personId 是我们自己生成的 id，不含通配符）。
+ */
+export function latestItemsByPerson(db, { personIds = [], limit = 2 } = {}) {
+  const out = {};
+  const n = Math.max(1, Number(limit) || 2);
+  // 排序有两层讲究：
+  //   1. 用 COALESCE(published_at, day) —— 条目**自己的日期**在 published_at，
+  //      day 是**入库日**（回溯抓取时两者差很远）。只按 day 排会把「半年前发的内容
+  //      今天才入库」当成最新，对「他最后一条是什么」这种问题就是错的。
+  //   2. **有自己日期的排前面**：没有 published_at 的条目只能退回入库日，
+  //      而一次回溯抓取会让它们全部变成「今天」。对「他最后一条」这种问题，
+  //      宁可给一条日期确切的旧内容，也不要给一条日期不明的。
+  const stmt = db.prepare(
+    `SELECT id, day, published_at, title, text, url FROM items
+     WHERE people LIKE ?
+     ORDER BY (published_at IS NULL) ASC, COALESCE(published_at, day) DESC, id DESC
+     LIMIT ?`,
+  );
+  for (const pid of personIds) {
+    try {
+      out[String(pid)] = stmt.all(`%"${String(pid)}"%`, n).map((r) => ({
+        id: r.id,
+        day: String(r.published_at ?? r.day ?? '').slice(0, 10),
+        archiveDay: r.day,
+        title: r.title,
+        text: r.text,
+        url: r.url,
+      }));
+    } catch {
+      out[String(pid)] = [];
+    }
+  }
+  return out;
+}
+
 export function archiveRun(cfg, { date, items, summary = {}, runId = null, health = [] } = {}) {
   let db = null;
   try {

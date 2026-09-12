@@ -385,3 +385,16 @@ pre.diff {
 .player-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--border); }
 .player iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }
 
+/* ── 箱视角 / group view ──
+   热力图是纯 div（不引图表库）：一行一个人、一格一天，深浅 = 当天条目数。
+   窄屏时横向滚动而不是把格子压扁（压扁就看不出「一格是一天」了）。 */
+.group-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 10px; background: var(--panel-2); }
+.heat { margin-top: 8px; overflow-x: auto; }
+.heat-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; white-space: nowrap; }
+.heat-name { min-width: 120px; font-size: 12px; }
+.heat-cells { display: inline-flex; gap: 2px; }
+.heat-cells i { display: inline-block; width: 9px; height: 14px; border-radius: 2px; background: var(--border); }
+.heat-cells i.heat-on { background: var(--accent); }
+.heat-cells i.heat-off { opacity: 0.4; }
+
+

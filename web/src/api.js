@@ -112,6 +112,9 @@ export const api = {
   // SQLite 归档与图表
   archiveStats: () => j('/api/archive/stats'),
   archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),
+  groups: (days) => j(`/api/groups?days=${days ?? 30}`),
+  silence: (days) => j(`/api/silence?days=${days ?? 60}`),
+  cost: (days) => j(`/api/cost?days=${days ?? 14}`),
   archiveItems: (q = {}) =>
     j(`/api/archive/items?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''))}`),
   archiveIngest: (limit) => post('/api/archive/ingest', { limit }),

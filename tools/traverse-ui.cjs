@@ -338,6 +338,20 @@ async function main() {
     const llmText = await mainText();
     check('the LLM page renders on its own tab', llmText.indexOf('哪些功能需要它') !== -1 || llmText.indexOf('档位设置') !== -1, llmText.split('\n')[0]);
     check('it says which features need an LLM', llmText.indexOf('需要') !== -1, 'needs table present');
+    // 用量与预算：钱花在模型调用上，界面上必须看得到（usage 取回来了但一直没人聚合）
+    check(
+      'LLM 页有「用量与预算」看板',
+      llmText.indexOf('用量与预算') !== -1 && llmText.indexOf('每日预算') !== -1,
+      llmText.indexOf('用量与预算') !== -1 ? '看板在' : '没找到用量看板',
+    );
+    const costApi = await (await fetch(base + '/api/cost?days=14')).json();
+    check('用量接口可用（拿不到用量的单独计数，不猜数字）', costApi.ok === true && !!costApi.today && typeof costApi.unknown === 'number', costApi.summary);
+    const srcApi = await (await fetch(base + '/api/sources')).json();
+    check(
+      '来源接口带观测信息（最近观测 / 轮次）',
+      !!srcApi.observation && typeof srcApi.observation.rounds === 'number' && 'lastObserved' in (srcApi.sources?.[0] ?? {}),
+      JSON.stringify(srcApi.observation),
+    );
 
     // ── 折叠区块：长参考列表默认收起（代理节点一屏几十行太占地方）──
     const foldHead = page.locator('.collapsible .collapsible-head').first();
@@ -856,12 +870,37 @@ async function main() {
     const sugRes = await (await fetch(base + '/api/people/suggest?min=2')).json();
     check('关注对象建议接口可用', sugRes.ok === true, `已统计实体 ${sugRes.scanned}`);
 
+    // 箱视角：给这个关注对象填上 agency，再确认箱级聚合真的把它算进去
+    await fetch(base + '/api/people/ui-follow', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agency: 'UI-Box' }),
+    });
+    const groups = await (await fetch(base + '/api/groups?days=30')).json();
+    check('箱视角接口可用', groups.ok === true && Array.isArray(groups.groups), `${(groups.groups ?? []).length} 个箱`);
+    const box = (groups.groups ?? []).find((g) => g.agency === 'UI-Box');
+    check('填了 agency 的人被归进对应的箱', !!box && box.totals.members === 1, box ? `${box.totals.members} 位成员` : '没找到 UI-Box');
+    check(
+      '箱里带每日序列与基线（热力图要用）',
+      !!box && Array.isArray(box.members[0]?.counts) && box.members[0].counts.length === groups.axis.length,
+      box ? `counts=${box.members[0]?.counts?.length} / axis=${groups.axis.length}` : '-',
+    );
+    const silence = await (await fetch(base + '/api/silence?days=60')).json();
+    check('静默检测接口可用且说明「有没有基线」', silence.ok === true && typeof silence.checked === 'number', silence.summary);
+
     // 页面上也要真的渲染出来
     await tab('关注').click();
     await page.waitForTimeout(900);
     const peopleText = await mainText();
     check('关注页渲染出名单', peopleText.indexOf(probeName) !== -1, peopleText.slice(0, 60).replace(/\n/g, ' '));
     check('关注页说明了匹配依据', peopleText.indexOf('命中依据') !== -1 || peopleText.indexOf('别名') !== -1);
+    // 箱视角区块必须在页面上：光有接口不算交付，使用者要能看见
+    check('关注页渲染出箱视角区块', peopleText.indexOf('箱视角') !== -1, peopleText.indexOf('箱视角') !== -1 ? '区块在' : '没找到箱视角');
+    check(
+      '箱视角把 UI-Box 画出来了（含热力图格子）',
+      peopleText.indexOf('UI-Box') !== -1 && (await page.locator('.heat-cells i').count()) > 0,
+      (await page.locator('.heat-cells i').count()) + ' 个格子',
+    );
 
     await fetch(base + '/api/people/ui-follow', { method: 'DELETE' });
     const afterDel = await (await fetch(base + '/api/people')).json();

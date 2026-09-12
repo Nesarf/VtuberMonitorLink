@@ -26,6 +26,9 @@ export const DEFAULT_CONFIG = {
     // 兼容旧格式：若只有扁平的 baseUrl/apiKey/model，会被 activeProvider() 当成单档位
     activeId: '',
     providers: [],
+    // 用量预算：dailyTokens = 0 表示不设限。默认只**警告**不拦；
+    // 想真拦就把 onExceed 设成 'stop'（使用者自己开的工具，拦之前得说清楚）。
+    budget: { dailyTokens: 0, onExceed: 'warn' },
     // 以下为旧格式遗留字段，保留以便平滑迁移
     provider: 'deepseek',
     baseUrl: 'https://api.deepseek.com',
@@ -76,6 +79,20 @@ export const DEFAULT_CONFIG = {
     // mihomo / Clash.Meta 的控制接口（用于列节点、切节点、测每个节点到某站的延迟）
     controlUrl: '',
     controlSecret: '',
+  },
+
+  // ── 报告 / report ─────────────────────────────────────────────────
+  // 停止活动 / 毕业：日报是「今天有什么新东西」，于是停了的人**永远不会出现** ——
+  // 哪怕他昨天刚发了一条（半年来唯一一条，恰恰最该被看见）。所以把「停止活动 ≥6 个月」
+  // 的人统一列在**日报最后**，每人附上最新内容；如果其中有人最近又动了，会单独标成「复出」。
+  report: {
+    dormant: {
+      enabled: true,
+      months: 6, // 使用者指定：半年
+      maxPeople: 12, // 一次最多列几个人（再多就成噪音）
+      maxItems: 2, // 每人最多几条
+      comebackDays: 3, // 最近这几天有动静 → 认为「可能复出」
+    },
   },
 
   // ── 静默检测 / silence detection ───────────────────────────────────

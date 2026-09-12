@@ -11,6 +11,7 @@ function Lat({ p, label, t }) {
   if (p.skipped) return <span className="lat stale">{label} —</span>;
   const loss = Math.round((p.loss ?? 0) * 100);
   const cls = !p.ok ? 'bad' : loss > 0 ? 'warn' : p.avg > 2500 ? 'warn' : 'ok';
+
   return (
     <span className={`lat ${cls}`} title={`${p.method ?? ''} ${p.host ?? p.url ?? ''}`}>
       {label} {p.ok ? `${p.avg}ms` : '✕'} · {loss}%
@@ -36,8 +37,7 @@ export default function Sources() {
   const load = async () => {
     try {
       const [s, h] = await Promise.all([api.getSources(), api.getHealth().catch(() => null)]);
-      setData(s);
-      setHealth(h);
+      setData(s);      setHealth(h);
       setAdvice((await api.listAdvice().catch(() => ({ files: [] }))).files ?? []);
       // 自动出口判定（失败也不影响页面其它部分）
       const e = await api.getEgress().catch(() => null);
@@ -182,6 +182,7 @@ export default function Sources() {
   for (const s of filtered) (byCat[s.category] ??= []).push(s);
   const needsUid = form.fetch === 'bili-opus' || form.fetch === 'bili-dynamic';
   const problems = health?.problems ?? [];
+  const obs = data.observation ?? null; // 观测模式：取样比例、轮次、每条来源的最近观测时间
 
   return (
     <>
@@ -261,6 +262,12 @@ export default function Sources() {
         <div className="hint">{t('sourcesHint')}</div>
         <p className="muted">
           {data.sources.length} sources · daily <b>{data.selected.daily}</b> · merch <b>{data.selected.merch}</b>
+          {/* 观测模式开着的时候，顺带说清「轮次」与「取样比例」——否则「最近观测」这列没有上下文 */}
+          {data.observation?.enabled ? (
+            <span className="muted small" style={{ marginLeft: 12 }}>
+              {t('obsSampling')} · {Math.round((data.observation.ratio ?? 0.5) * 100)}% · {t('groupWindow')} {data.observation.rounds ?? 0} {t('groupDays')}
+            </span>
+          ) : null}
           <label className="inline-check" style={{ marginLeft: 16 }}>
             <input type="checkbox" checked={customOnly} onChange={(e) => setCustomOnly(e.target.checked)} /> {t('onlyCustom')}
           </label>
@@ -341,6 +348,13 @@ export default function Sources() {
                             {t('egressPinned')}
                           </div>
                         )}
+                        {/* 观测模式下的「最近观测」：只有取样比例时，使用者看不出
+                            「谁多久没被看到」—— 那恰恰是判断覆盖够不够的依据。 */}
+                        {obs?.enabled ? (
+                          <div className="small muted" style={{ marginTop: 4 }}>
+                            {t('obsLastSeen')}: {s.lastObserved ? s.lastObserved.slice(0, 10) : t('groupNever')}
+                          </div>
+                        ) : null}
                       </td>
                       <td>
                         <Lat p={h?.direct} label={t('directEgress')} t={t} />

@@ -201,6 +201,9 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 | **Watch** | Watch targets, alarm rules, change history and diffs |
 | **Settings** | Browser, LLM profiles, proxy, schedule, theme (dark by default; light or follow-system on request) and desktop notifications |
 | **Observation mode** | Watch a whole group without leaving a "someone swept the whole roster" footprint: each round samples a random subset (rotation fills coverage in), gaps are jittered, Tor is used only for entries whose logs the other side owns, and sources that need a login are skipped. See `docs/OBSERVE.md`. |
+| **Group view** | Per-agency heatmap of who is active, same-day activity (what a project or collab looks like), joint silence, and per-person anomalies relative to each person's own cadence. Followed people need an Agency filled in. |
+| **Silence & dormant** | "Nothing happened" is intelligence too: silence detection reports who stopped (relative to their own rhythm) and when a whole group goes quiet; entities idle for 6+ months are collected at the very end of the daily report with their latest content, and flagged if they suddenly stir. |
+| **Usage & budget** | Token usage per run and model, with an optional daily budget that warns at 80% and can block a run. Calls whose usage the model did not report are counted separately instead of guessed. |
 | **Reports** | Rendered / raw Markdown, full-text search, HTML/JSON export |
 
 ### Watch targets (borrowed from Moegirlpedia's watch technology)

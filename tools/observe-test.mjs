@@ -184,6 +184,25 @@ t('开启后：取一部分、箱站点改走 Tor、登录态来源被剔除并�
   );
 });
 
+t('Tor 断链时：本轮跳过要走 Tor 的来源，并说明「不计为失败」', () => {
+  const cfg = { observation: { enabled: true, sampleRatio: 1, minSources: 1, torForAgency: true } };
+  const sources = [
+    { id: 'official-hololive', url: 'https://hololivepro.com/talents/' },
+    { id: 'bili-opus-jaran', url: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=1' },
+  ];
+  const down = observationPlan({ cfg, sources, rng: seeded(2), torReachable: false });
+  assert.deepEqual(down.sampling.skippedTor, ['official-hololive'], JSON.stringify(down.sampling));
+  assert.ok(!down.sources.some((s) => s.id === 'official-hololive'), 'Tor 断了就不该把它排进本轮');
+  assert.ok(down.sources.some((s) => s.id === 'bili-opus-jaran'), '平台源不受影响');
+  assert.match(down.skippedTor[0].reason, /不计为来源失败/);
+
+  // Tor 通的时候就照常走 Tor
+  const up = observationPlan({ cfg, sources, rng: seeded(2), torReachable: true });
+  const picked = up.sources.find((s) => s.id === 'official-hololive');
+  assert.equal(picked?.proxy, 'tor');
+  assert.deepEqual(up.sampling.skippedTor, []);
+});
+
 t('轮转状态能存能读（下一轮优先取没看过的）', () => {
   const items = Array.from({ length: 4 }, (_, i) => ({ id: 's' + i }));
   const st = recordPicked({ rounds: 0, lastPicked: {} }, ['s0', 's1'], new Date('2026-01-01T00:00:00Z'));

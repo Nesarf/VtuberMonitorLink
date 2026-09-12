@@ -180,7 +180,7 @@ export function saveObservationState(cfg, state) {
  *   watchTargets:object[], sampling:object
  * }}
  */
-export function observationPlan({ cfg, sources = [], watchTargets = [], history = { lastPicked: {} }, rng = Math.random, now = new Date() } = {}) {
+export function observationPlan({ cfg, sources = [], watchTargets = [], history = { lastPicked: {} }, rng = Math.random, now = new Date(), torReachable = null } = {}) {
   const obs = cfg?.observation ?? {};
   const plan = {
     enabled: !!obs.enabled,
@@ -188,10 +188,15 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
     sources: sources.slice(),
     watchTargets: watchTargets.slice(),
     skippedLogin: [],
+    skippedTor: [],
     egress: {},
     sampling: { enabled: !!obs.enabled, ratio: Number(obs.sampleRatio ?? 0.5), sources: null, watch: null },
   };
   if (!plan.enabled) return plan;
+
+  // 0) Tor 断了就先说话：本轮不走 Tor 的来源直接跳过，而不是让它们一个个失败。
+  //    失败会被记成「这条来源坏了」并触发自检 —— 那是假故障（snowflake 会瞬时断链）。
+  const torDown = torReachable === false && obs.torForAgency !== false;
 
   // 1) 按日志归属决定出口 + 需要登录态的直接不跑
   const kept = [];
@@ -201,7 +206,14 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
       plan.skippedLogin.push({ id: s.id, reason: e.reason });
       continue;
     }
-    if (e?.mode) {
+    if (e?.mode === 'tor') {
+      if (torDown) {
+        plan.skippedTor.push({ id: s.id, reason: '本机 Tor 端口不通，本轮跳过（不计为来源失败，下次再试）' });
+        continue;
+      }
+      plan.egress[s.id] = e.mode;
+      kept.push({ ...s, proxy: e.mode, egressWhy: e.why });
+    } else if (e?.mode) {
       plan.egress[s.id] = e.mode;
       kept.push({ ...s, proxy: e.mode, egressWhy: e.why });
     } else {
@@ -220,6 +232,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   // 只报**本轮真的会走 Tor 的**那几条（egress 里那些没被取样取到的，这一轮根本不会请求）
   plan.sampling.tor = sSample.picked.filter((s) => s.proxy === 'tor').map((s) => s.id);
   plan.sampling.skippedLogin = plan.skippedLogin.map((x) => x.id);
+  plan.sampling.skippedTor = plan.skippedTor.map((x) => x.id);
   plan.at = now.toISOString();
   return plan;
 }

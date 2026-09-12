@@ -32,6 +32,7 @@ export default function Llm() {
   const [showKey, setShowKey] = useState(false);
   const [newPreset, setNewPreset] = useState('deepseek');
   const [testResult, setTestResult] = useState(null);
+  const [cost, setCost] = useState(null);
 
   const load = async () => {
     try {
@@ -39,6 +40,8 @@ export default function Llm() {
       setCfg(c);
       const p = await api.getLlm();
       setPresets(p.presets ?? []);
+      // 用量是另一个数据源（读 logs/cost.jsonl），失败不影响这一页
+      setCost(await api.cost(14).catch(() => null));
     } catch (e) {
       setMsg(e.message);
     }
@@ -64,6 +67,9 @@ export default function Llm() {
     st.dirty();
     setCfg((c) => ({ ...c, llm: { ...c.llm, ...patch } }));
   };
+
+  /** 用量预算也挂在 llm 下（llm.budget.*），走同一套保存状态 */
+  const patchBudget = (field, value) => patchLlm({ budget: { ...(cfg.llm?.budget ?? {}), [field]: value } });
 
   const patchProvider = (field, value) => {
     if (!active) return;
@@ -223,6 +229,59 @@ export default function Llm() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* ── 用量与预算 / cost board ──
+          这个工具的钱花在 LLM 上，而在此之前界面上看不到任何用量（usage 取回来了但没人聚合）。
+          只报能看到的：拿不到用量的一次单独计数，不猜数字。 */}
+      <section className="panel">
+        <h2>{t('costTitle')}</h2>
+        <div className="hint">{t('costHint')}</div>
+        <div className="row">
+          <div className="field" style={{ flex: '0 0 240px' }}>
+            <label>{t('costToday')}</label>
+            <div>
+              <b>{cost?.today?.tokens ?? 0}</b> tokens · {cost?.today?.calls ?? 0} {t('costCalls')}
+            </div>
+          </div>
+          <div className="field" style={{ flex: '0 0 240px' }}>
+            <label>{t('costTotal')}</label>
+            <div>
+              <b>{cost?.total?.tokens ?? 0}</b> tokens · {cost?.total?.calls ?? 0} {t('costCalls')}
+            </div>
+          </div>
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('costBudget')}</label>
+            <input
+              type="number"
+              min="0"
+              step="10000"
+              value={cfg.llm?.budget?.dailyTokens ?? 0}
+              onChange={(e) => patchBudget('dailyTokens', Number(e.target.value) || 0)}
+            />
+            <div className="small muted">{Number(cfg.llm?.budget?.dailyTokens ?? 0) ? '' : t('costUnlimited')}</div>
+          </div>
+          <div className="field" style={{ flex: '0 0 200px' }}>
+            <label>{t('costOnExceed')}</label>
+            <select value={cfg.llm?.budget?.onExceed ?? 'warn'} onChange={(e) => patchBudget('onExceed', e.target.value)}>
+              <option value="warn">{t('costExceedWarn')}</option>
+              <option value="stop">{t('costExceedStop')}</option>
+            </select>
+          </div>
+        </div>
+        {cost?.budget?.limit ? (
+          <div className={`small ${cost.budget.exceeded ? 'delta-down' : 'muted'}`}>
+            {cost.budget.exceeded ? '⚠ ' : ''}
+            {cost.budget.used}/{cost.budget.limit} tokens（{Math.round((cost.budget.pct ?? 0) * 100)}%）·
+            {cost.budget.remaining !== null ? ` ${t('costRemaining')} ${cost.budget.remaining}` : ''}
+          </div>
+        ) : null}
+        {cost?.unknown ? <div className="small muted">{cost.unknown} {t('costUnknown')}</div> : null}
+        {(cost?.models ?? []).length ? (
+          <div className="small muted" style={{ marginTop: 6 }}>
+            {cost.models.slice(0, 4).map((m) => `${m.key}: ${m.tokens}`).join(' · ')}
+          </div>
+        ) : null}
       </section>
 
       {active && (

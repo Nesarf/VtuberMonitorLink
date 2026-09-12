@@ -14,8 +14,11 @@ import { notify } from './notify.js';
 import { flushQueue } from './notify.js';
 import { feedByPerson } from './people.js';
 import { runClustering } from './cluster.js';
-import { archiveRun, openArchive, peopleSeries } from './archive.js';
+import { archiveRun, latestItemsByPerson, openArchive, peopleSeries } from './archive.js';
 import { detectSilence, silenceSummary } from './silence.js';
+import { DORMANT_DEFAULTS, dormantBlock } from './dormant.js';
+import { torPortOpen } from './socks.js';
+import { budgetStatus, costSummary, loadUsage, recordUsage, summarizeUsage } from './cost.js';
 import { tagItems, visionReady } from './vision.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
@@ -51,6 +54,8 @@ export const runState = {
   watchDone: 0,
   sampling: null,
   silence: null,
+  cost: null,
+  dormant: null,
   itemCount: 0,
   alerts: 0,
   advice: [],
@@ -112,6 +117,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     watchDone: 0,
     sampling: null,
     silence: null,
+    cost: null,
+    dormant: null,
     itemCount: 0,
     alerts: 0,
     features: null,
@@ -129,6 +136,25 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // 1) 前置检查：LLM 连通性/余额（避免白跑一场）
     runState.step = 'preflight';
     log.info('前置检查 / preflight: LLM 连通性');
+    // 预算闸门：默认只警告（使用者自己开的工具，拦下来不打招呼是越权）；
+    // 把 llm.budget.onExceed 设成 'stop' 才会真的拦。
+    try {
+      const budget = budgetStatus(cfg, summarizeUsage(loadUsage(cfg).rows));
+      runState.cost = { ...summarizeUsage(loadUsage(cfg).rows, { days: 14 }), budget };
+      if (budget.exceeded && budget.action === 'stop') {
+        runState.lastError = `今日 LLM 用量已超过预算（${budget.used}/${budget.limit} tokens）`;
+        log.error(runState.lastError);
+        await pushNotify('情报收集未执行', runState.lastError, 'error');
+        return { ok: false, error: runState.lastError };
+      }
+      if (budget.exceeded || budget.nearLimit) {
+        log.warn(`⚠ ${costSummary(runState.cost, budget)} —— 今日用量已${budget.exceeded ? '超' : '接近'}预算`);
+      } else {
+        log.info(costSummary(runState.cost, budget));
+      }
+    } catch (e) {
+      log.warn(`用量统计失败（不影响运行）/ cost summary failed: ${e.message}`);
+    }
     const pre = await preflight(cfg);
     if (!pre.ok) {
       log.error(`前置检查失败 / preflight failed — ${pre.error}`);
@@ -143,7 +169,13 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     const obsState = loadObservationState(cfg);
     const allSources = mode === 'watch' ? [] : selectSources(cfg, mode);
     const allWatch = (cfg?.watch?.targets ?? []).filter((t) => t.enabled !== false);
-    const plan = observationPlan({ cfg, sources: allSources, watchTargets: allWatch, history: obsState });
+    // Tor 开跑前先探一次端口：断了就把「本轮要走 Tor 的来源」跳过，
+    // 而不是让它们一个个失败（失败会被记成来源故障、还会触发自检噪音 —— 那是假故障，
+    // snowflake 网桥实测会瞬时断链）
+    const torReachable =
+      cfg?.observation?.enabled === true && cfg?.proxy?.torSocks ? await torPortOpen(cfg.proxy.torSocks) : null;
+    if (torReachable === false) log.warn('本机 Tor 端口不通：本轮跳过要走 Tor 的来源（下次再试，不计为失败）');
+    const plan = observationPlan({ cfg, sources: allSources, watchTargets: allWatch, history: obsState, torReachable });
     if (plan.enabled) {
       log.info(
         `观测模式：来源取样 ${plan.sampling.sources.k}/${plan.sampling.sources.n}` +
@@ -263,6 +295,21 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     runState.step = 'analyzing';
     log.info('LLM 分析中 / analyzing…');
     const a = await analyze({ cfg, results, watchResults, mode, log });
+    // 记账：这次分析花了多少 token（拿不到用量就记 known=false，不猜数字）
+    if (a.ok) {
+      try {
+        recordUsage(cfg, {
+          provider: a.provider?.name ?? a.provider?.id ?? null,
+          model: a.provider?.model ?? null,
+          mode,
+          task: task?.id ?? null,
+          usage: a.usage ?? null,
+          totalTokens: a.usage?.total_tokens ?? 0,
+        });
+      } catch {
+        /* 记账失败不影响运行 */
+      }
+    }
     if (!a.ok) {
       runState.lastError = a.error;
       await pushNotify(`${mode === 'merch' ? '通贩扫描' : '情报收集'}分析失败`, a.error, 'error');
@@ -323,6 +370,35 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       }
     } catch (e) {
       log.warn(`静默检测失败（不影响报告）/ silence check failed: ${e.message}`);
+    }
+
+    // 停止活动 / 毕业：日报是「今天有什么新的」，于是**停了的人永远不会出现** ——
+    // 哪怕他昨天刚发一条（半年来唯一一条，恰恰最该被看见）。所以按使用者要求，
+    // 把「停止活动 ≥6 个月」的人统一列在**日报最后**，每人附上他最新的内容。
+    try {
+      if (cfg?.report?.dormant?.enabled !== false && (cfg.people ?? []).length) {
+        const drows = { ...DORMANT_DEFAULTS, ...(cfg.report?.dormant ?? {}) };
+        // 「今天有动静的人」：复出判定要用（他昨天刚发一条，恰恰是最该被看见的信号）
+        const todayPeople = [...new Set((items ?? []).flatMap((i) => i.people ?? []).map(String))];
+        const db2 = openArchive(cfg);
+        // 要覆盖 ≥6 个月的历史，所以窗口按 months 推（而不是只取 30 天）
+        const lookback = Math.max(120, Math.ceil((Number(drows.months) || 6) * 30.44) + 45);
+        const dSeries = peopleSeries(db2, { days: lookback });
+        // 两步走：先算出谁处于停止活动（这一步不需要内容），再只为这些人取最新内容
+        const draft = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: {}, todayPeople, rules: drows });
+        const ids = draft.dormant.map((d) => d.id);
+        const items2 = ids.length ? latestItemsByPerson(db2, { personIds: ids, limit: drows.maxItems ?? 2 }) : {};
+        const block2 = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: items2, todayPeople, rules: drows });
+        runState.dormant = { dormant: block2.dormant.length, returnees: block2.returnees.length, skipped: block2.skipped };
+        if (block2.markdown) {
+          markdown = `${markdown}\n\n${block2.markdown}`;
+          log.info(
+            `停止活动 ≥${drows.months} 个月：${block2.dormant.length} 人（其中可能复出 ${block2.returnees.length} 人）—— 已列在日报最后`,
+          );
+        }
+      }
+    } catch (e) {
+      log.warn(`停止活动区块失败（不影响报告）/ dormant section failed: ${e.message}`);
     }
 
     // 按「人」关注：把命中关注对象的条目单独成块。使用者心里盯的是人，
@@ -431,6 +507,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       // 否则使用者会把「这轮没取到样」误读成「那个人没动静」（这两件事完全不同）
       sampling: runState.sampling ?? null,
       silence: runState.silence ?? null,
+      cost: runState.cost ?? null,
+      dormant: runState.dormant ?? null,
     };
 
     // 7) 自检放在**最后**：先抓完、先出报告，最后才只对出异常的来源做诊断

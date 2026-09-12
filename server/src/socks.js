@@ -220,6 +220,27 @@ export function torLaunchPlan({ exe, socksUrl, appRoot }) {
 }
 
 /**
+ * Tor 的 SOCKS 端口通不通（只做 TCP 连接，一次 1~2 秒）。
+ *
+ * 用途：观测模式开跑之前先问一句 —— 断了就把「本轮要走 Tor 的来源」跳过，
+ * 而不是让它们一个个失败（失败会被记成来源故障，还会触发自检噪音）。
+ * snowflake 网桥不是永远在线，这种瞬时断链实测遇到过。
+ */
+export async function torPortOpen(socksUrl, { timeout = 1500 } = {}) {
+  const p = parseSocksUrl(socksUrl || 'socks5://127.0.0.1:9150');
+  return new Promise((resolve) => {
+    const s = net.connect({ host: p.host, port: p.port });
+    const done = (ok) => {
+      s.destroy();
+      resolve(ok);
+    };
+    s.setTimeout(timeout, () => done(false));
+    s.once('connect', () => done(true));
+    s.once('error', () => done(false));
+  });
+}
+
+/**
  * 探测 SOCKS 端口是否可用，并确认它确实是 Tor（看出口 IP 是否被判为 Tor）。
  * 不依赖任何第三方库；失败就如实报错。
  */

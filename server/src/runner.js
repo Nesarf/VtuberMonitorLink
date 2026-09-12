@@ -15,6 +15,7 @@ import { flushQueue } from './notify.js';
 import { feedByPerson } from './people.js';
 import { runClustering } from './cluster.js';
 import { archiveRun } from './archive.js';
+import { tagItems, visionReady } from './vision.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
@@ -317,6 +318,19 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       else if (ar?.error) log.warn(`归档失败（不影响运行）/ archive failed: ${ar.error}`);
     } catch (e) {
       log.warn(`归档异常（不影响运行）/ archive error: ${e.message}`);
+    }
+
+    // 图片打标（只在使用者明确启用时）：跑在归档之后、报告之前，
+    // 这样本次报告里的图片标签也是最新的。失败绝不影响运行。
+    try {
+      const ready = visionReady(cfg);
+      if (ready.ok) {
+        const vr = await tagItems(cfg, { items, limit: Number(cfg?.vision?.runLimit ?? 40), log });
+        runState.vision = vr;
+        if (vr.tagged) log.info(`图片打标 / image tags: +${vr.tagged}（缓存命中 ${vr.cached}）`);
+      }
+    } catch (e) {
+      log.warn(`图片打标失败（不影响运行）/ vision failed: ${e.message}`);
     }
 
     const okCount = results.filter((r) => r.ok).length;

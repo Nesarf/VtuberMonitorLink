@@ -106,6 +106,23 @@ export const DEFAULT_CONFIG = {
     // 之所以要有这个列表：对外发东西不可撤销，没验证过的代码路径不该被当成可用
     verifiedTargets: [],
   },
+  // 图片理解打标 / image understanding
+  // 注意：**默认关闭**。开启意味着把情报里的配图发送到你配置的模型服务 ——
+  // 这是隐私相关的动作，必须由使用者明确打开，不能默认偷偷发。
+  vision: {
+    enabled: false,
+    // 用哪个档位打标（留空 = 用当前激活档位）
+    providerId: '',
+    // 一次运行最多打多少张（按图 URL 缓存，重复的图不重复花钱）
+    runLimit: 40,
+    concurrency: 2,
+    maxTokens: 300,
+    timeoutMs: 60000,
+    // 自定义提示词（留空用内置的）
+    prompt: '',
+    // 档位被标记为「不支持视觉」时是否仍然尝试
+    requireVisionModel: true,
+  },
   // 多源同事件合并 / 相似度去重 / 来源权重
   cluster: {
     enabled: true,

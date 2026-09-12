@@ -912,6 +912,24 @@ async function main() {
     check('报告页出现一键分享区块', shareText.indexOf('一键分享') !== -1);
     check('界面上写明了每个方式要不要登录', shareText.indexOf('需要登录') !== -1 && shareText.indexOf('待验证') !== -1);
 
+    // ------------------------------------------------------------- vision
+    process.stdout.write('\n9g. Vision: image tagging behind an explicit opt-in\n');
+    const vs = await (await fetch(base + '/api/vision/stats')).json();
+    check('图片打标状态接口可用', vs.ok === true, `images=${vs.images} tagged=${vs.tagged}`);
+    check('默认未启用，并且说明了原因', vs.enabled === false && vs.ready?.ok === false, vs.ready?.reason ?? '');
+    const tagRefused = await fetch(base + '/api/vision/tag', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ limit: 5 }),
+    });
+    const tagBody = await tagRefused.json();
+    check('未启用时拒绝打标（隐私闸门：不会把图偷偷发出去）', tagRefused.status === 400 && /未启用/.test(tagBody.error ?? ''), 'status ' + tagRefused.status);
+    await tab('情报').click();
+    await page.waitForTimeout(700);
+    const vBtn = page.locator('main button', { hasText: '图片打标' });
+    check('情报页有「图片打标」入口', (await vBtn.count()) > 0);
+    check('未就绪时按钮是禁用的（而不是点了没反应）', (await vBtn.first().isDisabled()) === true, 'disabled');
+
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');
     const xlsx = await fetch(base + '/api/intel/export?format=xlsx');

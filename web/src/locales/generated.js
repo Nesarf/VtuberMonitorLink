@@ -1,7 +1,7 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-12T01:02:36.537Z
+// 生成时间：2026-09-12T01:50:09.413Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
@@ -15,6 +15,9 @@ export const GENERATED = {
     "tab_calendar": "日曆",
     "tab_people": "關注",
     "mergeEvents": "合併重複事件",
+    "visionTag": "圖片打標",
+    "visionTagged": "已打標",
+    "visionCached": "緩存命中",
     "shareTitle": "一鍵分享",
     "shareHint": "把情報打成一個**單文件**發給朋友：自帶樣式、沒有任何外部引用，對方雙擊就能看（離線也行）。不需要登錄的方式永遠可用；需要登錄的方式會如實告訴你缺什麼，做不到的會直接標成「不支持」而不是給你一個點了沒反應的按鈕。發到 B 站動態屬於對外發聲 —— 必須你兩次確認，而且第一次成功發出之前它一直是不可用狀態。",
     "shareScope": "分享範圍",
@@ -611,6 +614,9 @@ export const GENERATED = {
     "tab_calendar": "日曆",
     "tab_people": "關注",
     "mergeEvents": "合併重複事件",
+    "visionTag": "圖片打標",
+    "visionTagged": "已打標",
+    "visionCached": "緩存命中",
     "shareTitle": "一鍵分享",
     "shareHint": "把情報打成一個**單文件**發給朋友：自帶樣式、沒有任何外部引用，對方雙擊就能看（離線也行）。不需要登錄的方式永遠可用；需要登錄的方式會如實告訴你缺什麼，做不到的會直接標成「不支持」而不是給你一個點了沒反應的按鈕。發到 B 站動態屬於對外發聲 —— 必須你兩次確認，而且第一次成功發出之前它一直是不可用狀態。",
     "shareScope": "分享範圍",
@@ -1207,6 +1213,9 @@ export const GENERATED = {
     "tab_calendar": "日曆",
     "tab_people": "關注",
     "mergeEvents": "合併重複事件",
+    "visionTag": "圖片打標",
+    "visionTagged": "已打標",
+    "visionCached": "快取命中",
     "shareTitle": "一鍵分享",
     "shareHint": "把情報打成一個**單檔案**發給朋友：自帶樣式、沒有任何外部引用，對方雙擊就能看（離線也行）。不需要登入的方式永遠可用；需要登入的方式會如實告訴你缺什麼，做不到的會直接標成「不支援」而不是給你一個點了沒反應的按鈕。發到 B 站動態屬於對外發聲 —— 必須你兩次確認，而且第一次成功發出之前它一直是不可用狀態。",
     "shareScope": "分享範圍",

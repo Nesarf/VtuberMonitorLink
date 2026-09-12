@@ -6,6 +6,18 @@ import { api } from '../api.js';
 import { layoutClass, normalizeLayout } from '../layout.js';
 import Collapsible from '../Collapsible.jsx';
 
+/** 图片类型 → 图标（与 vision.js 的 IMAGE_KINDS 对应） */
+const IMAGE_KIND_ICON = {
+  illustration: '🎨',
+  screenshot: '🖥',
+  photo: '📷',
+  meme: '😂',
+  merch: '🛍',
+  poster: '📰',
+  event: '🎉',
+  other: '🖼',
+};
+
 function fmtTime(t) {
   if (!t) return '';
   const d = new Date(t);
@@ -28,6 +40,33 @@ export default function Intel({ layout }) {
   // 多源同事件合并：打开后信息流按「事件」而不是按「条目」呈现
   const [merge, setMerge] = useState(false);
   const [events, setEvents] = useState(null);
+  // 图片打标：就绪状态决定按钮能不能点（未启用时把原因写在 tooltip 上）
+  const [visionReadyOk, setVisionReadyOk] = useState(null);
+  const [visionReason, setVisionReason] = useState('');
+
+  useEffect(() => {
+    api
+      .visionStats()
+      .then((v) => {
+        setVisionReadyOk(v?.ready?.ok === true);
+        setVisionReason(v?.ready?.reason ?? '');
+      })
+      .catch(() => setVisionReadyOk(false));
+  }, []);
+
+  const tagImages = async () => {
+    setBusy('vision');
+    try {
+      const r = await api.tagImages({ limit: 40 });
+      setErr('');
+      window.alert(`${t('visionTagged')}: ${r.tagged ?? 0}（${t('visionCached')} ${r.cached ?? 0}）`);
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy('');
+    }
+  };
 
   const loadEvents = async (on) => {
     if (!on) return;
@@ -99,6 +138,17 @@ export default function Intel({ layout }) {
         {L.showSource && <span className="chip">{it.sourceName?.[lang] ?? it.sourceId}</span>}
         {L.showTime && it.time ? <span className="muted small">{fmtTime(it.time)}</span> : null}
         {it.keywords?.length ? <span className="chip alert">⚠ {it.keywords.join('/')}</span> : null}
+        {/* 图片标签：来自视觉模型打标（读时合并自缓存）。图标按 kind 给，一眼可辨是什么图 */}
+        {(it.imageTags ?? []).map((tag) => (
+          <span className="chip img-tag" key={'img-' + tag} title={(it.imageKinds ?? []).join('/')}>
+            {IMAGE_KIND_ICON[it.imageKinds?.[0]] ?? '🖼'} {tag}
+          </span>
+        ))}
+        {it.imageText ? (
+          <span className="chip" title={it.imageText}>
+            🔤 {it.imageText.slice(0, 24)}
+          </span>
+        ) : null}
         <span className="spacer" style={{ flex: 1 }} />
         <span className="flagbar">
           <button
@@ -223,6 +273,14 @@ export default function Intel({ layout }) {
           <div className="field" style={{ flex: '0 0 auto' }}>
             <button className="ghost" onClick={load} disabled={busy}>
               {busy ? t('loading') : t('refresh')}
+            </button>{' '}
+            <button
+              className="ghost"
+              onClick={tagImages}
+              disabled={busy === 'vision' || visionReadyOk === false}
+              title={visionReason ?? ''}
+            >
+              {busy === 'vision' ? t('loading') : t('visionTag')}
             </button>{' '}
             <button className="ghost" onClick={toggleDiff}>
               {showDiff ? t('close') : t('compare')}

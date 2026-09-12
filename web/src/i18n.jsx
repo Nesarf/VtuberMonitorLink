@@ -53,6 +53,9 @@ export const STRINGS = {
     tab_calendar: '日历',
     tab_people: '关注',
     mergeEvents: '合并重复事件',
+    visionTag: '图片打标',
+    visionTagged: '已打标',
+    visionCached: '缓存命中',
     shareTitle: '一键分享',
     shareHint:
       '把情报打成一个**单文件**发给朋友：自带样式、没有任何外部引用，对方双击就能看（离线也行）。不需要登录的方式永远可用；需要登录的方式会如实告诉你缺什么，做不到的会直接标成「不支持」而不是给你一个点了没反应的按钮。发到 B 站动态属于对外发声 —— 必须你两次确认，而且第一次成功发出之前它一直是不可用状态。',
@@ -714,6 +717,9 @@ export const STRINGS = {
     tab_calendar: 'Calendar',
     tab_people: 'People',
     mergeEvents: 'Merge duplicates',
+    visionTag: 'Tag images',
+    visionTagged: 'tagged',
+    visionCached: 'cache hits',
     shareTitle: 'Share',
     shareHint:
       'Turn the intel into a single file to send someone: styled, with no external references, so it opens by double-click even offline. Ways that need no login always work; ways that need one tell you exactly what is missing, and unsupported platforms are labelled rather than offered as a dead button. Posting to bilibili is speaking in public — it requires two confirmations and stays unavailable until one post has actually succeeded.',

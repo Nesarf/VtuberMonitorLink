@@ -45,6 +45,13 @@ import {
 } from './people.js';
 import { dedupe, loadWeightHistory, makeWeighter, runClustering } from './cluster.js';
 import {
+  applyVisionTags,
+  loadVisionCache,
+  tagItems,
+  visionReady,
+  visionStats,
+} from './vision.js';
+import {
   archivePath,
   archiveRun,
   healthSeries,
@@ -424,6 +431,17 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const peopleCfg = cfg.people ?? [];
     const annotated = annotateItems(items, peopleCfg);
     items = annotated.items;
+    // 图片标签（来自缓存，读时合并）—— 有的话会顺带进 keywords，因此也能被检索命中
+    let visionTagged = 0;
+    try {
+      if (cfg.vision?.enabled) {
+        const vision = applyVisionTags(items, loadVisionCache(cfg));
+        items = vision.items;
+        visionTagged = items.filter((i) => (i.imageTags ?? []).length).length;
+      }
+    } catch {
+      // 打标缓存坏了不该影响情报流
+    }
     const person = String(req.query.person ?? '').trim();
     if (person) items = items.filter((i) => (i.people ?? []).includes(person));
     if (req.query.followed === '1' || (cfg.peopleOptions?.onlyFollowed && !person)) {
@@ -444,6 +462,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       // 按人关注的命中统计：界面用它显示「本次有几条命中关注对象」
       peopleMatched: annotated.matched,
       followed: (items ?? []).filter((i) => (i.people ?? []).length > 0).length,
+      visionTagged,
       runs: data.runs ?? [],
       starred: (data.items ?? []).filter((i) => flags[i.id]?.starred).length,
       items,
@@ -1112,6 +1131,29 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     egressClear(cfg);
     res.json({ ok: true });
+  });
+
+  // ── 图片理解打标 / image tagging ─────────────────────────────────
+  // 核心在 vision.js（按图 URL 缓存、解析宽容、并发受限），
+  // 自检 tools/vision-test.mjs 用本地假视觉模型做端到端验证（不花 Key、不发图）。
+  app.get('/api/vision/stats', (_req, res) => {
+    const cfg = getConfig();
+    res.json({ ok: true, ...visionStats(cfg), ready: visionReady(cfg) });
+  });
+
+  // 给最近一次情报里的配图打标（未启用时明确拒绝，不会偷偷把图发出去）
+  app.post('/api/vision/tag', async (req, res) => {
+    const cfg = getConfig();
+    const ready = visionReady(cfg);
+    if (!ready.ok) return res.status(400).json({ ok: false, error: ready.reason });
+    const data = latestIntel(cfg, Number(req.body?.scan ?? 300));
+    const r = await tagItems(cfg, {
+      items: data.items ?? [],
+      limit: Number(req.body?.limit ?? cfg.vision?.runLimit ?? 40),
+      force: req.body?.force === true,
+      log,
+    });
+    res.json({ ...r, ...visionStats(cfg) });
   });
 
   // ── 一键分享 / one-click sharing ─────────────────────────────────

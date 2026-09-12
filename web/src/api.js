@@ -105,6 +105,10 @@ export const api = {
   sharePost: (body) => post('/api/share/post', body),
   shareAudit: () => j('/api/share/audit'),
 
+  // 图片理解打标
+  visionStats: () => j('/api/vision/stats'),
+  tagImages: (body) => post('/api/vision/tag', body ?? {}),
+
   // SQLite 归档与图表
   archiveStats: () => j('/api/archive/stats'),
   archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),

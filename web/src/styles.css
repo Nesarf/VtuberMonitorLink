@@ -227,6 +227,9 @@ pre.report {
 .hbar-track { flex: 1; height: 10px; background: var(--code-bg, rgba(127,127,127,.15)); border-radius: 5px; overflow: hidden; }
 .hbar-fill { display: block; height: 100%; background: var(--accent); opacity: .75; }
 
+/* 图片理解打标：卡片上的图片标签 */
+.chip.img-tag { background: rgba(127, 127, 127, .18); border: 1px solid var(--border); }
+
 .save-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 4px; padding: 10px 12px;

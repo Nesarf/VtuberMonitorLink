@@ -150,32 +150,50 @@ export async function probeUrl(url, opts = {}) {
     }
   }
 
-  // 给出「哪个出口更合适」的结论，界面直接拿来提示
+  // Tor 出口：界面上每个来源都能把出口设成 Tor（Sources 页那个下拉里就有），
+  // 但探测这边原先**没有这一档** —— 于是选了 Tor 的来源，测出来的却是直连/代理的数字，
+  // 等于拿错出口的延迟去判断该用哪个出口。走 SOCKS 是 TCP 隧道，指标仍是「首字节时间」。
+  if (modes.includes('tor')) {
+    if (!cfg?.proxy?.torSocks) {
+      out.tor = { mode: 'tor', method: 'socks-ttfb', skipped: true, error: '未配置 Tor SOCKS（设置 → 网络代理）' };
+    } else {
+      const s = [];
+      for (let i = 0; i < samples; i++) {
+        s.push(await httpTtfb(url, cfg, 'tor', timeoutMs));
+        if (i < samples - 1) await sleep(150);
+      }
+      out.tor = { mode: 'tor', method: 'socks-ttfb', socks: cfg.proxy.torSocks, url, ...stats(s) };
+    }
+  }
+
+  // 给出「哪个出口更合适」的结论，界面直接拿来提示。
+  // 现在可能有 2~3 个出口（直连 / 代理 / Tor），所以改成「在所有测到的出口里挑最快的」，
+  // 并把不通的那些说出来 —— 只对比两个出口的老写法在加了 Tor 之后会漏掉一路。
   const d = out.direct;
   const p = out.proxy;
+  const tor = out.tor;
+  const usable = [d, p, tor].filter((x) => x && x.ok && !x.skipped);
+  const blocked = [d, p, tor].filter((x) => x && !x.ok && !x.skipped).map((x) => x.mode);
   let verdict = 'unknown';
   let hint = '';
-  if (d && p && !p.skipped) {
-    if (d.ok && p.ok) {
-      verdict = d.avg <= p.avg ? 'direct' : 'proxy';
-      hint = verdict === 'direct' ? `直连更快（${d.avg}ms vs ${p.avg}ms）` : `代理更快（${p.avg}ms vs ${d.avg}ms）`;
-    } else if (d.ok && !p.ok) {
-      verdict = 'direct';
-      hint = '直连可用，代理不通';
-    } else if (!d.ok && p.ok) {
-      verdict = 'proxy';
-      hint = `直连不通（${d.error ?? '?'}），必须走代理`;
-    } else {
-      verdict = 'none';
-      hint = '两个出口都不通';
-    }
-    if (d.ok && p.ok && d.loss > 0 && p.loss === 0) {
-      verdict = 'proxy';
-      hint = `直连丢包 ${Math.round(d.loss * 100)}%，代理稳定`;
-    }
+  if (usable.length) {
+    const best = usable.slice().sort((a, b) => a.avg - b.avg)[0];
+    verdict = best.mode;
+    const parts = usable.map((x) => `${x.mode} ${x.avg}ms`).join(' / ');
+    hint = usable.length > 1 ? `${best.mode} 最快（${parts}）` : `${best.mode} 可用（${parts}）`;
+    if (blocked.length) hint += `；${blocked.join(' / ')} 不通`;
+  } else if (blocked.length) {
+    verdict = 'none';
+    hint = `${blocked.join(' / ')} 都不通`;
   } else if (d) {
     verdict = d.ok ? 'direct' : 'none';
-    hint = d.ok ? '直连可用（代理未启用，未对比）' : `直连不通：${d.error ?? '?'}`;
+    hint = d.ok ? '直连可用（其它出口未测）' : `直连不通：${d.error ?? '?'}`;
+  } else if (p?.skipped) {
+    verdict = 'unknown';
+    hint = `代理未启用（${p.error}）`;
+  } else if (tor?.skipped) {
+    verdict = 'unknown';
+    hint = `Tor 未配置（${tor.error}）`;
   }
 
   return { url, host, at: new Date().toISOString(), modes: out, verdict, hint };

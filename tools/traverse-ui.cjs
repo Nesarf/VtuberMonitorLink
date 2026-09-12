@@ -357,11 +357,15 @@ async function main() {
     const keyVal = (await keyInput.count()) > 0 ? await keyInput.inputValue() : '';
     check('the seeded key is present but type=password', keyVal.length > 0, keyVal ? 'masked input has a value' : 'empty');
     const reveal = page.locator('main button', { hasText: '显示' }).first();
+    // 条件里藏断言 = 检查条数会变：这次 184 条、下次 183 条，而**没人看得出少了哪条**
+    // （少了的那条恰恰是因为元素没找到）。所以补一个 else，找不到就判失败。
     if (await reveal.count()) {
       await reveal.click();
       await page.waitForTimeout(200);
       check('the key field can be revealed on demand', (await page.locator('main input[type=text]').count()) > 0);
       await page.locator('main button', { hasText: '隐藏' }).first().click();
+    } else {
+      check('the key field can be revealed on demand', false, '没找到「显示」按钮');
     }
     const modelOptions = await page.locator('#vml-models option').count();
     check('the model datalist is populated', modelOptions > 0, modelOptions + ' options');
@@ -616,6 +620,8 @@ async function main() {
       const r = await fetch(base + exportHref);
       const body = await r.text();
       check('the exported HTML downloads', r.ok && body.indexOf('<!doctype html>') === 0, body.length + ' bytes');
+    } else {
+      check('the exported HTML downloads', false, '没有导出链接，无法下载');
     }
 
     await page.locator('main input[placeholder*="搜"]').first().fill('B 站动态');

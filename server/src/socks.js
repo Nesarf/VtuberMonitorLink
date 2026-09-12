@@ -7,7 +7,10 @@
 //
 // 支持：无认证 / 用户名密码认证；目标地址用域名（atyp=3）交给代理解析，
 // 这样 DNS 也不出本机 —— 对「无痕化」这点很重要。
+import fs from 'node:fs';
 import net from 'node:net';
+import path from 'node:path';
+import tls from 'node:tls';
 import { Agent } from 'undici';
 
 const SOCKS_VERSION = 0x05;
@@ -40,6 +43,14 @@ export function socksConnector(opts) {
     const targetHost = options.hostname ?? options.host;
     const targetPort = Number(options.port) || 443;
     if (!targetHost) return callback(new Error('socks: no target host'));
+
+    // ⚠️ 传了自定义 connect 之后，**TLS 就归我们做了**。
+    // undici 的内置连接器是「https 目标 → tls.connect」，我们替换掉它，
+    // 就得自己补上这一步；漏了的话握手虽然成功，但明文请求会被写进 443 端口 ——
+    // 真实症状是 `400 The plain HTTP request was sent to HTTPS port`，
+    // 而探测接口只会说「端口通，但出口检测失败」，看起来像 Tor 的问题（踩过）。
+    const wantsTls = options.protocol === 'https:' || options.secureEndpoint === true;
+    const servername = options.servername ?? targetHost;
 
     const socket = net.connect({ host: proxy.host, port: proxy.port });
     let stage = 'greeting';
@@ -119,11 +130,32 @@ export function socksConnector(opts) {
         const atyp = buf[3];
         const need = atyp === ATYP_IPV4 ? 4 + 4 + 2 : atyp === ATYP_IPV6 ? 4 + 16 + 2 : 4 + 1 + buf[4] + 2;
         if (buf.length < need) return;
-        // 握手完成，把 socket 交还给 undici
+        // 握手完成，把 socket 交还给 undici（https 目标要先自己套上 TLS）
         stage = 'done';
         socket.removeAllListeners('data');
         socket.setTimeout(0);
-        callback(null, socket);
+
+        if (!wantsTls) return callback(null, socket);
+
+        let tlsSocket;
+        try {
+          tlsSocket = tls.connect({ socket, servername, host: targetHost });
+        } catch (e) {
+          socket.destroy();
+          return callback(e);
+        }
+        const tlsTimer = setTimeout(() => {
+          tlsSocket.destroy();
+          callback(new Error('socks5: TLS handshake timeout'));
+        }, 30000);
+        tlsSocket.once('error', (e) => {
+          clearTimeout(tlsTimer);
+          callback(e);
+        });
+        tlsSocket.once('secureConnect', () => {
+          clearTimeout(tlsTimer);
+          callback(null, tlsSocket);
+        });
       }
     });
   };
@@ -143,6 +175,48 @@ export function socksForPlaywright(socksUrl) {
   const p = parseSocksUrl(socksUrl);
   const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(p.password)}@` : '';
   return { server: `socks5://${auth}${p.host}:${p.port}` };
+}
+
+/**
+ * 「一键唤起 Tor」到底该用什么参数 —— 抽成纯函数，好断言。
+ *
+ * 为什么不能裸 spawn 那个 exe（原来的实现就是裸 spawn）：
+ *   1. Tor Browser 的 tor.exe **依赖它的 torrc**（网桥、可插拔传输、数据目录都在里面）。
+ *      不传配置的话它会用默认值：SocksPort 9050（不是我们配的 9150）、没有网桥、
+ *      数据目录落到 %LOCALAPPDATA%\tor（也就是 C 盘 —— 本项目一直守「不写 C 盘」）。
+ *   2. torrc-defaults 必须用 `--defaults-torrc` 传：命令行只允许一个 `-f`，
+ *      传两个会被拒（Tor 会打 "Duplicate -f options"，然后只读后一个 ——
+ *      于是 snowflake 的 ClientTransportPlugin 全丢，日志里是
+ *      「there is no configured transport called snowflake」）。
+ *   3. Tor Browser 退出时会把 `DisableNetwork 1` 留在 torrc 里，必须显式覆盖，
+ *      否则起来了也不联网（一直停在 Bootstrapped 0%）。
+ */
+export function torLaunchPlan({ exe, socksUrl, appRoot }) {
+  if (!exe) return { ok: false, error: '没有配置 torExe' };
+  const port = parseSocksUrl(socksUrl || 'socks5://127.0.0.1:9150').port;
+  const dir = path.dirname(exe);
+  const browserDir = path.resolve(dir, '..', '..'); // ...\Browser\TorBrowser\Tor → ...\Browser
+  const dataDir = path.join(browserDir, 'TorBrowser', 'Data', 'Tor');
+  const torrc = path.join(dataDir, 'torrc');
+  const defaults = path.join(dataDir, 'torrc-defaults');
+
+  if (fs.existsSync(torrc)) {
+    const args = ['-f', torrc, '--SocksPort', String(port), '--DisableNetwork', '0'];
+    if (fs.existsSync(defaults)) args.unshift('--defaults-torrc', defaults);
+    return {
+      ok: true,
+      kind: 'tor-browser',
+      cwd: browserDir,
+      args,
+      command: `${exe} ${args.join(' ')}`,
+      note: '按 Tor Browser 自己的配置启动（含网桥与可插拔传输），并覆盖 DisableNetwork',
+    };
+  }
+
+  // 独立 tor：数据目录显式指到应用目录，别让它写 C 盘
+  const own = appRoot ? path.join(appRoot, 'tor-data') : path.join(dir, 'tor-data');
+  const args = ['--SocksPort', `127.0.0.1:${port}`, '--DataDirectory', own];
+  return { ok: true, kind: 'standalone', cwd: dir, args, command: `${exe} ${args.join(' ')}`, note: `独立 tor，数据目录放在 ${own}（不写 C 盘）` };
 }
 
 /**

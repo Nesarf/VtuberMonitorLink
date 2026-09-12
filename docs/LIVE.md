@@ -91,6 +91,46 @@ Twitch 的匿名 IRC（`wss://irc-ws.chat.twitch.tv` + `justinfan`）思路可�
 
 实测样例（bilibili 直播间）：直连 **19ms / 0%**，代理 **316ms / 0%** → 「直连更快（19ms vs 316ms）」。
 
+### 4. Tor 出口（实测 2026-09-12）
+
+**Tor 本身**：这台机器上装的是 Tor Browser 的 `tor.exe` 0.4.9.11，配置走 **snowflake 网桥**
+（`ClientTransportPlugin snowflake exec ...\lyrebird.exe`）。按下面的参数唤起后，
+引导日志走到 `Bootstrapped 100% (done)`，全程约 55 秒 —— 不需要额外做端口转发之类的事。
+
+```
+cd "<Tor Browser>\Browser"           # cwd 必须是这里：可插拔传输用的是相对路径
+tor.exe --defaults-torrc "TorBrowser\Data\Tor\torrc-defaults" ^
+        -f "TorBrowser\Data\Tor\torrc" ^
+        --SocksPort 9150 --DisableNetwork 0
+```
+
+（`<Tor Browser>` 指你装 Tor Browser 的那个目录。页面上那个「唤起 Tor」按钮会自动按这个布局
+拼参数，不需要手敲 —— 这里写出来是为了说明它到底在做什么。）
+
+三个坑（都写进了 `torLaunchPlan()` 与 BUGS #56）：
+
+1. `torrc-defaults` 要用 **`--defaults-torrc`** 传：命令行只允许一个 `-f`，传两个会被拒
+   （`Duplicate -f options`），于是 snowflake 的传输插件全丢，报
+   `there is no configured transport called "snowflake"`；
+2. Tor Browser 退出时会在 torrc 里留 `DisableNetwork 1`，必须显式覆盖，否则永远停在 0%；
+3. 裸 spawn 会用默认值（SocksPort **9050**、无网桥、数据目录落在 C 盘）—— 页面上那个
+   「唤起 Tor」按钮原先就是裸 spawn，所以按下去了却等于没起。
+
+**app 侧实测**（`POST /api/proxy/tor`）：`{"ok":true,"socks":"127.0.0.1:9150","isTor":true,"ip":"185.220.101.23"}`。
+
+**三出口对比**（`POST /api/probe`，samples=1）：
+
+| 目标 | 直连 | 经 Tor |
+| --- | --- | --- |
+| `https://example.com/` | 186ms（TCP 握手） | 1800ms（首字节） |
+| `https://api.bilibili.com/x/web-interface/nav` | 24ms | 1764ms |
+
+也就是说 **B 站经 Tor 也抓得到**，只是慢一个量级（snowflake 本身带宽就小）。
+所以合理用法是「个别来源单独走 Tor」（来源页那个下拉就能设），而不是全局切 Tor。
+
+**隐私提醒**：Tor 出口下不要带登录态（B 站登录、萌百 BotPassword 等）——
+把实名账号的身份和 Tor 出口绑在一起，等于自己把两者连起来。出口 IP 每次也会变。
+
 
 ## 无痕化处理
 

@@ -7,6 +7,20 @@
 
 ---
 
+## v1.7.x — Tor 出口（2026-09-12 追加）
+
+> 这一轮是使用者要求「先唤起，我接通，你测试」之后做的：Tor 本身一次就通了
+> （Tor Browser 的 snowflake 网桥，`Bootstrapped 100%`），**通不了的是我们自己那三段代码** ——
+> SOCKS 连接器、一键唤起、探测出口。共同的根因还是老样子：**没跑过的分支就是坏的**。
+
+| # | 现象 | 根因 | 状态 |
+| --- | --- | --- | --- |
+| 57 | 来源页能把出口设成 **Tor**，但「测网络」测出来的却是直连/代理的数字 | `/api/probe` 只实现了 `direct` / `proxy` 两档，`modes:['tor']` 被**静默忽略**（连一个 skipped 都不给）。于是拿直连延迟去判断一个走 Tor 的来源该不该用 Tor —— 结论是错的。UI 里有 Tor 选项、探测里没这一档，两边不知道对方存在 | **已修**（`probeUrl` 增加 tor 一档（`socks-ttfb`，经 SOCKS 取首字节）；结论改成「在所有测到的出口里挑最快的，不通的也说清楚」；未指定 modes 时按**来源自己的出口设置**来测。自检：把 Tor 出口指向假 SOCKS，断言真的走了 SOCKS 且结论为 tor；没配 Tor 时如实标 `skipped`） |
+| 56 | 「一键唤起 Tor」点了没用（起来的是**另一个** Tor） | 端点是裸 `spawn(exe, [])`。Tor Browser 的 tor.exe 依赖它自己的 torrc：裸 spawn 会用默认值 —— SocksPort **9050**（不是配的 9150）、**没有网桥**、数据目录落到 `%LOCALAPPDATA%\tor`（C 盘）。另外 torrc-defaults 必须用 `--defaults-torrc` 传：命令行只允许一个 `-f`，传两个会被 Tor 拒（日志里 `Duplicate -f options`），于是 snowflake 的 `ClientTransportPlugin` 全丢，报「there is no configured transport called "snowflake"」；Tor Browser 退出时还会在 torrc 里留 `DisableNetwork 1`，不覆盖就永远停在 Bootstrapped 0% | **已修**（`torLaunchPlan()` 纯函数：Tor Browser 布局 → `--defaults-torrc` + `-f` + `--SocksPort` + `--DisableNetwork 0`，且 `cwd` 必须是 `Browser\`（可插拔传输用的是相对路径）；独立 tor → 数据目录指到应用目录，**不许落 C 盘**。端点回传实际用的命令行，便于核对。自检 2 条离线断言。**实测**：按这组参数起来后 snowflake 引导到 `Bootstrapped 100%`） |
+| 55 | Tor 明明通了，app 却报「端口通，但出口检测失败」；真实症状是 `400 The plain HTTP request was sent to HTTPS port` | 自己写的 SOCKS5 连接器在握手完成后把**裸 socket** 交给了 undici —— 而 undici 的约定是「你传了自定义 connect，TLS 也归你做」。于是明文的 `GET /api/ip HTTP/1.1` 被写进了目标 443 端口。这条路径**以前从没被跑过**：Tor 没起来时探测直接返回 `ECONNREFUSED`，看起来像「功能正常，只是没开 Tor」，TLS 这一段永远走不到 | **已修**（握手后按 `options.protocol === 'https:'` 自己 `tls.connect({ socket, servername })` 再交给 undici，带 30 秒握手超时与错误回传。新增 `tools/socks-test.mjs`：起假 SOCKS + 假目标，直接看隧道里第一段字节是 **0x16（TLS ClientHello）** 还是明文 `GET` —— 不需要证书、不联网也能卡住这类错。**实测**：修复后经 Tor 出口 `185.220.101.23`，`check.torproject.org` 判 `IsTor: true`） |
+
+---
+
 ## v1.7.x — 逐条校对（2026-09-12 追加）
 
 > 这一轮的教训：**「有值」和「能用」之间隔着一整类错误** —— 占位符被吃掉、哨兵残留、

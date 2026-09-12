@@ -34,7 +34,7 @@ import { chatRequest } from './llm.js';
 import { netFetch } from './net.js';
 import { applyFeatures, extractFeatures, featureStats, loadFeatureCache } from './features.js';
 import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js';
-import { probeTor } from './socks.js';
+import { probeTor, torLaunchPlan } from './socks.js';
 import { entityDetail, entityStats } from './entities.js';
 import {
   annotateItems,
@@ -516,10 +516,29 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (!targets.length) return res.status(400).json({ error: '没有可测的目标 / nothing to probe' });
     if (targets.length > 40) targets.length = 40;
 
+    // 没指定出口时，按**这些来源实际用的出口**来测：来源把出口设成 Tor，
+    // 「测网络」就该测 Tor —— 否则拿直连的延迟去判断一个走 Tor 的来源该不该用 Tor，
+    // 结论是错的（这个坑真实存在过：界面上有 Tor 选项，探测却不认识它）。
+    let effectiveModes = modes;
+    const perTarget = new Map();
+    if (!Array.isArray(req.body?.modes) || !req.body.modes.length) {
+      for (const t of targets) {
+        const want = String(t.source?.proxy ?? ''); // 来源页那个下拉：''=自动 / direct / proxy / tor
+        const list = ['direct'];
+        if (want === 'proxy' || want === 'tor') list.push(want);
+        else {
+          if (cfg.proxy?.enabled) list.push('proxy');
+          if (cfg.proxy?.torSocks) list.push('tor');
+        }
+        perTarget.set(t.id, list);
+      }
+      effectiveModes = null; // 逐个目标决定
+    }
+
     const out = [];
     for (const t of targets) {
       try {
-        const r = await probeUrl(t.url, { cfg, samples, modes });
+        const r = await probeUrl(t.url, { cfg, samples, modes: perTarget.get(t.id) ?? effectiveModes ?? modes });
         out.push({ id: t.id, label: t.label, sourceId: t.source?.id ?? null, ...r });
       } catch (e) {
         out.push({ id: t.id, label: t.label, url: t.url, error: e.message, at: new Date().toISOString() });
@@ -906,16 +925,27 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json(await probeTor(cfg, socks));
   });
 
-  // 若配置了 torExe，可以一键把它拉起来（不自带 tor，只是替你点一下）
+  // 若配置了 torExe，可以一键把它拉起来（不自带 tor，只是替你点一下）。
+  // 参数不是裸 spawn —— 见 torLaunchPlan 的注释：Tor Browser 的 tor 要带它自己的
+  // torrc（否则没有网桥、端口也不对），独立 tor 的数据目录要指到应用目录（别写 C 盘）。
   app.post('/api/proxy/tor/start', (req, res) => {
     const cfg = getConfig();
     const exe = String(req.body?.exe ?? cfg.proxy?.torExe ?? '').trim();
     if (!exe) return res.status(400).json({ error: '未配置 torExe，请填 Tor 的 tor.exe 路径（例如 Tor Browser 里的 Browser\\TorBrowser\\Tor\\tor.exe）' });
     if (!fs.existsSync(exe)) return res.status(400).json({ error: `找不到文件：${exe}` });
+    const plan = torLaunchPlan({ exe, socksUrl: cfg.proxy?.torSocks, appRoot: APP_ROOT });
+    if (!plan.ok) return res.status(400).json({ error: plan.error });
     try {
-      const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: true });
+      const child = spawn(exe, plan.args, { cwd: plan.cwd, detached: true, stdio: 'ignore', windowsHide: true });
       child.unref();
-      res.json({ ok: true, started: exe, hint: 'Tor 启动需要时间（配了网桥会更久），稍后点「检测 Tor」确认' });
+      res.json({
+        ok: true,
+        started: exe,
+        kind: plan.kind,
+        command: plan.command,
+        note: plan.note,
+        hint: 'Tor 启动需要时间（走网桥会更久，通常 10~40 秒），稍后点「检测 Tor」确认；日志里看到 Bootstrapped 100% 就是通了',
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }

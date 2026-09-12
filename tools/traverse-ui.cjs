@@ -453,7 +453,27 @@ async function main() {
     );
     await tab('报告').click();
     await page.waitForTimeout(1200);
-    const reportRows = await page.locator('main table.reportlist tbody tr').count();
+    // 等列表真的渲染出来再断言（而不是死等 1.2 秒）——
+    // 页面上的区块越来越多，固定等待会让断言变成「运气测试」
+    let reportRows = 0;
+    for (let i = 0; i < 20; i++) {
+      reportRows = await page.locator('main table.reportlist tbody tr').count();
+      if (reportRows > 0) break;
+      await page.waitForTimeout(500);
+    }
+    if (reportRows === 0) {
+      const diag = await page.evaluate(() => ({
+        panels: [...document.querySelectorAll('main .panel')].map((p) => ({
+          h2: (p.querySelector('h2')?.innerText ?? '(no h2)').slice(0, 30).replace(/\n/g, ' '),
+          tables: p.querySelectorAll('table').length,
+          rows: p.querySelectorAll('tbody tr').length,
+          text: p.innerText.slice(0, 40).replace(/\n/g, ' '),
+        })),
+        reportLoading: document.body.innerText.includes('加载中'),
+        reportErr: document.body.innerText.includes('❌'),
+      }));
+      process.stdout.write('  [debug] panels: ' + JSON.stringify(diag) + '\n');
+    }
     check('the run produced a report row', reportRows > 0, reportRows + ' rows');
 
     // ① 默认格式：.html 主文件 → 页内 iframe 预览，内容真的渲染出来了
@@ -826,6 +846,71 @@ async function main() {
     check('图表显示了归档条数', /归档[:：]?\s*\d+/.test(chartText.replace(/\n/g, ' ')) || chartText.indexOf('每天条目数') !== -1, chartText.slice(0, 70).replace(/\n/g, ' '));
     const svgCount = await page.locator('main svg.chart-svg').count();
     check('图表真的画出来了（内联 SVG，无图表库）', svgCount > 0, svgCount + ' 个图');
+
+    // ------------------------------------------------------------- share
+    process.stdout.write('\n9f. Share: login requirements honest, bundles self-contained\n');
+    const shareTargets = await (await fetch(base + '/api/share/targets')).json();
+    check('分享目标接口可用', shareTargets.ok === true, `${shareTargets.targets?.length} 个目标`);
+    const byId = Object.fromEntries((shareTargets.targets ?? []).map((x) => [x.id, x]));
+    check('不需登录的方式是 ready', byId['file-html']?.status === 'ready' && byId['text']?.status === 'ready' && byId['webhook']?.status === 'ready');
+    check('每个目标都如实声明是否需要登录', (shareTargets.targets ?? []).every((x) => typeof x.needsLogin === 'boolean'));
+    check('需要登录的目标不会假装可用', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic'] ?? {}).slice(0, 90));
+    check('做不到的平台明确标为不支持（X 需要 OAuth）', byId['x-post']?.status === 'unsupported');
+
+    const bundleRes = await fetch(base + '/api/share/bundle', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: { kind: 'latest' }, format: 'html', note: '巡检导出' }),
+    });
+    const bundleHtml = await bundleRes.text();
+    check('可以生成单文件 HTML', bundleRes.ok && bundleHtml.length > 500, `${bundleHtml.length} 字节`);
+    check('返回的是 HTML 且带下载文件名', (bundleRes.headers.get('content-type') ?? '').includes('text/html') && /filename="vml-share-.+\.html"/.test(bundleRes.headers.get('content-disposition') ?? ''), bundleRes.headers.get('content-disposition'));
+    const externalRefs = [...bundleHtml.matchAll(/(?:src|href)\s*=\s*"([^"]*)"/gi)]
+      .map((m) => m[1])
+      .filter((u) => !u.startsWith('#') && !u.startsWith('data:'));
+    const resourceRefs = externalRefs.filter((u) => !/^https?:\/\//.test(u));
+    check('分享文件没有任何外部资源引用（离线可看）', resourceRefs.length === 0, resourceRefs.join(',') || 'none');
+    check('分享文件里不含脚本', !/<script/i.test(bundleHtml));
+
+    const txt = await (
+      await fetch(base + '/api/share/bundle', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: { kind: 'latest' }, format: 'text' }),
+      })
+    ).json();
+    check('复制文本模式返回纯文本', txt.ok === true && typeof txt.text === 'string' && txt.text.length > 10, `${txt.items} 条`);
+
+    const audit = await (await fetch(base + '/api/share/audit')).json();
+    check('导出行为被记进分享记录', (audit.entries ?? []).some((e) => e.action === 'bundle'), JSON.stringify(audit.entries?.[0] ?? {}).slice(0, 80));
+
+    // 对外发声的三道闸门：缺确认 / 未验证 / 不支持，都要被挡住
+    const noConfirm = await fetch(base + '/api/share/post', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试' }),
+    });
+    check('没有确认就不许对外发声', noConfirm.status === 400, 'status ' + noConfirm.status);
+    const unverified = await (
+      await fetch(base + '/api/share/post', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试', confirm: true }),
+      })
+    ).json();
+    check('未验证的目标即使确认也不可用', unverified.ok === false && unverified.status === 'needs-verification', JSON.stringify(unverified).slice(0, 90));
+    const unsupported = await fetch(base + '/api/share/post', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'x-post', text: '测试', confirm: true }),
+    });
+    check('不支持的平台被拒绝', unsupported.status === 400, 'status ' + unsupported.status);
+
+    await tab('报告').click();
+    await page.waitForTimeout(900);
+    const shareText = await mainText();
+    check('报告页出现一键分享区块', shareText.indexOf('一键分享') !== -1);
+    check('界面上写明了每个方式要不要登录', shareText.indexOf('需要登录') !== -1 && shareText.indexOf('待验证') !== -1);
 
     // ------------------------------------------- office export & features & tor
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');

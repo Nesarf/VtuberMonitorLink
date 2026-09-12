@@ -98,6 +98,14 @@ export const DEFAULT_CONFIG = {
     // 日报里列出关注对象的动态
     reportMatches: true,
   },
+  // 一键分享 / one-click sharing
+  share: {
+    // 下载分享包时的默认格式
+    defaultFormat: 'html',
+    // 已经用真实账号验证过、允许对外使用的发帖目标（第一次成功发布后会自动写进来）
+    // 之所以要有这个列表：对外发东西不可撤销，没验证过的代码路径不该被当成可用
+    verifiedTargets: [],
+  },
   // 多源同事件合并 / 相似度去重 / 来源权重
   cluster: {
     enabled: true,

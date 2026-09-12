@@ -55,6 +55,20 @@ import {
   series,
   stats as archiveStats,
 } from './archive.js';
+import {
+  appendAudit,
+  buildBundle,
+  bundleFilename,
+  contentDisposition,
+  getAccounts,
+  guardPost,
+  postBilibiliDynamic,
+  readAudit as readShareAudit,
+  readinessReport,
+  renderBundle,
+  targetById,
+  toPlainText,
+} from './share.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
 import { listAccounts } from './accounts.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
@@ -1098,6 +1112,121 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     egressClear(cfg);
     res.json({ ok: true });
+  });
+
+  // ── 一键分享 / one-click sharing ─────────────────────────────────
+  // 目标登记表在 share.js：每个目标如实声明是否需要登录、当前可不可用；
+  // 自检 tools/share-test.mjs（零外部引用的单文件 HTML / 登录需求 / 发声闸门 / 审计）。
+  app.get('/api/share/targets', async (_req, res) => {
+    const cfg = getConfig();
+    // 用缓存：读登录态是阻塞的，每次开页面都现读会把服务卡住（原因见 share.js）
+    const { accounts, cached, error } = await getAccounts(cfg);
+    res.json({
+      ok: true,
+      targets: readinessReport(accounts, cfg.share?.verifiedTargets ?? []),
+      accounts: accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, canSend: a.canSend })),
+      accountsCached: !!cached,
+      accountsError: error ?? null,
+    });
+  });
+
+  /** 按范围收集条目：latest / day / person */
+  function collectScope(cfg, scope = {}) {
+    const kind = scope.kind ?? 'latest';
+    if (kind === 'person') {
+      const items = latestIntel(cfg, Number(scope.limit ?? 500)).items ?? [];
+      const picked = annotateItems(items, cfg.people ?? []).items.filter((i) => (i.people ?? []).includes(scope.id));
+      const person = (cfg.people ?? []).find((p) => p.id === scope.id);
+      return {
+        items: picked,
+        title: `${person?.name ?? scope.id} 的情报`,
+        subtitle: person?.agency ?? '',
+        contentDate: new Date().toISOString().slice(0, 10),
+      };
+    }
+    if (kind === 'day') {
+      const day = String(scope.id ?? '').slice(0, 10);
+      let db = null;
+      try {
+        db = openArchive(cfg);
+        const rows = queryItems(db, { day, limit: 500 });
+        // 归档里有这一天就用它 —— 即使原始情报已被后面的运行覆盖
+        if (rows.length) return { items: rows, title: `Vtuber 情报 ${day}`, subtitle: '', contentDate: day };
+      } catch {
+        /* 归档不可用就退回原始情报 */
+      } finally {
+        try {
+          db?.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      const data = latestIntel(cfg, 500);
+      return { items: data.items ?? [], title: `Vtuber 情报 ${day}`, subtitle: '', contentDate: day };
+    }
+    const data = latestIntel(cfg, Number(scope.limit ?? 500));
+    return { items: data.items ?? [], title: 'Vtuber 情报分享', subtitle: '', contentDate: data.date ?? null };
+  }
+
+  // 生成分享包（返回文件下载；format=text 时返回纯文本供复制）
+  app.post('/api/share/bundle', (req, res) => {
+    const cfg = getConfig();
+    const format = String(req.body?.format ?? cfg.share?.defaultFormat ?? 'html');
+    const scope = collectScope(cfg, req.body?.scope ?? {});
+    const bundle = buildBundle({
+      ...scope,
+      scopeKind: req.body?.scope?.kind ?? 'latest',
+      note: String(req.body?.note ?? '').slice(0, 300),
+    });
+    const out = renderBundle(bundle, format);
+    appendAudit(cfg, { action: 'bundle', scope: bundle.scope, format, items: bundle.items.length });
+    if (format === 'text') return res.json({ ok: true, text: out.body, items: bundle.items.length, title: bundle.title });
+    // 文件名可能含中文 → 必须走 RFC 5987 编码，否则 HTTP 头会抛 ERR_INVALID_CHAR
+    res.setHeader('content-disposition', contentDisposition(bundleFilename(bundle, out.ext)));
+    res.type(out.mime).send(out.body);
+  });
+
+  app.get('/api/share/audit', (_req, res) => res.json({ ok: true, entries: readShareAudit(getConfig(), 50) }));
+
+  // 对外发声：确认 + 可做性 + 留痕，三道闸门缺一不可（见 share.js guardPost）
+  app.post('/api/share/post', async (req, res) => {
+    const cfg = getConfig();
+    const target = String(req.body?.target ?? '');
+    // 对外发声前**强制重新读**登录态：拿过期的判断去发帖等于用旧钥匙开新锁
+    const { accounts } = await getAccounts(cfg, { force: true });
+    const verified = cfg.share?.verifiedTargets ?? [];
+    // verify:true 表示「这次就是为了验证这个目标」—— 成功后把它记进已验证列表
+    const isVerifyAttempt = req.body?.verify === true && targetById(target)?.status === 'needs-verification';
+    const allowed = isVerifyAttempt ? [...verified, target] : verified;
+
+    let body = String(req.body?.text ?? '').trim();
+    if (!body && req.body?.scope) {
+      const scope = collectScope(cfg, req.body.scope);
+      body = toPlainText(buildBundle({ ...scope, scopeKind: req.body.scope.kind ?? 'latest' }));
+    }
+    const g = guardPost(cfg, { target, accounts, verified: allowed, text: body, confirm: req.body?.confirm === true });
+    if (!g.ok) {
+      appendAudit(cfg, { action: 'post-refused', target, error: g.error, status: g.status ?? null });
+      return res.status(400).json({ ok: false, error: g.error, status: g.status ?? null });
+    }
+
+    let result = { ok: false, error: '尚未实现该目标' };
+    if (target === 'bilibili-dynamic') {
+      result = await postBilibiliDynamic(cfg, { accountId: req.body?.accountId, text: g.body, log });
+    }
+    appendAudit(cfg, {
+      action: 'post',
+      target,
+      ok: !!result.ok,
+      error: result.error ?? null,
+      chars: g.body.length,
+      account: result.account ?? null,
+      verifyAttempt: isVerifyAttempt,
+    });
+    if (result.ok && isVerifyAttempt) {
+      patchConfig(cfg, { share: { ...(cfg.share ?? {}), verifiedTargets: [...new Set([...verified, target])] } });
+    }
+    res.json({ ok: !!result.ok, error: result.error ?? null, account: result.account ?? null, verified: result.ok && isVerifyAttempt ? true : undefined });
   });
 
   // ── SQLite 增量归档与图表数据 / incremental archive & charts ─────

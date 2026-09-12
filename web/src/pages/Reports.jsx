@@ -4,6 +4,7 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import Markdown from '../markdown.jsx';
 import Charts from './Charts.jsx';
+import Share from './Share.jsx';
 
 export default function Reports() {
   const { t } = useI18n();
@@ -17,6 +18,8 @@ export default function Reports() {
   const [hits, setHits] = useState(null);
   const [cmp, setCmp] = useState(null);
   const [cmpTo, setCmpTo] = useState('');
+  // 分享范围里要能按「人」选，所以需要关注名单
+  const [people, setPeople] = useState([]);
 
   const compare = async (from, to) => {
     setCmpTo(to);
@@ -39,6 +42,10 @@ export default function Reports() {
     api
       .getWatch()
       .then((w) => setKw(w.rules?.keywords ?? []))
+      .catch(() => {});
+    api
+      .getPeople()
+      .then((r) => setPeople(r.people ?? []))
       .catch(() => {});
   }, []);
 
@@ -78,6 +85,7 @@ export default function Reports() {
   return (
     <>
       <Charts />
+      <Share people={people} />
       <section className="panel">
         <h2>{t('reportsTitle')}</h2>
         <div className="hint">{t('reportsHint')}</div>

@@ -99,6 +99,12 @@ export const api = {
   // 报告
   getReports: () => j('/api/reports'),
 
+  // 一键分享
+  shareTargets: () => j('/api/share/targets'),
+  shareText: ({ scope, note } = {}) => post('/api/share/bundle', { scope, format: 'text', note }),
+  sharePost: (body) => post('/api/share/post', body),
+  shareAudit: () => j('/api/share/audit'),
+
   // SQLite 归档与图表
   archiveStats: () => j('/api/archive/stats'),
   archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),

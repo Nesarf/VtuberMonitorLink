@@ -107,6 +107,16 @@ try {
   GENERATED = {};
 }
 
+// 机器译文层（可选）：tools/i18n-translate.mjs 的产物。它**算作「已本地化」**——
+// 对使用者来说「有日语译文」和「是人工写的」不改变界面体验；分开统计只是为了知道
+// 哪些还需要人工复核（--review 就是干这个的）。
+let MACHINE = {};
+try {
+  MACHINE = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/machine.json'), 'utf8'));
+} catch {
+  MACHINE = {};
+}
+
 /** 真正可用的回落链：只在**同一语言内**继承地区差异，跨语言不继承（见 i18n.jsx 注释） */
 function usableChain(code) {
   const base = String(code).split('-')[0];
@@ -126,6 +136,11 @@ function ownKeys(code) {
     }
     // 简体是基准语言，它自己那本就够了；繁体由构建期从它整份生成
     if (c === 'zh' || c === 'zh-Hans') for (const k of zhKeys) keys.add(k);
+  }
+  // 机器译文也算「这个语言自己的」——它直接决定使用者看到什么
+  for (const c of [code, ...usableChain(code)]) {
+    const m = MACHINE[c];
+    if (m) for (const k of Object.keys(m)) keys.add(k);
   }
   return keys;
 }
@@ -151,6 +166,76 @@ for (const r of rows) {
 
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;
 const update = process.argv.includes('--update');
+
+/**
+ * 简体词条的「键 → 值长度」。
+ * 分类要按**值**的长度，不是键名的长度 —— 按钮/字段是短值（翻译便宜、可见度最高），
+ * 提示句是长值（成本高得多）。第一版按键名分，于是 516 条全被算成「短键」（其实里面
+ * 有大量长句），等于没分类。
+ */
+function zhValueLengths() {
+  const block = blockFor(src, 'zh');
+  const out = new Map();
+  const lines = block.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s+(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    const key = m[1] ?? m[2];
+    let rest = m[3].trim();
+    if (!rest) {
+      // 值写在下一行（长句常见形态）
+      const next = (lines[i + 1] ?? '').trim();
+      rest = next;
+    }
+    const str = /^'([\s\S]*)',?$/.exec(rest);
+    out.set(key, str ? str[1].length : 400);
+  }
+  return out;
+}
+const valueLen = zhValueLengths();
+
+/** 取简体词条的值（列缺失清单时一并显示，方便判断怎么翻） */
+function zhValueOf(key) {
+  const block = blockFor(src, 'zh');
+  const re = new RegExp(`^\\s+(?:'${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}'|${key})\\s*:\\s*(.*)$`, 'm');
+  const m = re.exec(block);
+  if (!m) return '';
+  const inline = /^'([\s\S]*?)',?\s*$/.exec(m[1].trim());
+  if (inline) return inline[1];
+  // 值在下一行
+  const after = block.slice(m.index + m[0].length);
+  const next = /^\s*'([\s\S]*?)',?\s*$/m.exec(after);
+  return next ? next[1] : '';
+}
+
+// --missing <code>：列出该语言**还没本地化**的界面词条（用来挑下一批要翻译的键，
+// 而不是凭印象猜哪些缺）。短值优先 —— 那是使用者一打开就看到的按钮与字段。
+const missingIdx = process.argv.indexOf('--missing');
+if (missingIdx >= 0) {
+  const code = process.argv[missingIdx + 1];
+  const loc = byCode(code);
+  if (!loc) {
+    process.stderr.write(`未知地区码: ${code}\n`);
+    process.exit(1);
+  }
+  const own = ownKeys(code);
+  const missing = [...used].filter((k) => !own.has(k));
+  const short = missing.filter((k) => (valueLen.get(k) ?? 99) <= 12).sort();
+  const mid = missing.filter((k) => (valueLen.get(k) ?? 99) > 12 && (valueLen.get(k) ?? 99) <= 40).sort();
+  const long = missing.filter((k) => (valueLen.get(k) ?? 99) > 40).sort();
+  process.stdout.write(
+    `\n${code}（${loc.name}）缺 ${missing.length} 条：短值 ${short.length} / 中等 ${mid.length} / 长句 ${long.length}\n\n`,
+  );
+  const show = (title, list, n) => {
+    process.stdout.write(`${title}（前 ${Math.min(n, list.length)}）:\n`);
+    for (const k of list.slice(0, n)) process.stdout.write(`  ${k}  = ${(zhValueOf(k) ?? '').slice(0, 40)}\n`);
+    process.stdout.write('\n');
+  };
+  show('短值（优先：按钮/字段/状态）', short, 120);
+  show('中等（面板标题/短提示）', mid, 60);
+  show('长句（提示文案，成本最高）', long, 10);
+  process.exit(0);
+}
 
 if (update) {
   const out = { generatedAt: new Date().toISOString(), total, locales: Object.fromEntries(rows.map((r) => [r.code, r.covered])) };

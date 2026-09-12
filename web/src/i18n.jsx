@@ -6,6 +6,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { LOCALES, byCode, negotiate } from './locales/index.js';
 import { GENERATED } from './locales/generated.js';
+// 机器译文层：由 tools/i18n-translate.mjs 产出，优先级最低（人工词条永远压过它）。
+// 文件先以空表 `{}` 提交 —— 这样构建期就能解析到它，没配 Key 之前界面完全不受影响。
+import MACHINE from './locales/machine.json';
 import { GB_SPELL, GB_STEMS, HAND, HAND_COMMON } from './locales/overlays.js';
 
 /** 地区覆盖词条：只写与上一级不同的键（繁简、拼写、用词、日期习惯） */
@@ -1436,9 +1439,14 @@ export function I18nProvider({ children }) {
   }, []);
 
   const dict = useMemo(() => {
-    // 逐级合并：**同语言**内的地区继承（usableChain）→ 该地区自己的词条 →
-    // 最后用英文兜底。注意不能跨语言继承：那会把俄语当成乌克兰语显示。
-    let out = {};
+    // 层级顺序（后面的压前面的）：
+    //   ① 机器译文（tools/i18n-translate.mjs 产出，最低优先级）
+    //   ② 人工词条（HAND_COMMON / HAND）—— **永远压过机器**，机器翻过一遍不会覆盖人工校对
+    //   ③ 构建期生成（繁体 OpenCC）
+    //   ④ 英文兜底
+    // 机器层单独一层是刻意的：MTool 那类工具的经验是「机翻负责铺量、人工负责正确」，
+    // 两者混在一起就再也分不清哪些需要复核了。
+    let out = { ...(MACHINE[loc.code] ?? {}) };
     for (const c of usableChain(loc.code)) {
       const common = HAND_COMMON[c];
       if (common) out = { ...out, ...common };

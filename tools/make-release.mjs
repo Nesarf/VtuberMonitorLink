@@ -61,6 +61,7 @@ const NEVER_COPY = new Set([
   'coverage',
   '.vite',
   '.cache',
+  '.cache',
 ]);
 // 允许出现的「示例路径」（文档里教别人填的那种），扫描时会放行
 const EXAMPLE_PATH_HINTS = [/E:\\\\YourCache/, /E:\\YourCache/];
@@ -169,6 +170,40 @@ log(`  -> ${rel(relOut)}（${fs.readdirSync(relOut).length} 个文件 + SHA256SU
 // ───────────────────────────────────────────── 4. 对外说明与发布步骤
 
 log('\n[4/5] 对外文档');
+// 目录分工要写在最显眼的地方：这个目录是**冻结尾发布快照**，不是开发树。
+// 在副本里改代码然后发现「改了没生效」是很容易踩的一次性错误。
+fs.writeFileSync(
+  path.join(outRoot, 'README-FIRST.md'),
+  `# 这个目录是什么 / What this directory is
+
+**对外发布快照，不是开发树。** 不要在这里改代码 —— 改了不会被合并回去，下次重新生成还会被覆盖。
+
+  · 开发在这里：\`E:\\VtuberMonitorLink\`（如果你想用别的路径，那就是你 clone 工程的地方）
+  · 这个目录只放**可以直接发出去的东西**：无痕化后的工程副本 + 正式发行包
+  · 重新生成（在开发树里跑一条命令即可）：
+
+        node tools/make-release.mjs --out <这个目录>
+
+  · 生成过程会自动做无痕化扫描（密钥 / 本机绝对路径 / 私有名字 / harness 标记），
+    任何一项不过就**整体中止**，不会产出一个半成品
+  · 发行包在 \`releases/<版本>/\`，含 zip、包内清单、SHA256SUMS 与发行说明
+
+## 目录结构
+
+    src/                     无痕化后的工程副本（可整目录 git init 推到 GitHub）
+    releases/<version>/      正式发行包（zip + manifest + SHA256SUMS + RELEASE-NOTES.md）
+    PUBLISH-TO-GITHUB.md     推到 GitHub 的逐步命令
+    README.md                与工程一致的对外说明
+
+## 发布前请确认
+
+1. 在**开发树**里跑过 \`npm run verify\`（含完整性、覆盖率棘轮、七套自检、发布校验）且全绿
+2. \`npm run sanitize-check\` 干净
+3. 本机 \`config.json\` 里的 API Key 不在任何待上传文件里（脚本已在拷贝与打包两处断言）
+`,
+  'utf8',
+);
+
 const publishDoc = `# 推到 GitHub / Publishing to GitHub
 
 这个目录是\`无痕化后的工程副本\`：**没有**运行期数据（config.json 里的 API Key、历史报告、

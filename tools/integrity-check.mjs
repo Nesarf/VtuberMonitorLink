@@ -64,7 +64,13 @@ function resolveImport(fromFile, spec) {
   // web 里 import './x.js' 但实际是 x.jsx 的情况
   for (const ext of CODE_EXT) candidates.push(base.replace(/\.jsx?$/, '') + ext);
   for (const c of candidates) {
-    if (fileSet.has(path.resolve(c)) && fs.existsSync(c)) return { file: path.resolve(c) };
+    // 用文件系统判断，而不是「在源码文件集合里」—— 后者只装了 .js/.jsx，
+    // 于是真实存在的 .json / .css import 会被误报成「指向不存在的文件」（踩过）
+    try {
+      if (fs.statSync(c).isFile()) return { file: path.resolve(c) };
+    } catch {
+      /* 继续试下一个候选 */
+    }
   }
   return { missing: base };
 }

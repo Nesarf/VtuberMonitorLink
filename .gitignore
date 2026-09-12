@@ -33,3 +33,6 @@ Desktop.ini
 # build intermediates (SEA blob, staged exe)
 build/
 
+
+# 机器翻译的工作缓存（源串哈希 → 译文）；machine.json 是产物，要提交
+web/src/locales/.cache/

@@ -117,6 +117,18 @@ try {
   MACHINE = {};
 }
 
+// 术语表里「有意保留原文」的词（它们出现在译文里不算漏译）
+let GLOSSAARY_KEEP = {};
+try {
+  const g = JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8'));
+  for (const [k, v] of Object.entries(g)) {
+    if (k.startsWith('_')) continue;
+    if (v?.default === k) GLOSSAARY_KEEP[k] = true;
+  }
+} catch {
+  GLOSSAARY_KEEP = {};
+}
+
 /** 真正可用的回落链：只在**同一语言内**继承地区差异，跨语言不继承（见 i18n.jsx 注释） */
 function usableChain(code) {
   const base = String(code).split('-')[0];
@@ -150,7 +162,20 @@ const rows = [];
 for (const loc of LOCALES) {
   const own = ownKeys(loc.code);
   const covered = [...used].filter((k) => own.has(k)).length;
-  rows.push({ code: loc.code, name: loc.name, covered, total, pct: total ? covered / total : 0 });
+  // 「有值」不等于「翻好了」：机翻漏译会留下汉字原文。日语例外（汉字是正常书写）。
+  // 只统计存在机器层的部分 —— 人工词条是人写的，不该由这个指标背锅。
+  const mach = MACHINE[loc.code] ?? (loc.code.split('-')[0] === 'en' ? {} : null);
+  let suspicious = 0;
+  if (mach && !String(loc.code).startsWith('ja')) {
+    const keep = Object.keys(GLOSSAARY_KEEP);
+    for (const v of Object.values(mach)) {
+      if (!v) continue;
+      let s = String(v);
+      for (const t of keep) s = s.split(t).join('');
+      if (/[\u4e00-\u9fff]/.test(s)) suspicious++;
+    }
+  }
+  rows.push({ code: loc.code, name: loc.name, covered, total, pct: total ? covered / total : 0, suspicious });
 }
 rows.sort((a, b) => b.pct - a.pct || a.code.localeCompare(b.code));
 
@@ -161,7 +186,13 @@ const bar = (p) => {
 
 process.stdout.write(`\n界面用到的词条: ${total} 个\n\n`);
 for (const r of rows) {
-  process.stdout.write(`  ${r.code.padEnd(9)} ${bar(r.pct)} ${String(Math.round(r.pct * 100)).padStart(3)}%  ${r.covered}/${r.total}  ${r.name}\n`);
+  const warn = r.suspicious ? `   ⚠ 疑似未翻译 ${r.suspicious}` : '';
+  process.stdout.write(`  ${r.code.padEnd(9)} ${bar(r.pct)} ${String(Math.round(r.pct * 100)).padStart(3)}%  ${r.covered}/${r.total}  ${r.name}${warn}\n`);
+}
+const suspiciousTotal = rows.reduce((n, r) => n + r.suspicious, 0);
+if (suspiciousTotal) {
+  process.stdout.write(`\n  ⚠ ${suspiciousTotal} 条机翻里还留着汉字原文（覆盖率只算「有值」，这份才是「翻好了」）\n`);
+  process.stdout.write(`     修法：node tools/i18n-translate.mjs --engine app --bust suspicious --locales <...>\n`);
 }
 
 const baseline = fs.existsSync(BASELINE) ? JSON.parse(fs.readFileSync(BASELINE, 'utf8')) : null;

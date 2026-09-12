@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { cacheKey, humanKeys, protect, restore } from './i18n-translate.mjs';
+import { cacheKey, humanKeys, needsRetranslate, protect, restore } from './i18n-translate.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0;
@@ -102,44 +102,38 @@ t('同语言的地区继承也算人工（es-MX 复用 es-ES 的人工词条）'
 
 process.stdout.write('\ni18n-translate: 端到端（假引擎）\n');
 t('假引擎跑通：只翻缺失的键、人工层不被覆盖、缓存能复用', () => {
-  const machinePath = path.join(ROOT, 'web/src/locales/machine.json');
-  const backup = fs.existsSync(machinePath) ? fs.readFileSync(machinePath, 'utf8') : null;
-  const cachePath = path.join(ROOT, 'web/src/locales/.cache/ja-JP.json');
-  const cacheBackup = fs.existsSync(cachePath) ? fs.readFileSync(cachePath, 'utf8') : null;
-  try {
-    const out1 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), '--engine', 'mock', '--locales', 'ja-JP', '--limit', '6'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    });
-    assert.ok(/新译 6/.test(out1), out1);
-    const machine = JSON.parse(fs.readFileSync(machinePath, 'utf8'));
-    const ja = machine['ja-JP'] ?? {};
-    assert.ok(Object.keys(ja).length >= 6, '应当写入条目');
-    assert.ok(Object.values(ja).some((v) => v.startsWith('【JA】')), '假引擎的标记应当在: ' + JSON.stringify(ja).slice(0, 80));
-    assert.ok(!('save' in ja), 'save 是人工词条，机器层不该有它（人工永远压过机器）');
+  // 沙箱：缓存与产物都指到临时目录 —— 否则真实翻译填满缓存之后，
+  // 「第一次应当新译 6 条」这种断言会被缓存命中打败（踩过：真翻译跑完后这条就红了）
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-i18n-'));
+  const common = ['--engine', 'mock', '--locales', 'ja-JP', '--limit', '6', '--cache-dir', sandbox, '--out', path.join(sandbox, 'machine.json')];
+  const out1 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), ...common], { cwd: ROOT, encoding: 'utf8' });
+  assert.ok(/新译 6/.test(out1), out1);
+  const machine = JSON.parse(fs.readFileSync(path.join(sandbox, 'machine.json'), 'utf8'));
+  const ja = machine['ja-JP'] ?? {};
+  assert.ok(Object.keys(ja).length >= 6, '应当写入条目');
+  assert.ok(Object.values(ja).some((v) => v.startsWith('【JA】')), '假引擎的标记应当在');
+  assert.ok(!('save' in ja), 'save 是人工词条，机器层不该有它（人工永远压过机器）');
 
-    // 第二次：刚翻过的那批必须走缓存（这就是「同一句永不重复花钱」），
-    // 同时继续往下翻新的一批（这才是增量，--limit 是本次工作量预算而不是「只翻这 6 条」）
-    const out2 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), '--engine', 'mock', '--locales', 'ja-JP', '--limit', '6'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    });
-    const cached = Number(/缓存命中 (\d+)/.exec(out2)?.[1] ?? 0);
-    assert.ok(cached >= 6, `第二次应当至少命中 ${6} 条缓存，实际 ${cached}`);
-  } finally {
-    // 假译文绝不能留在工程里（它看起来像翻译，其实是垃圾）
-    if (backup === null) fs.rmSync(machinePath, { force: true });
-    else fs.writeFileSync(machinePath, backup, 'utf8');
-    if (cacheBackup === null) fs.rmSync(cachePath, { force: true });
-    else fs.writeFileSync(cachePath, cacheBackup, 'utf8');
-  }
+  // 第二次：刚翻过的那批必须走缓存（「同一句永不重复花钱」），同时继续往下翻新的一批
+  const out2 = execFileSync(process.execPath, [path.join(ROOT, 'tools/i18n-translate.mjs'), ...common], { cwd: ROOT, encoding: 'utf8' });
+  const cached = Number(/缓存命中 (\d+)/.exec(out2)?.[1] ?? 0);
+  assert.ok(cached >= 6, `第二次应当至少命中 6 条缓存，实际 ${cached}`);
+  fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('跑完不留下假译文（自检必须自己清理干净）', () => {
-  const machinePath = path.join(ROOT, 'web/src/locales/machine.json');
-  if (!fs.existsSync(machinePath)) return;
-  const raw = fs.readFileSync(machinePath, 'utf8');
-  assert.ok(!raw.includes('【JA】'), '工程里不该残留假引擎产物');
+t('--bust terms 的判据：含专有名词才重译（纯逻辑，按单元测而不是跑命令行）', () => {
+  const glossary = { Telegram: { default: 'Telegram' } };
+  // none：永远走缓存
+  assert.equal(needsRetranslate('Telegram 推送失败', 'none', glossary), false);
+  // all：全部重译
+  assert.equal(needsRetranslate('保存', 'all', glossary), true);
+  // terms：命中术语表 或 含「像品牌名的大写拉丁片段」才重译
+  assert.equal(needsRetranslate('Telegram 推送失败', 'terms', glossary), true);
+  assert.equal(needsRetranslate('Bark 的 key', 'terms', glossary), true);
+  assert.equal(needsRetranslate('SQLite 归档', 'terms', glossary), true);
+  assert.equal(needsRetranslate('保存', 'terms', glossary), false, '纯中文标签不该被重译');
+  assert.equal(needsRetranslate('今天', 'terms', glossary), false);
+  assert.equal(needsRetranslate('把情报打成一个单文件发给朋友', 'terms', glossary), false);
 });
 
 t('缓存文件里没有密钥之类的东西（只有源串哈希 → 译文）', () => {

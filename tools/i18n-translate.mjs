@@ -26,11 +26,28 @@ import { ROOT, readDicts, usedKeys } from './lib/i18n-source.mjs';
 import { byCode, LOCALES } from '../web/src/locales/index.js';
 import { HAND, HAND_COMMON } from '../web/src/locales/overlays.js';
 
-const CACHE_DIR = path.join(ROOT, 'web/src/locales/.cache');
-const OUT_FILE = path.join(ROOT, 'web/src/locales/machine.json');
+const CACHE_DIR_DEFAULT = path.join(ROOT, 'web/src/locales/.cache');
+const OUT_FILE_DEFAULT = path.join(ROOT, 'web/src/locales/machine.json');
 const GLOSSARY_FILE = path.join(ROOT, 'web/src/locales/glossary.json');
 
-const args = { engine: 'mock', locales: [], limit: 0, dryRun: false, review: null, concurrency: 2, batch: 8, url: '', key: '', model: '', retry: 1 };
+const args = {
+  engine: 'mock',
+  locales: [],
+  limit: 0,
+  dryRun: false,
+  review: null,
+  concurrency: 2,
+  batch: 8,
+  url: '',
+  key: '',
+  model: '',
+  retry: 1,
+  bust: 'none',
+  // 沙箱：把缓存与产物指到别处。自检用它保证互不干扰（否则「第一次应当新译 N 条」
+  // 这种断言会被真实缓存命中打败）；手动跑时也方便「换个模型试一遍而不污染正式缓存」。
+  cacheDir: '',
+  out: '',
+};
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--engine') args.engine = process.argv[++i];
@@ -39,6 +56,9 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (a === '--batch') args.batch = Number(process.argv[++i]);
   else if (a === '--concurrency') args.concurrency = Number(process.argv[++i]);
   else if (a === '--dry-run') args.dryRun = true;
+  else if (a === '--bust') args.bust = String(process.argv[++i] ?? 'terms');
+  else if (a === '--cache-dir') args.cacheDir = path.resolve(process.argv[++i]);
+  else if (a === '--out') args.out = path.resolve(process.argv[++i]);
   else if (a === '--review') args.review = process.argv[++i];
   else if (a === '--url') args.url = process.argv[++i];
   else if (a === '--key') args.key = process.argv[++i];
@@ -50,7 +70,7 @@ const log = (s) => process.stdout.write(s + '\n');
 // ───────────────────────────────────────────── 缓存
 
 function cachePath(locale) {
-  return path.join(CACHE_DIR, `${locale}.json`);
+  return path.join(args.cacheDir || CACHE_DIR_DEFAULT, `${locale}.json`);
 }
 
 export function loadCache(locale) {
@@ -64,8 +84,9 @@ export function loadCache(locale) {
 }
 
 export function saveCache(locale, cache) {
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
-  fs.writeFileSync(cachePath(locale), JSON.stringify(cache, null, 2) + '\n', 'utf8');
+  const dir = args.cacheDir || CACHE_DIR_DEFAULT;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${locale}.json`), JSON.stringify(cache, null, 2) + '\n', 'utf8');
 }
 
 /** 缓存键：源串 + 目标语言（换了语言自然要重译，改了源串也是新键） */
@@ -130,24 +151,67 @@ export function restore(text, tokens) {
   return { ok: missing.length === 0, text: out, missing };
 }
 
+/**
+ * 这条译文看起来**根本没翻**吗？
+ *
+ * 为什么需要：覆盖率只统计「有没有值」，于是「值是中文原文」也算 100% —— 度量是虚的。
+ * 判据：非中日文目标语言里出现汉字（术语表里有意保留原文的词先剔掉）。
+ * 日语例外（汉字本来就是正常书写）。
+ */
+export function looksUntranslated(text, locale, glossary = {}) {
+  if (!text || String(locale).startsWith('ja')) return false;
+  const keep = Object.keys(glossary).filter((k) => !k.startsWith('_') && glossary[k]?.default === k);
+  let s = String(text);
+  for (const t of keep) s = s.split(t).join('');
+  return /[\u4e00-\u9fff]/.test(s);
+}
+
+/**
+ * 缓存失效策略。
+ *
+ * 为什么需要：缓存键是「源串 + 语言」，所以**改了提示词或术语表，旧译文仍然会被命中** ——
+ * 专有名词政策变了却拿不回旧条目，只能干瞪眼。四种模式：
+ *   none       正常走缓存（默认）
+ *   terms      只重译「源串里含专有名词」的条目（术语表里的词，或含大写字母的英文片段）
+ *   suspicious 只重译「看起来根本没翻」的条目（译文里还留着汉字）—— 用来修机翻漏译
+ *   all        全部重译（改了大模型或整体译法不对时才用；等于重新花一遍钱）
+ */
+export function needsRetranslate(sourceText, mode, glossary = {}, existing = null, locale = '') {
+  if (mode === 'all') return true;
+  if (mode === 'suspicious') return looksUntranslated(existing, locale, glossary);
+  if (mode !== 'terms') return false;
+  for (const term of Object.keys(glossary)) if (String(sourceText).includes(term)) return true;
+  // 含「看起来像品牌名」的拉丁片段：连续 ≥2 个字符且带大写（Telegram / SQLite / X）
+  return /\b[A-Z][A-Za-z0-9.+#-]{1,}\b/.test(String(sourceText));
+}
+
 // ───────────────────────────────────────────── 引擎
 
-async function translateBatchOpenAI({ texts, locale, target }) {
-  const url = `${String(args.url).replace(/\/+$/, '')}/chat/completions`;
+async function translateBatchOpenAI({ texts, locale, target }, provider = {}) {
+  const url = `${String(provider.baseUrl).replace(/\/+$/, '')}/chat/completions`;
   const body = {
-    model: args.model || 'gpt-4o-mini',
+    model: provider.model || args.model || 'gpt-4o-mini',
     temperature: 0,
     messages: [
       {
         role: 'system',
-        content: `You translate UI strings for a desktop app into ${target} (${locale}). Output JSON only: {"t":["...","..."]} with exactly ${texts.length} items, same order. Keep it short like a UI label. Never translate ⟦n⟧ placeholders — copy them exactly.`,
+        content: [
+          `You translate UI strings for a desktop app into ${target} (${locale}).`,
+          'Output JSON only: {"t":["...","..."]} with exactly ' + texts.length + ' items, same order. Keep it short like a UI label.',
+          'Never translate ⟦n⟧ placeholders — copy them exactly.',
+          // 专有名词政策（使用者指定）：维持原文优先；只有约定俗成的本地叫法才替换。
+          // 这条必须写进提示词 —— 术语表只能覆盖列进去的词，盖不到的要靠模型自己守规矩。
+          'PROPER NOUNS: keep person names, group names, brand names, product names and service names in their original form.',
+          'Only replace a proper noun when the target language has a widely established local name for it (e.g. YouTube→유튜브 in Korean, Telegram→Телеграм in Russian, hololive→ホロライブ in Japanese).',
+          'If unsure, keep the original — never invent a transliteration.',
+        ].join(' '),
       },
       { role: 'user', content: JSON.stringify({ t: texts }) },
     ],
   };
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${args.key}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${provider.apiKey}` },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000),
   });
@@ -167,10 +231,40 @@ async function translateBatchMock({ texts, locale }) {
   return texts.map((s) => marker + s);
 }
 
-async function translateBatch(opts) {
-  if (args.engine === 'mock') return translateBatchMock(opts);
-  if (args.engine === 'openai') return translateBatchOpenAI(opts);
+async function translateBatch({ texts, locale, target }) {
+  if (args.engine === 'mock') return translateBatchMock({ texts, locale });
+  if (args.engine === 'app' || args.engine === 'openai') {
+    const p = args.engine === 'app' ? providerFromApp() : { baseUrl: args.url, apiKey: args.key, model: args.model };
+    if (!p?.baseUrl || !p?.apiKey) throw new Error('没有可用的模型档位（界面里配好，或显式给 --url/--key）');
+    return translateBatchOpenAI({ texts, locale, target }, p);
+  }
   throw new Error(`未知引擎: ${args.engine}`);
+}
+
+/**
+ * 从**本机应用配置**里读取模型档位。
+ *
+ * 为什么要有这个引擎：用 `--key` 传密钥会让它出现在命令行与 shell 历史里 ——
+ * 一个「把密钥打进命令行」的翻译脚本本身就是个隐患。走这个引擎时密钥只在本进程内存里，
+ * 而且用的就是你在界面里已经配好的档位（打包版优先，其次是开发树的 config.json）。
+ */
+function providerFromApp() {
+  const candidates = [
+    path.join(ROOT, 'dist/VtuberMonitorLink/app/config.json'),
+    path.join(ROOT, 'config.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const list = cfg?.llm?.providers ?? [];
+      const active = list.find((x) => x.id === cfg.llm.activeId) ?? list[0];
+      if (active?.apiKey) return { baseUrl: active.baseUrl, apiKey: active.apiKey, model: active.model, name: active.name };
+      if (cfg?.llm?.apiKey) return { baseUrl: cfg.llm.baseUrl, apiKey: cfg.llm.apiKey, model: cfg.llm.model, name: '默认' };
+    } catch {
+      /* 试下一个候选 */
+    }
+  }
+  return null;
 }
 
 // ───────────────────────────────────────────── 主流程
@@ -195,7 +289,7 @@ export function humanKeys(locale) {
 
 function readMachine() {
   try {
-    const raw = JSON.parse(fs.readFileSync(OUT_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(args.out || OUT_FILE_DEFAULT, 'utf8'));
     if (raw && typeof raw === 'object') return raw;
   } catch {
     /* 没有就从空开始 */
@@ -204,7 +298,7 @@ function readMachine() {
 }
 
 function writeMachine(all) {
-  fs.writeFileSync(OUT_FILE, JSON.stringify(all, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(args.out || OUT_FILE_DEFAULT, JSON.stringify(all, null, 2) + '\n', 'utf8');
 }
 
 async function main() {
@@ -253,10 +347,11 @@ async function main() {
       const value = zh.get(key);
       if (!value) continue;
       const ck = cacheKey(value, locale);
-      if (cache[ck]) {
+      const existing = cache[ck];
+      if (existing && !needsRetranslate(value, args.bust, glossary, existing, locale)) {
         grand.cached++;
         machine[locale] ??= {};
-        machine[locale][key] = cache[ck];
+        machine[locale][key] = existing;
         continue;
       }
       todo.push({ key, value, ck });
@@ -312,6 +407,9 @@ async function main() {
     });
     await Promise.all(runners);
     saveCache(locale, cache);
+    // 每个语言写完就落盘：一次跑 7000 条要好几分钟，中途出错时不该把已经付过费的成果丢掉。
+    // （缓存也是按语言存的，重跑会自动命中，所以这里只影响 machine.json。）
+    writeMachine(machine);
     log(`  ✓ 新译 ${translated} · 失败 ${failed}`);
     grand.translated += translated;
     grand.failed += failed;
@@ -320,7 +418,7 @@ async function main() {
 
   if (!args.dryRun) {
     writeMachine(machine);
-    log(`\n写入 ${path.relative(ROOT, OUT_FILE)}`);
+    log(`\n写入 ${path.relative(ROOT, args.out || OUT_FILE_DEFAULT)}`);
     log(`机器层是**最低优先级**（人工词条永远压过它），改完跑 npm run i18n:coverage 看效果。`);
   }
   log(`\n合计: 新译 ${grand.translated} · 缓存命中 ${grand.cached} · 失败 ${grand.failed}`);

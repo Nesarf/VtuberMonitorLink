@@ -1439,19 +1439,22 @@ export function I18nProvider({ children }) {
   }, []);
 
   const dict = useMemo(() => {
-    // 层级顺序（后面的压前面的）：
-    //   ① 机器译文（tools/i18n-translate.mjs 产出，最低优先级）
-    //   ② 人工词条（HAND_COMMON / HAND）—— **永远压过机器**，机器翻过一遍不会覆盖人工校对
-    //   ③ 构建期生成（繁体 OpenCC）
-    //   ④ 英文兜底
-    // 机器层单独一层是刻意的：MTool 那类工具的经验是「机翻负责铺量、人工负责正确」，
-    // 两者混在一起就再也分不清哪些需要复核了。
-    let out = { ...(MACHINE[loc.code] ?? {}) };
-    for (const c of usableChain(loc.code)) {
-      const common = HAND_COMMON[c];
-      if (common) out = { ...out, ...common };
-      const d = OVERLAY[c] ?? derived[c] ?? STRINGS[c];
-      if (d) out = { ...out, ...d };
+    // 合并顺序必须是**父 → 子**（所以先 reverse）：子地区的词条要压过父地区。
+    // 之前是正向合并、后写的赢，于是父地区把子地区的区域用词盖掉了 ——
+    // es-MX 自己写的 Monitoreo/Reportes 一直被 es-ES 的 Vigilancia/Informes 覆盖，等于白写。
+    //
+    // 每一级内部优先级（后面的压前面的）：
+    //   机器译文 → 人工通用词条 → 该地区自己的词条
+    // 也就是「机器翻译永远压不过人工」，但**子地区的机器译文能压过父地区的人工词条**
+    // （它更贴近使用者所在地区，这是对的方向）。
+    let out = {};
+    for (const c of [...usableChain(loc.code)].reverse()) {
+      const level = {
+        ...(MACHINE[c] ?? {}),
+        ...(HAND_COMMON[c] ?? {}),
+        ...(OVERLAY[c] ?? derived[c] ?? STRINGS[c] ?? {}),
+      };
+      out = { ...out, ...level };
     }
     // 英文兜底：只补前面都没有的键
     out = { ...STRINGS.en, ...out };

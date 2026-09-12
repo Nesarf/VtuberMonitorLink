@@ -14,7 +14,8 @@ import { notify } from './notify.js';
 import { flushQueue } from './notify.js';
 import { feedByPerson } from './people.js';
 import { runClustering } from './cluster.js';
-import { archiveRun } from './archive.js';
+import { archiveRun, openArchive, peopleSeries } from './archive.js';
+import { detectSilence, silenceSummary } from './silence.js';
 import { tagItems, visionReady } from './vision.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
@@ -49,6 +50,7 @@ export const runState = {
   watchTotal: 0,
   watchDone: 0,
   sampling: null,
+  silence: null,
   itemCount: 0,
   alerts: 0,
   advice: [],
@@ -109,6 +111,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     watchTotal: 0,
     watchDone: 0,
     sampling: null,
+    silence: null,
     itemCount: 0,
     alerts: 0,
     features: null,
@@ -217,7 +220,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
         if (h2.length) it.keywords = [...new Set([...(it.keywords ?? []), ...h2])];
       }
     }
-    const alerts = watchResults.reduce((n, r) => n + (r.events ?? []).filter((e) => e.reasons?.length).length, 0);
+    let alerts = watchResults.reduce((n, r) => n + (r.events ?? []).filter((e) => e.reasons?.length).length, 0);
+    let silenceAlerts = [];
     runState.itemCount = items.length;
     runState.alerts = alerts;
 
@@ -293,6 +297,32 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       }
     } catch (e) {
       log.warn(`纪念日计算失败（不影响报告）/ calendar failed: ${e.message}`);
+    }
+
+    // 静默检测：**「没动静」也是一条情报**。内容告警看不见缺失 ——
+    // 日更的人停更、几个人同时安静、整箱连着几天没动静，这些在旧逻辑里完全不可见。
+    // 判据全部相对个人自己的节奏（见 silence.js），不做固定天数。
+    try {
+      if (cfg?.silence?.enabled !== false && (cfg.people ?? []).length) {
+        const db = openArchive(cfg);
+        const series = peopleSeries(db, { days: Number(cfg?.silence?.basisDays ?? 60) });
+        const sil = detectSilence({ byDay: series.byDay, people: cfg.people, rules: cfg.silence ?? {}, now: new Date() });
+        runState.silence = sil;
+        if (sil.person.length || sil.group.length) {
+          const lines = [];
+          for (const g of sil.group) lines.push(`- ⚠️ **${g.reason}**`);
+          for (const p of sil.person) lines.push(`- ${p.level === 'high' ? '🔴' : '🟡'} ${p.reason}`);
+          markdown = `## 🔇 静默检测（没动静也是情报）\n\n${lines.join('\n')}\n\n${markdown}`;
+          log.warn(silenceSummary(sil));
+          alerts += sil.person.length + sil.group.length;
+          runState.alerts = alerts;
+          silenceAlerts = [...sil.group, ...sil.person];
+        } else {
+          log.info(silenceSummary(sil));
+        }
+      }
+    } catch (e) {
+      log.warn(`静默检测失败（不影响报告）/ silence check failed: ${e.message}`);
     }
 
     // 按「人」关注：把命中关注对象的条目单独成块。使用者心里盯的是人，
@@ -400,6 +430,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       // 取样覆盖：UI 与报告都要如实说「这一轮只看了这些」，
       // 否则使用者会把「这轮没取到样」误读成「那个人没动静」（这两件事完全不同）
       sampling: runState.sampling ?? null,
+      silence: runState.silence ?? null,
     };
 
     // 7) 自检放在**最后**：先抓完、先出报告，最后才只对出异常的来源做诊断
@@ -438,15 +469,23 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // 他的消息就不该被压到早上。
     const followLevel = follow.some((f) => f.level === 'urgent') ? 'urgent' : null;
     const headline =
-      follow.length && followLevel
-        ? `👤 ${follow[0].name} 等 ${follow.length} 位关注对象有新动态`
-        : dueCal.length && dueCal.some((c) => c.days <= 1)
-          ? `🎂 ${dueCal[0].days === 0 ? '今天' : dueCal[0].days === 1 ? '明天' : `${dueCal[0].days} 天后`}：${dueCal[0].name}`
-          : alerts || kwHits.length
-            ? `⚠ 命中 ${alerts + kwHits.length} 条告警`
-            : '运行完成';
+      silenceAlerts.length && silenceAlerts.some((s) => s.kind === 'silence-group' || s.level === 'high')
+        ? `🔇 ${silenceAlerts[0].kind === 'silence-group' ? silenceAlerts[0].agency : silenceAlerts[0].name} 那边安静得反常`
+        : follow.length && followLevel
+          ? `👤 ${follow[0].name} 等 ${follow.length} 位关注对象有新动态`
+          : dueCal.length && dueCal.some((c) => c.days <= 1)
+            ? `🎂 ${dueCal[0].days === 0 ? '今天' : dueCal[0].days === 1 ? '明天' : `${dueCal[0].days} 天后`}：${dueCal[0].name}`
+            : alerts || kwHits.length
+              ? `⚠ 命中 ${alerts + kwHits.length} 条告警`
+              : '运行完成';
     const body = [
       `来源 ${okCount}/${results.length}，情报 ${items.length} 条，监视 ${watchResults.length} 个`,
+      silenceAlerts.length
+        ? `\n【静默检测】\n${silenceAlerts
+            .slice(0, 8)
+            .map((s) => `· ${s.level === 'high' ? '🔴' : '🟡'} ${s.reason}`)
+            .join('\n')}`
+        : '',
       follow.length
         ? `\n【关注对象】\n${follow
             .slice(0, 10)
@@ -466,7 +505,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     ]
       .filter(Boolean)
       .join('\n');
-    await pushNotify(headline, body, followLevel ?? (dueCal.length || alerts || kwHits.length ? 'alert' : 'info'));
+    await pushNotify(headline, body, followLevel ?? (dueCal.length || alerts || kwHits.length || silenceAlerts.length ? 'alert' : 'info'));
     // 静默时段积压的通知：每次运行结束补发一次（明确的时间点，不在投递路径里做竞态）
     try {
       const flushed = await flushQueue(cfg, log);

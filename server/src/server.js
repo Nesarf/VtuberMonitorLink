@@ -62,6 +62,7 @@ import {
   series,
   stats as archiveStats,
 } from './archive.js';
+import { detectSilence, silenceSummary } from './silence.js';
 import {
   appendAudit,
   buildBundle,
@@ -1324,6 +1325,40 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       res.json({ ok: true, ...archiveStats(db), file: path.basename(archivePath(cfg)) });
     } catch (e) {
       res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // ── 静默检测 / silence ────────────────────────────────────────────
+  // 「没动静」也是一条情报：这里把「谁停了、停了多久、是不是整箱一起停」摆出来。
+  // 判据见 silence.js（相对各人自己的节奏），这里只负责取数、算、返回。
+  app.get('/api/silence', (req, res) => {
+    const cfg = getConfig();
+    const days = Math.max(7, Math.min(365, Number(req.query.days ?? cfg?.silence?.basisDays ?? 60)));
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      const series = peopleSeries(db, { days });
+      const result = detectSilence({
+        byDay: series.byDay,
+        people: cfg.people ?? [],
+        rules: cfg.silence ?? {},
+        now: new Date(),
+      });
+      res.json({
+        ok: true,
+        days,
+        people: (cfg.people ?? []).length,
+        ...result,
+        summary: silenceSummary(result),
+      });
+    } catch (e) {
+      res.json({ ok: false, error: e.message, people: (cfg.people ?? []).length, person: [], group: [], checked: 0, skippedNoBaseline: 0 });
     } finally {
       try {
         db?.close();

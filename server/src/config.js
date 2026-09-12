@@ -48,6 +48,9 @@ export const DEFAULT_CONFIG = {
     // 预抓取节流：Reddit 类站点按 IP 限流，主动拉开间隔比连击重试有效
     defaultGapSeconds: 2,
     maxParallel: 3,
+    // 连续失败到第 N 次就把这条来源隔离 M 小时（到点自动再试一次，不是永久拉黑）。
+    // 理由：抓不到的站点每轮都重试 = 白花的时间 + 白白多出来的请求，而请求本身就是足迹。
+    quarantine: { failures: 3, hours: 6 },
     // 每次运行是否顺带检查监视对象 / also run the watch targets
     watchWithRun: true,
     // 某个出口失败时，自动换另一个出口再试一次（来源没显式指定出口时才生效）
@@ -73,6 +76,21 @@ export const DEFAULT_CONFIG = {
     // mihomo / Clash.Meta 的控制接口（用于列节点、切节点、测每个节点到某站的延迟）
     controlUrl: '',
     controlSecret: '',
+  },
+
+  // ── 静默检测 / silence detection ───────────────────────────────────
+  // 「没动静」也是一条情报：内容告警看不见缺失。判据全部相对**个人自己的节奏**
+  // （见 server/src/silence.js），不拍固定天数 —— 日更的人和月更的人不该一个阈值。
+  // 只有在「关注对象」里填了 agency 的人，才会参与箱级（同箱多人同时安静）判断。
+  silence: {
+    enabled: true,
+    sampleDays: 20,
+    minDays: 3,
+    maxDays: 90,
+    factor: 2.5,
+    groupQuietDays: 5,
+    minMembers: 3,
+    basisDays: 60, // 从归档里取多少天的历史来估节奏
   },
 
   // ── 观测模式 / observation mode ────────────────────────────────────

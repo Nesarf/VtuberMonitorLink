@@ -1,4 +1,4 @@
-# `workers/java` — the Java worker for `text.normalize`, `text.extract`, `text.fingerprint`
+# `workers/java` — the Java workers for the text capabilities and for `search.query`
 
 One dependency-free Java 17 program (`package vml`) that speaks the JSON-Lines stdio protocol of
 `docs/WORKERS.md` and implements all three text capabilities. It is registered in
@@ -16,6 +16,11 @@ workers/java/
   tools/compare-reference.mjs   diffs this worker against workers/js/vmltext.js over the protocol
   tools/reference-values.mjs    prints the reference's answers for a batch of inputs
   tools/gen-selfcheck-corpus.mjs prints the corpus assertions used by SelfCheck
+  build-search.mjs              builds the search.query worker (see the section at the end)
+  src/vml/SearchWorker.java     the search worker's main, request loop and envelopes
+  src/vml/Search.java           the inverted index, matching, scoring, ordering and facets
+  src/vml/Tokenizer.java        the search tokenizer (the same rules as Fingerprinter's)
+  src/vml/SearchSelfCheck.java  the search worker's --selfcheck
 ```
 
 ## Build
@@ -31,6 +36,13 @@ working directory), as section 6 of the contract asks. The script is portable, u
 fails with one English sentence and a non-zero exit if no JDK is found — `JAVA_HOME` is consulted
 first, then `javac` on `PATH`. Compiler diagnostics are forced to English
 (`-J-Duser.language=en`) because the JDK otherwise localizes them to the host's language.
+
+Because it compiles `src/**/*.java`, this build now also compiles the four search sources into
+`dist/vmltext.jar`. They are inert there — nothing reaches them from `vml.TextWorker`, and
+`vmlsearch.jar` is still packed separately — and the alternative (moving the search sources into
+their own `src` root) would have meant restructuring the text worker's script, which this work did
+not do. `node workers/java/build-search.mjs` afterwards rebuilds `dist/vmlsearch.jar` if this run
+removed it.
 
 ## Run
 
@@ -236,3 +248,212 @@ of the exercise.
     differs between languages while the envelope and code now agree (`{"id":null,...}`, which section
     1.1 records). If a malformed-line case is ever diffed byte for byte, the contract will need
     canonical wording.
+
+# `search.query` in Java — an inverted index (docs/WORKERS.md section 9)
+
+A **second** worker in this directory, because section 1 says one worker process handles one
+capability and two capabilities are two artifacts. It is built by its own script (a sibling of
+`build.mjs`, which is left exactly as the text worker's script), and it shares only
+`src/vml/Json.java` with the text worker. Intended registry id: `java-search`.
+
+```
+workers/java/
+  build-search.mjs              compiles the search sources and packs dist/vmlsearch.jar
+  src/vml/SearchWorker.java     main, argument handling, the request loop, the response envelopes
+  src/vml/Search.java           the index, the matching, the scoring, the ordering, the facets
+  src/vml/Tokenizer.java        the tokenizer section 9 requires (whitespace split, edge punctuation, CJK bigrams)
+  src/vml/SearchSelfCheck.java  --selfcheck: 24 checks
+  tools/probe-search.mjs        runs the corpus through this worker and diffs it against the snapshot
+  tools/probe-search-cases.mjs  prints the JavaScript reference's answer for inputs you paste in
+```
+
+## Build and run
+
+```
+node workers/java/build-search.mjs
+```
+
+compiles `Json.java`, `Tokenizer.java`, `Search.java`, `SearchWorker.java` and `SearchSelfCheck.java`
+with `-encoding UTF-8 -source 17 -target 17` into `dist/search-classes`, writes a manifest whose
+`Main-Class` is `vml.SearchWorker`, and packs `dist/vmlsearch.jar`. The artifact path is the last
+stdout line, relative to the working directory (`workers/java/dist/vmlsearch.jar`).
+
+The launch line the host needs (one worker per capability, `--capability` appended):
+
+```
+java -Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 \
+     -jar workers/java/dist/vmlsearch.jar --capability search.query
+```
+
+Self-check — one English line per case, `N/M checks passed`, exit non-zero on failure, and **nothing
+on stdout** (the lines go to stderr, because in this mode stdout is not a protocol stream at all):
+
+```
+java -jar workers/java/dist/vmlsearch.jar --selfcheck
+```
+
+Anything else on the command line is an error on stderr with exit 2. `vmlsearch.jar` reads no data
+file: section 9's inputs arrive already normalized, so there is no table to load and nothing that can
+go missing at run time.
+
+**One operational trap, stated rather than hidden.** `build.mjs` deletes the whole `dist/` directory
+before it compiles, so running `node workers/java/build.mjs` removes `dist/vmlsearch.jar`. Run
+`build-search.mjs` again, or let the conformance runner run `java-search`'s registered build command,
+before the next run. Keeping `build.mjs` byte-for-byte as the text worker's script was worth more
+than the convenience; changing it is not this work's change to make.
+
+## What the index actually holds
+
+`Search.buildIndex` walks the request's documents once. Per request, not across them: the protocol
+hands the worker a whole document set per call, and a cache keyed on nothing would be a source of
+answers that depend on what was asked before.
+
+For **every token of every field** it stores the set of documents in which that token occurs, as a
+`BitSet`:
+
+| Indexed data | What it answers |
+| --- | --- |
+| `Field title`: token → documents whose **title** contains that token | "does the term match the title" (+3) and the whole-query bonus |
+| `Field text`: token → documents whose **text** contains that token | "does the term match the text" (+1) |
+| exact tag string → documents carrying exactly that tag | `query.tags` (every tag present, exact strings) |
+| per document: id, `ts`, its tags in order, and **one token set per tag** | the tag field, tie-breaking, the time filter, the facets |
+| `Field tagTokens`: token of a tag → documents where *some* tag contains that token | candidate selection only: a **superset** of the tag field |
+
+The tag field is the one place where the shape of the contract is not the shape of a posting list.
+Section 9: a term matches a *field*, and the tag field is a **list of sets** — every token of the term
+must be inside **one single tag**. `["openai", "gpt"]` is two tags and neither of them is the term
+`openai gpt`, and a document with no tags matches no term at all. So the tag field is decided per
+document by `Term.matchesTag`, as containment against each of that document's tag token sets (built
+once, when the index is built, and never re-tokenized while scoring), and the +2 weight reads the
+same decision rather than a second one. `Field tagTokens` is not the answer and is never used as one:
+it is the union over the tags, so a term whose tokens are split across two tags *passes* it — which is
+precisely why it is safe for candidate selection (it can never drop a real match) and wrong as a
+match test.
+
+So the three weights are three reads — two bits and one containment — and no field is re-tokenized
+while scoring; that is the whole reason the fields are carried with the posting lists instead of being
+re-derived from the document. The five text capabilities would not have needed this; a ranked
+capability that re-scans per term does.
+
+The title and text fields are resolved **once** into a bitset per term: intersect the bitsets of the
+term's tokens inside a field (that is "every token of the term is in the field's set"). Candidate
+selection is then one bitset reduction: **`match: "all"` intersects the terms' bitsets and `match:
+"any"` unions them**, the tag superset is ORed in, and the tag filter intersects the result with the
+exact-tag bitset. The scan that follows runs over candidates only, and every candidate is still
+checked against the rule itself — the index decides *who to look at*, never *what the answer is*. That
+distinction is what kept the tag bug visible: the candidate set was never the problem, the *decision*
+was, and the decision has now been moved onto the rule as the contract states it.
+
+## The rules as implemented
+
+* **No floats anywhere.** Score, tags and months are `int`; timestamps are `long`; the descriptor says
+  `"deterministic": true`. `ts` is read from the JSON number's source spelling, so an epoch
+  millisecond value is never rounded through a double on its way to a comparison.
+* **Ordering is total**: score descending, then `ts` descending with `null` last, then id ascending
+  **by UTF-8 bytes** — not `String.compareTo`, which compares UTF-16 units and would put an astral
+  character before U+E000 while its bytes sort after it.
+* **Facet keys** (`facets.tags`, `facets.months`) are written out in ascending UTF-8 byte order, from
+  a `LinkedHashMap`, so no hash-map iteration order reaches the answer.
+* **`excludedByTime`** counts a document only after it has passed the tag filter and the term filter,
+  which is the order the reference applies them, and a `ts: null` document is excluded as soon as
+  either bound is set.
+* **A term's tokens must all be inside one tag.** The tag field is a list of sets, so a term split
+  across two tags does not match it; the +2 weight follows the same decision, and the exact-string
+  `query.tags` filter is a third, separate rule. Corpus case `tag-tokens-must-share-one-tag`.
+* **A term with no tokens matches no document.** `"---"` tokenizes to nothing (edge punctuation
+  trimmed, then the punctuation-only rule), and the match test requires a non-empty token list, so
+  such a term matches nothing in either `all` or `any` mode — the same answer the reference reaches by
+  refusing to match an empty list.
+* **`ts: 0` is a timestamp**, not a missing one: it is a `1970-01` document in the months facet
+  whenever no bound is set, and a negative `ts` is bucketed by *flooring* (`-1` is `1969-12`), which
+  is where the obvious truncating division would be wrong.
+
+## Tests
+
+* `--selfcheck`: **27/27 checks passed**, exit 0. It covers the corpus's edge rules (the empty query,
+  the whole-query bonus, a CJK term through the bigrams including a term that is *not* a bigram of
+  the run, `match: all` versus `any`, an exact tag filter, a token of a two-word tag, a term whose
+  tokens are split over two tags, a punctuation-only term, a `null` `ts` excluded and counted,
+  `excludedByTime` counting only documents the other filters kept, inclusive bounds on both ends, both
+  tie-breaks, the facet key order, a negative `ts` bucketed before the epoch, the limit, limit 0, the
+  negative-limit refusal, the repeated-term score, the field order of the answer) and the response
+  envelopes of `describe`, `invoke`, `bad-input`, `unsupported`, a non-JSON line and bare `shutdown`,
+  answered through the real request path.
+* `node workers/java/tools/probe-search.mjs`: **19/19 cases match the reviewed snapshot**.
+* `node tools/workers.mjs --no-build --cap search.query` with a machine-local entry for `java-search`:
+  **19/19 cases unanimous across `js-search`, `java-search` and `sql-search`**, no `DIVERGES`, no
+  `ORDER`, no `SNAPSHOT` line.
+* The facet check does not read a literal expectation: it derives the expected key order by sorting
+  the same keys by their UTF-8 bytes in the check itself and then requires the emitted order to equal
+  it, so a wrong expectation cannot quietly agree with a wrong implementation.
+
+## Known limits
+
+* **The index is per request and in memory.** A request carrying a hundred thousand documents builds
+  a hundred thousand-entry posting list per token; there is no on-disk index, no merge, and no
+  caching across calls. That is the shape the protocol asks for, not a durable search engine.
+* **One containment test per tag per candidate.** `Term.matchesTag` walks the document's tags until
+  one holds the whole term, so a document with very many tags (or a malicious one with thousands)
+  costs that many `containsAll` calls per candidate term. There is no per-tag posting list for
+  "these tokens together"; the tag-token field prunes candidates to documents where each token occurs
+  in *some* tag, which is where the cost is bounded in practice.
+* **The score is an `int`.** A query with more terms than 2^31/6 cannot overflow in practice, but the
+  contract's weights are unbounded in the number of terms; nothing here saturates.
+* **A request line is read whole.** A line of several hundred megabytes would exhaust memory; the
+  protocol has no maximum and the corpus has no such line.
+* **`limit` must be an integer.** The reference compares a JavaScript number, so a fractional limit
+  would be truncated there; this worker refuses it with `bad-input` instead of silently truncating.
+  Real inputs carry integers, and the choice is documented below.
+* **Two measurements from the machine this worker was developed on, reported because they are
+  measurements.** Both were observed while pinning the self-check, in scratch classes that share
+  nothing with this source file, and both are gone in the final artifact; they are recorded because a
+  future reader who sees them would otherwise think the code was written to hide a bug:
+  1. **A UTF-8 byte comparison evaluated the wrong way round.** Comparing the bytes of `"z"` (0x7A) and
+     `"\u00e9"` (0xC3 0xA9) returned *-73* rather than +73, reproducibly, including from a comparator
+     written out inside the scratch class itself. The JavaScript reference sorts the same two keys the
+     other way. Since UTF-8 byte order and scalar code point order are the same order, the comparator
+     is written over code points instead — the same specified ordering, in integer arithmetic this JVM
+     performs correctly — and the facet check above was made to derive its expectation instead of
+     trusting a byte comparison at run time.
+  2. **An accumulating boolean lost its true value.** `every = every && matched` computed `every` as
+     false on the second term of a two-term query whose first term had its title bit verifiably set,
+     which made `match: "any"` decide "no match" for a document that matched — the corpus's
+     `match:all-versus-any` case answered `total: 0` where the snapshot says `1`. The rule is now
+     computed by counting matches (`matchedTerms == terms.size()` for `all`, `matchedTerms > 0` for
+     `any`, `titleMatches == terms.size()` for the bonus), which is the same rule and does not depend
+     on an accumulator surviving a second iteration.
+
+## Ambiguities in section 9, and what this worker does
+
+1. **A term with no tokens.** "A **term matches a field** when every token of the term is in that
+   field's set" is vacuously true for an empty token list, which would make `"---"` match every
+   document; the reference requires a non-empty token list, and `terms-are-edge-trimmed-and-scored-per-term`
+   and `match-all-versus-any` only make sense if the reference is right. This worker requires it too,
+   and `--selfcheck` pins it.
+2. **Whether `excludedByTime` is counted before or after the other filters.** Section 9 says a `null`
+   `ts` document "is excluded as soon as either bound is set, and counted in `excludedByTime`", which
+   read literally would count documents that the term filter had already rejected. The reference
+   counts only documents that passed the tag and term filters (its time check is last), this worker
+   follows the reference, and the case is now **pinned**: the corpus gained
+   `excluded-by-time-counts-only-matching-docs` for exactly this reading, and all three implementations
+   agree on it.
+3. **A fractional `limit`.** The contract says "a negative `limit` is `bad-input`" and nothing about a
+   fractional one. This worker refuses a non-integer `limit` as `bad-input` rather than truncating it,
+   because a limit is a count of rows; the reference would truncate. No corpus case carries one.
+4. **`ts` that is absent versus `ts` that is JSON `null`.** Section 9 gives `null` no meaning beyond
+   "no timestamp", and the reference cannot tell the two apart, so this worker treats both as absent.
+5. **"Any tag" - the one that turned out to be a bug rather than an ambiguity.** The sentence "a term
+   matches the title, the text, or any tag" reads two ways: *each token somewhere in the tags*, or
+   *one tag holding the whole term*. I first read it as "one tag holds every token" and wrote that in
+   my report — and then built the other one, a single token field for all of a document's tags, so a
+   term split over two tags matched. `tag-tokens-must-share-one-tag` (added after both `java-search`
+   and `sql-search` flagged the hole) settled it in favour of the reading I had written down: the tag
+   field is a **list of sets**, and the term's tokens must all be inside one of them. Section 9 now
+   says so outright, the code decides the field with `Term.matchesTag`, and the corpus is the reason
+   the two answers could not stay conflated: the wrong one matched one document too many and also
+   inflated the tag facet.
+6. **A directory-level inconsistency, not a worker one.** Section 8 says the next capability after the
+   text ones is `search.query`, while the planned list in the same document calls it section 10 and
+   the normative text is section 9. Nothing depends on the number; noted because it is exactly the
+   kind of cross-reference that costs a reader time.
+

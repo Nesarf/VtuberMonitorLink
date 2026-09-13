@@ -1,7 +1,7 @@
 {
  "capability": "text.normalize",
  "generatedBy": "js-text (workers/js/vmltext.js)",
- "generatedAt": "2026-09-13T19:12:45.880Z",
+ "generatedAt": "2026-09-13T19:57:34.761Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "ascii-passthrough": {

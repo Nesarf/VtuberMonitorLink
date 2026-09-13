@@ -103,7 +103,12 @@ if (sources.length === 0) {
   fail(`no .java sources under ${SRC}`);
 }
 
-fs.rmSync(DIST, { recursive: true, force: true });
+// Clean only what this script writes. `dist/` also holds the search worker's jar now (built by
+// build-search.mjs), and wiping the whole directory here silently deleted it - the harness happened to
+// build java-text first, so it never showed up as a broken run, only as a missing artifact on the next
+// manual build. (Reported by the search implementation's author, fixed here rather than left as a trap.)
+fs.rmSync(CLASSES, { recursive: true, force: true });
+fs.rmSync(JAR, { force: true });
 fs.mkdirSync(CLASSES, { recursive: true });
 
 const compile = run(javac, [

@@ -13,16 +13,43 @@
     {
       "id": "js-text",
       "language": "javascript",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
       "artifact": "workers/js/vmltext.js",
-      "launch": ["node", "workers/js/vmltext.js"],
+      "launch": [
+        "node",
+        "workers/js/vmltext.js"
+      ],
       "notes": "the reference implementation, and a worker like the others: it is diffed against them rather than trusted. No build step."
+    },
+    {
+      "id": "js-search",
+      "language": "javascript",
+      "capabilities": [
+        "search.query"
+      ],
+      "artifact": "workers/js/vmlsearch.js",
+      "launch": [
+        "node",
+        "workers/js/vmlsearch.js"
+      ],
+      "notes": "the reference implementation of search.query (docs/WORKERS.md section 9): integers only, a total ordering, and the same tokenizer as text.fingerprint. No build step."
     },
     {
       "id": "java-text",
       "language": "java",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
-      "build": ["node", "workers/java/build.mjs"],
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/java/build.mjs"
+      ],
       "artifact": "workers/java/dist/vmltext.jar",
       "launch": [
         "java",
@@ -37,41 +64,136 @@
     {
       "id": "cpp-text",
       "language": "cpp",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
-      "build": ["node", "workers/cpp/build.mjs"],
-      "artifact": { "win32": "workers/cpp/dist/vmltext.exe", "default": "workers/cpp/dist/vmltext" },
-      "launch": { "win32": ["workers/cpp/dist/vmltext.exe"], "default": ["workers/cpp/dist/vmltext"] },
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/cpp/build.mjs"
+      ],
+      "artifact": {
+        "win32": "workers/cpp/dist/vmltext.exe",
+        "default": "workers/cpp/dist/vmltext"
+      },
+      "launch": {
+        "win32": [
+          "workers/cpp/dist/vmltext.exe"
+        ],
+        "default": [
+          "workers/cpp/dist/vmltext"
+        ]
+      },
       "notes": "C++17, no third-party libraries, tables embedded at build time"
     },
     {
       "id": "go-text",
       "language": "go",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
-      "build": ["node", "workers/go/build.mjs"],
-      "artifact": { "win32": "workers/go/dist/vmltext.exe", "default": "workers/go/dist/vmltext" },
-      "launch": { "win32": ["workers/go/dist/vmltext.exe"], "default": ["workers/go/dist/vmltext"] },
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/go/build.mjs"
+      ],
+      "artifact": {
+        "win32": "workers/go/dist/vmltext.exe",
+        "default": "workers/go/dist/vmltext"
+      },
+      "launch": {
+        "win32": [
+          "workers/go/dist/vmltext.exe"
+        ],
+        "default": [
+          "workers/go/dist/vmltext"
+        ]
+      },
       "notes": "Go, standard library only"
     },
     {
       "id": "python-text",
       "language": "python",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
-      "build": ["node", "workers/python/build.mjs"],
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/python/build.mjs"
+      ],
       "artifact": "workers/python/vmltext.py",
       "launch": [
-        ["python", "workers/python/vmltext.py"],
-        ["python3", "workers/python/vmltext.py"]
+        [
+          "python",
+          "workers/python/vmltext.py"
+        ],
+        [
+          "python3",
+          "workers/python/vmltext.py"
+        ]
       ],
       "notes": "Python 3.13, standard library only, no build step (build.mjs only checks the interpreter)"
     },
     {
       "id": "pwsh-text",
       "language": "pwsh",
-      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
-      "build": ["node", "workers/pwsh/build.mjs"],
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/pwsh/build.mjs"
+      ],
       "artifact": "workers/pwsh/vmltext.ps1",
-      "launch": ["pwsh", "-NoProfile", "-NoLogo", "-NonInteractive", "-File", "workers/pwsh/vmltext.ps1"],
+      "launch": [
+        "pwsh",
+        "-NoProfile",
+        "-NoLogo",
+        "-NonInteractive",
+        "-File",
+        "workers/pwsh/vmltext.ps1"
+      ],
       "notes": "PowerShell 7, no modules, no compilation (the artifact IS the script); build.mjs only checks the interpreter, the shared tables and the built-in self-check. -NoProfile keeps a user profile out of the protocol stream, -NonInteractive keeps a prompt from becoming a stdout line."
+    },
+    {
+      "id": "java-search",
+      "language": "java",
+      "capabilities": [
+        "search.query"
+      ],
+      "build": [
+        "node",
+        "workers/java/build-search.mjs"
+      ],
+      "artifact": "workers/java/dist/vmlsearch.jar",
+      "launch": [
+        "java",
+        "-Dfile.encoding=UTF-8",
+        "-Dsun.stdout.encoding=UTF-8",
+        "-Dsun.stderr.encoding=UTF-8",
+        "-jar",
+        "workers/java/dist/vmlsearch.jar"
+      ],
+      "notes": "JDK 17, no dependencies, an inverted index (token -> posting list with per-field presence), integers only"
+    },
+    {
+      "id": "sql-search",
+      "language": "sql",
+      "capabilities": [
+        "search.query"
+      ],
+      "artifact": "workers/sql/vmlsearch.mjs",
+      "launch": [
+        "node",
+        "workers/sql/vmlsearch.mjs"
+      ],
+      "notes": "search.query expressed in SQLite through node:sqlite: the filters, the integer score, the ordering and the facets are SQL; no build step, no third-party packages"
     }
   ],
   "_planned": [

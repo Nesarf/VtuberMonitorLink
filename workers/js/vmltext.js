@@ -335,6 +335,11 @@ function tokensOf(text) {
   return out;
 }
 
+// Exported because the search capability is specified to tokenize exactly the way the fingerprint
+// capability does: two tokenizers would be two dialects, and the corpus would spend its time
+// reporting the difference instead of the bugs.
+export { tokensOf };
+
 function fnv1a64(str) {
   let h = FNV_OFFSET;
   for (const byte of Buffer.from(str, 'utf8')) {

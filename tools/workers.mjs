@@ -41,8 +41,17 @@ const FIELD_ORDER = {
   'text.normalize': ['text'],
   'text.extract': ['title', 'text', 'links', 'images'],
   'text.fingerprint': ['simhash', 'tokens', 'shingles'],
+  'search.query': ['hits', 'total', 'facets', 'excludedByTime'],
 };
-const NESTED_ORDER = { links: ['href', 'absolute', 'text'] };
+const NESTED_ORDER = {
+  links: ['href', 'absolute', 'text'],
+  hits: ['id', 'score'],
+};
+/** Facet objects are specified to be emitted with their keys sorted by UTF-8 bytes. */
+const SORTED_KEY_OBJECTS = ['facets.tags', 'facets.months'];
+
+/** An error is a legitimate answer, and only its `code` is comparable: the message is the language's. */
+const errorCanon = (error) => canon({ __error: error?.code ?? 'internal' });
 
 /** Semantic equality across languages: key order must not decide the diff, values must. */
 function canon(value) {
@@ -64,6 +73,14 @@ function keyOrderIssues(capability, output) {
       const g = Object.keys(arr[0]);
       if (g.join(',') !== order.join(',')) issues.push(`${field}[].key order ${g.join(',')} should be ${order.join(',')}`);
     }
+  }
+  for (const path of SORTED_KEY_OBJECTS) {
+    const [outer, inner] = path.split('.');
+    const obj = output?.[outer]?.[inner];
+    if (!obj || typeof obj !== 'object') continue;
+    const keys = Object.keys(obj);
+    const sorted = [...keys].sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')));
+    if (keys.join('\u0000') !== sorted.join('\u0000')) issues.push(`${path} keys must be sorted by UTF-8 bytes (got ${keys.join(',')})`);
   }
   return issues;
 }
@@ -388,12 +405,12 @@ for (const cap of capabilities) {
     const byCanon = new Map();
     for (const id of usable) {
       const cell = perWorker.get(id).perCase.get(c.id);
-      const key = cell.missing ? 'MISSING' : cell.error ? 'ERROR ' + canon(cell.error) : canon(cell.output);
+      const key = cell.missing ? 'MISSING' : cell.error ? errorCanon(cell.error) : canon(cell.output);
       if (!byCanon.has(key)) byCanon.set(key, []);
       byCanon.get(key).push(id);
       for (const issue of cell.issues ?? []) orderProblems.push(`${id}/${c.id}: ${issue}`);
     }
-    const unanimous = byCanon.size === 1 && !byCanon.has('MISSING') && ![...byCanon.keys()].some((k) => k.startsWith('ERROR'));
+    const unanimous = byCanon.size === 1 && !byCanon.has('MISSING');
     if (unanimous) agree++;
     else disagreements.push({ case: c, byCanon });
     if (snapshot && snapshot.cases[c.id] !== undefined) {
@@ -441,9 +458,13 @@ for (const cap of capabilities) {
 if (flag('--update')) {
   fs.mkdirSync(EXPECTED_DIR, { recursive: true });
   for (const cap of capabilities) {
-    const ref = results.get(cap.capability).get('js-text');
+    // The reference for a capability is whichever JavaScript worker implements it: `js-text` for the
+    // three text capabilities, `js-search` for search. A hard-coded id worked until a second
+    // capability existed and then quietly recorded nothing.
+    const refId = [...results.get(cap.capability).keys()].find((id) => id.startsWith('js-'));
+    const ref = refId ? results.get(cap.capability).get(refId) : null;
     if (!ref) {
-      console.error(`cannot update ${cap.capability}: the reference (js-text) did not run`);
+      console.error(`cannot update ${cap.capability}: no JavaScript reference implementation ran`);
       failures++;
       continue;
     }
@@ -451,13 +472,14 @@ if (flag('--update')) {
     for (const c of cap.cases) {
       const cell = ref.perCase.get(c.id);
       if (cell?.output !== undefined) cases[c.id] = cell.output;
+      else if (cell?.error) cases[c.id] = { __error: cell.error.code ?? 'internal' };
     }
     fs.writeFileSync(
       snapshotPath(cap.capability),
       JSON.stringify(
         {
           capability: cap.capability,
-          generatedBy: 'js-text (workers/js/vmltext.js)',
+          generatedBy: `${refId} (${registry.find((w) => w.id === refId)?.artifact ?? 'workers/js'})`,
           generatedAt: new Date().toISOString(),
           note: 'Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.',
           cases,

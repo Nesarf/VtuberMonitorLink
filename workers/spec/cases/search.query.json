@@ -1,0 +1,211 @@
+{
+  "capability": "search.query",
+  "note": "Hand-written inputs for docs/WORKERS.md section 9. The specification was written before any implementation of it existed, because a ranked capability is where several languages can quietly disagree forever: there are no floats anywhere, the ordering is total, and every object whose key order a hash map could decide has a specified order. Documents arrive already normalized (the host composes text.normalize), and a worker must NOT normalize again - the combining-mark cases would then differ.",
+  "cases": [
+    {
+      "id": "empty-query-matches-everything",
+      "note": "a filter-only query is the normal way to browse; every score is 0 and the order is ts descending with null last",
+      "input": {
+        "docs": [
+          { "id": "b", "title": "second", "text": "", "tags": [], "ts": 200 },
+          { "id": "a", "title": "first", "text": "", "tags": [], "ts": null }
+        ],
+        "query": {},
+        "limit": 0
+      }
+    },
+    {
+      "id": "score-title-tag-text-and-bonus",
+      "note": "one term in all three fields plus the whole-query-in-title bonus: 3 + 2 + 1 + 4",
+      "input": {
+        "docs": [{ "id": "a", "title": "openai news", "text": "openai again", "tags": ["openai"], "ts": null }],
+        "query": { "terms": ["openai"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "score-text-only",
+      "note": "the cheapest way to match",
+      "input": {
+        "docs": [{ "id": "a", "title": "unrelated", "text": "mentions openai once", "tags": [], "ts": null }],
+        "query": { "terms": ["openai"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "cjk-term-matches-through-bigrams",
+      "note": "the tokenizer is the one text.fingerprint uses, so a two-character term matches a longer CJK run",
+      "input": {
+        "docs": [{ "id": "a", "title": "已经开播了", "text": "", "tags": [], "ts": null }],
+        "query": { "terms": ["已经"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "multi-token-term-requires-both",
+      "note": "a term whose tokens are two words matches only where both are present",
+      "input": {
+        "docs": [
+          { "id": "both", "title": "openai gpt", "text": "", "tags": [], "ts": null },
+          { "id": "one", "title": "openai only", "text": "", "tags": [], "ts": null }
+        ],
+        "query": { "terms": ["openai gpt"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "match-all-versus-any",
+      "note": "the same corpus under both modes",
+      "input": {
+        "docs": [{ "id": "a", "title": "alpha", "text": "", "tags": [], "ts": null }],
+        "query": { "terms": ["alpha", "beta"], "match": "any" },
+        "limit": 0
+      }
+    },
+    {
+      "id": "tag-filter-is-exact",
+      "note": "tags compare as exact strings; a case difference is a different tag",
+      "input": {
+        "docs": [{ "id": "a", "title": "x", "text": "", "tags": ["Nijisanji"], "ts": null }],
+        "query": { "tags": ["nijisanji"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "time-range-excludes-null-and-counts-it",
+      "note": "a document with no ts is excluded the moment either bound is set, and reported as excludedByTime rather than silently dropped",
+      "input": {
+        "docs": [
+          { "id": "no-ts", "title": "x", "text": "", "tags": [], "ts": null },
+          { "id": "old", "title": "x", "text": "", "tags": [], "ts": 100 },
+          { "id": "new", "title": "x", "text": "", "tags": [], "ts": 300 }
+        ],
+        "query": { "from": 200, "to": 400 },
+        "limit": 0
+      }
+    },
+    {
+      "id": "time-bounds-are-inclusive",
+      "note": "from and to are inclusive bounds on ts",
+      "input": {
+        "docs": [{ "id": "edge", "title": "x", "text": "", "tags": [], "ts": 200 }],
+        "query": { "from": 200, "to": 200 },
+        "limit": 0
+      }
+    },
+    {
+      "id": "ties-break-by-ts-then-id-bytes",
+      "note": "equal scores: ts descending with null last, then id compared as UTF-8 bytes (not locale collation)",
+      "input": {
+        "docs": [
+          { "id": "\u00e9mile", "title": "x", "text": "", "tags": [], "ts": 100 },
+          { "id": "zoe", "title": "x", "text": "", "tags": [], "ts": 100 },
+          { "id": "older", "title": "x", "text": "", "tags": [], "ts": 50 },
+          { "id": "undated", "title": "x", "text": "", "tags": [], "ts": null }
+        ],
+        "query": { "terms": ["x"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "facets-count-the-matching-set",
+      "note": "tag and month facets over everything that matched, before the limit, with keys sorted by UTF-8 bytes",
+      "input": {
+        "docs": [
+          { "id": "a", "title": "x", "text": "", "tags": ["zeta", "alpha"], "ts": 1735689600000 },
+          { "id": "b", "title": "x", "text": "", "tags": ["alpha"], "ts": 1738368000000 },
+          { "id": "c", "title": "x", "text": "", "tags": [], "ts": null }
+        ],
+        "query": { "terms": ["x"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "limit-truncates-hits-not-total",
+      "note": "total counts every match; hits is the truncated page",
+      "input": {
+        "docs": [
+          { "id": "a", "title": "x", "text": "", "tags": [], "ts": 300 },
+          { "id": "b", "title": "x", "text": "", "tags": [], "ts": 200 },
+          { "id": "c", "title": "x", "text": "", "tags": [], "ts": 100 }
+        ],
+        "query": { "terms": ["x"] },
+        "limit": 2
+      }
+    },
+    {
+      "id": "no-documents",
+      "note": "an empty corpus is not an error",
+      "input": { "docs": [], "query": { "terms": ["x"] }, "limit": 0 }
+    },
+    {
+      "id": "negative-limit-is-bad-input",
+      "note": "every implementation must refuse this with code bad-input; the harness compares the code, never the message text",
+      "input": { "docs": [], "query": {}, "limit": -1 }
+    },
+    {
+      "id": "terms-are-edge-trimmed-and-scored-per-term",
+      "note": "edge punctuation in a term goes away with the tokenizer rule, and a repeated term scores twice - deliberate: the host dedupes if it cares",
+      "input": {
+        "docs": [{ "id": "a", "title": "openai", "text": "", "tags": [], "ts": null }],
+        "query": { "terms": ["openai,", "openai"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "tag-tokens-must-share-one-tag",
+      "note": "a term matches a *field*, and the tag field is a list of sets: every token of the term must be inside ONE tag. Both implementations that exist read it this way, and the corpus could not see the difference until this case - a term whose tokens are split across two tags must not match",
+      "input": {
+        "docs": [
+          { "id": "split", "title": "", "text": "", "tags": ["openai", "gpt"], "ts": null },
+          { "id": "together", "title": "", "text": "", "tags": ["openai gpt"], "ts": null }
+        ],
+        "query": { "terms": ["openai gpt"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "excluded-by-time-counts-only-matching-docs",
+      "note": "excludedByTime counts documents that passed the tag and term filters and were then dropped by the range - not every document with a null ts. The clause in section 9 does not say which, and both implementations chose the reference's order; this pins it",
+      "input": {
+        "docs": [
+          { "id": "matches-but-undated", "title": "x", "text": "", "tags": [], "ts": null },
+          { "id": "does-not-match", "title": "y", "text": "", "tags": [], "ts": null },
+          { "id": "matches-and-dated", "title": "x", "text": "", "tags": [], "ts": 300 }
+        ],
+        "query": { "terms": ["x"], "from": 100 },
+        "limit": 0
+      }
+    },
+    {
+      "id": "month-bucket-before-the-epoch",
+      "note": "a negative timestamp is one millisecond before 1970 and belongs to 1969-12, not 1970-01: integer division truncates toward zero while the epoch floors, which is exactly where the obvious SQL is wrong",
+      "input": {
+        "docs": [
+          { "id": "just-before", "title": "x", "text": "", "tags": [], "ts": -1 },
+          { "id": "well-before", "title": "x", "text": "", "tags": [], "ts": -1 }
+        ],
+        "query": { "terms": ["x"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "long-mixed-corpus",
+      "note": "20 documents with mixed scripts, tags and dates, so the ordering rules have to hold together rather than one at a time",
+      "input": {
+        "docs": [
+          { "id": "01", "title": "\u30103d\u62ab\u9732\u3011\u65b0\u8863\u88c5 live", "text": "hololive id member", "tags": ["hololive", "3d"], "ts": 1735689600000 },
+          { "id": "02", "title": "nijisanji new wave", "text": "\u5df2\u7ecf\u5f00\u64ad\u4e86", "tags": ["nijisanji"], "ts": 1735776000000 },
+          { "id": "03", "title": "indie debut", "text": "solo indie streamer", "tags": ["indie"], "ts": null },
+          { "id": "04", "title": "openai gpt", "text": "an llm", "tags": ["llm", "openai"], "ts": 1735862400000 },
+          { "id": "05", "title": "\u5df2\u7ecf\u5f00\u64ad", "text": "\u76f4\u64ad\u4e2d", "tags": ["bilibili"], "ts": 1735948800000 },
+          { "id": "06", "title": "twitch stream", "text": "english vtuber", "tags": ["twitch"], "ts": 1736035200000 },
+          { "id": "07", "title": "youtube premiere", "text": "music video", "tags": ["youtube"], "ts": null },
+          { "id": "08", "title": "3d reveal", "text": "hololive", "tags": ["hololive", "3d"], "ts": 1736121600000 }
+        ],
+        "query": { "terms": ["hololive", "\u5df2\u7ecf"], "match": "any", "tags": [], "from": 1735689600000, "to": 1736121600000 },
+        "limit": 3
+      }
+    }
+  ]
+}

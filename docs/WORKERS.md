@@ -375,9 +375,9 @@ Deliberately not here yet:
   shell implementations depend on interpreters that not every machine has; they live in
   `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]`
   elsewhere rather than failing. A worker that cannot start is not a worker that is wrong.
-- **No capability beyond the three text ones.** The order after this: `search.query` (specified in
-  section 10, which is written down before any implementation exists on purpose), then
-  `fetch.plan`/`fetch.batch` (Go, concurrent, per-egress limits), then the LLM/vision glue (Python).
+- **`search.query` is implemented by three workers now** — the JavaScript reference, a Java inverted
+  index and a SQL one — so what is left in the plan is `fetch.plan`/`fetch.batch` (Go, concurrent,
+  per-egress limits) and then the LLM/vision glue (Python).
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
@@ -426,7 +426,17 @@ Matching:
 - A **term matches a field** when every token of the term is in that field's set. So `已经` matches a
   document whose text contains `已经开播` (through the bigram), and `openai gpt` matches only when both
   are present.
-- A term is **matched by a document** when it matches the title, the text, or any tag.
+- A term is **matched by a document** when it matches the title, the text, or any tag. **The tag field
+  is a list of sets, one per tag**: the term's tokens must all sit inside a *single* tag, so
+  `tags: ["openai", "gpt"]` does **not** match the term `openai gpt` while `tags: ["openai gpt"]` does,
+  and the +2 term score below obeys the same rule. This was written down only after two implementations
+  read it the other way (one unioned the tags into a single token set); the corpus case
+  `tag-tokens-must-share-one-tag` exists because the sentence above did not say it outright.
+- A term with **no tokens at all** (a query of `"---"`) matches no document: "every token is in the
+  set" is vacuously true for an empty token list, which would otherwise match everything.
+- `excludedByTime` counts documents that passed the tag and term filters and were then dropped by the
+  time range — not every document that carries no `ts`. Both implementations chose that order and the
+  corpus case `excluded-by-time-counts-only-matching-docs` pins it.
 - `match: "all"` requires every term to be matched by the document; `"any"` requires one. An empty
   `terms` list matches everything (that is how a filter-only query works).
 - `query.tags` requires every listed tag to be present in the document's tags, compared as exact
@@ -471,7 +481,7 @@ Output:
 
 Planned implementations, in the order they will be attempted: the JavaScript scan (the reference, and
 the project's own `server/src/search.js` semantics adapted to this shape), the **Java inverted index**
-(which is what a JVM brings to this problem), SQLite FTS as the **SQL** implementation (the SQL
+(which is what a JVM brings to this problem), SQLite through `node:sqlite` as the **SQL** implementation (the SQL
 language, not a library: the query *is* the implementation), and then whichever of C++, Go or Python
 wants a turn. When two of them agree on a corpus with no floats and a total ordering, the agreement
 means something.

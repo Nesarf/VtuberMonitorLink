@@ -1,0 +1,324 @@
+{
+ "capability": "search.query",
+ "generatedBy": "js-search (workers/js/vmlsearch.js)",
+ "generatedAt": "2026-09-13T20:28:33.042Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "empty-query-matches-everything": {
+   "hits": [
+    {
+     "id": "b",
+     "score": 0
+    },
+    {
+     "id": "a",
+     "score": 0
+    }
+   ],
+   "total": 2,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 1
+    }
+   },
+   "excludedByTime": 0
+  },
+  "score-title-tag-text-and-bonus": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 10
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {
+     "openai": 1
+    },
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "score-text-only": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 1
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "cjk-term-matches-through-bigrams": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 7
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "multi-token-term-requires-both": {
+   "hits": [
+    {
+     "id": "both",
+     "score": 7
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "match-all-versus-any": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 3
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "tag-filter-is-exact": {
+   "hits": [],
+   "total": 0,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "time-range-excludes-null-and-counts-it": {
+   "hits": [
+    {
+     "id": "new",
+     "score": 0
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 1
+    }
+   },
+   "excludedByTime": 2
+  },
+  "time-bounds-are-inclusive": {
+   "hits": [
+    {
+     "id": "edge",
+     "score": 0
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 1
+    }
+   },
+   "excludedByTime": 0
+  },
+  "ties-break-by-ts-then-id-bytes": {
+   "hits": [
+    {
+     "id": "zoe",
+     "score": 7
+    },
+    {
+     "id": "émile",
+     "score": 7
+    },
+    {
+     "id": "older",
+     "score": 7
+    },
+    {
+     "id": "undated",
+     "score": 7
+    }
+   ],
+   "total": 4,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 3
+    }
+   },
+   "excludedByTime": 0
+  },
+  "facets-count-the-matching-set": {
+   "hits": [
+    {
+     "id": "b",
+     "score": 7
+    },
+    {
+     "id": "a",
+     "score": 7
+    },
+    {
+     "id": "c",
+     "score": 7
+    }
+   ],
+   "total": 3,
+   "facets": {
+    "tags": {
+     "alpha": 2,
+     "zeta": 1
+    },
+    "months": {
+     "2025-01": 1,
+     "2025-02": 1
+    }
+   },
+   "excludedByTime": 0
+  },
+  "limit-truncates-hits-not-total": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 7
+    },
+    {
+     "id": "b",
+     "score": 7
+    }
+   ],
+   "total": 3,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 3
+    }
+   },
+   "excludedByTime": 0
+  },
+  "no-documents": {
+   "hits": [],
+   "total": 0,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "negative-limit-is-bad-input": {
+   "__error": "bad-input"
+  },
+  "terms-are-edge-trimmed-and-scored-per-term": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 10
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "tag-tokens-must-share-one-tag": {
+   "hits": [
+    {
+     "id": "together",
+     "score": 2
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {
+     "openai gpt": 1
+    },
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "excluded-by-time-counts-only-matching-docs": {
+   "hits": [
+    {
+     "id": "matches-and-dated",
+     "score": 7
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1970-01": 1
+    }
+   },
+   "excludedByTime": 1
+  },
+  "month-bucket-before-the-epoch": {
+   "hits": [
+    {
+     "id": "just-before",
+     "score": 7
+    },
+    {
+     "id": "well-before",
+     "score": 7
+    }
+   ],
+   "total": 2,
+   "facets": {
+    "tags": {},
+    "months": {
+     "1969-12": 2
+    }
+   },
+   "excludedByTime": 0
+  },
+  "long-mixed-corpus": {
+   "hits": [
+    {
+     "id": "08",
+     "score": 3
+    },
+    {
+     "id": "05",
+     "score": 3
+    },
+    {
+     "id": "01",
+     "score": 3
+    }
+   ],
+   "total": 4,
+   "facets": {
+    "tags": {
+     "3d": 2,
+     "bilibili": 1,
+     "hololive": 2,
+     "nijisanji": 1
+    },
+    "months": {
+     "2025-01": 4
+    }
+   },
+   "excludedByTime": 0
+  }
+ }
+}

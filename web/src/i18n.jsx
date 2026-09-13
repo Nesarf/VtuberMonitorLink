@@ -1,7 +1,7 @@
 // i18n.jsx — multi-locale strings + regional formatting
 //
 // The two complete dictionaries, zh and en, live here (for historical reasons, 600+ entries each).
-// The other 24 locales live in locales/index.js and hold **only their differences**, falling back
+// The other 25 locales live in locales/index.js and hold **only their differences**, falling back
 // level by level along their chain.
 // Adding a language: append one line to LOCALES + write one dict; missing keys fall back to
 // en-US automatically, so the UI never goes blank.

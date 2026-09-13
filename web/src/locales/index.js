@@ -34,6 +34,12 @@ export const LOCALES = [
   { code: 'zh-TW', name: '臺灣正體', chain: ['zh-TW', 'zh-Hant', 'zh-Hans'], weekStart: 0, lang: 'zh' },
   { code: 'ja-JP', name: '日本語', chain: ['ja-JP', 'en-US'], weekStart: 0 },
   { code: 'ko-KR', name: '한국어', chain: ['ko-KR', 'en-US'], weekStart: 0 },
+  // Indonesian: a new language, not a regional variant of anything, so its chain holds itself plus
+  // the English fallback (same shape as ja-JP / ko-KR). weekStart 0 (Sunday) -- Indonesia follows
+  // the Sunday-first calendar. It needs no plural table: Intl.PluralRules('id') has a single
+  // category (`other`), and the default "prepend the number" of countLabel() is already correct
+  // Indonesian word order (see locales/plurals.js and tools/i18n-plural-test.mjs).
+  { code: 'id-ID', name: 'Bahasa Indonesia', chain: ['id-ID', 'en-US'], weekStart: 0 },
   { code: 'en-US', name: 'English (US)', chain: ['en-US', 'en'], weekStart: 0 },
   { code: 'en-GB', name: 'English (UK)', chain: ['en-GB', 'en-US'], weekStart: 1 },
   { code: 'en-AU', name: 'English (Australia)', chain: ['en-AU', 'en-GB', 'en-US'], weekStart: 1 },

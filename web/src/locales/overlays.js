@@ -52,6 +52,7 @@ export const GB_STEMS = [
 const LATE_KEYS = {
   'ja-JP': { tab_people: 'ピープル', tab_calendar: 'カレンダー' },
   'ko-KR': { tab_people: '관심', tab_calendar: '달력' },
+  'id-ID': { tab_people: 'Orang', tab_calendar: 'Kalender' },
   'es-ES': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'es-419': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'pt-PT': { tab_people: 'Pessoas', tab_calendar: 'Calendário' },
@@ -181,6 +182,106 @@ export const HAND_COMMON = {
       '여기서는 모니터링 대상의 방송 상태를 보여 주고, 여러 방송을 격자로 펼쳐 동시에 볼 수 있습니다' +
       '(빌리빌리 공식 임베드 플레이어를 쓰며, 어떤 중계도 거치지 않고 로그인 정보도 건드리지 않습니다). ' +
       '「연속 재생」은 실제 방송 시작이 아니므로 따로 표시합니다.',
+  },
+  'id-ID': {
+    // The 41 high-visibility entries, written by hand before the machine pass runs: the machine
+    // layer may not override a hand entry (see humanKeys() in tools/i18n-translate.mjs), so these
+    // are both the copy a user sees first and the values the pipeline is not allowed to touch.
+    saveStateIdle: 'Belum ada perubahan',
+    saveStateDirty: 'Ada perubahan yang belum disimpan',
+    cancel: 'Batal',
+    refresh: 'Muat ulang',
+    loading: 'Memuat…',
+    error: 'Galat',
+    yes: 'Ya',
+    no: 'Tidak',
+    enabled: 'Aktif',
+    disabled: 'Nonaktif',
+    date: 'Tanggal',
+    source: 'Sumber',
+    sources: 'Sumber',
+    searchTitle: 'Pencarian informasi',
+    reportsTitle: 'Laporan',
+    eventsTitle: 'Peristiwa gabungan',
+    chartsTitle: 'Grafik tren',
+    shareTitle: 'Bagikan',
+    shareDownload: 'Buat lalu unduh',
+    shareCopy: 'Salin teks',
+    intelTitle: 'Kartu informasi',
+    runTitle: 'Jalankan pengumpulan',
+    done: 'Selesai',
+    failed: 'Gagal',
+    alerts: 'Peringatan',
+    noItems: 'Belum ada informasi',
+    onlyAlerts: 'Hanya peringatan',
+    onlyStarred: 'Hanya berbintang',
+    onlyUnread: 'Hanya belum dibaca',
+    mergeEvents: 'Gabungkan peristiwa kembar',
+    packetLoss: 'Kehilangan paket',
+    save: 'Simpan',
+    saving: 'Menyimpan…',
+    saved: 'Tersimpan',
+    add: 'Tambah',
+    delete: 'Hapus',
+    name: 'Nama',
+    time: 'Waktu',
+    language: 'Bahasa',
+    latency: 'Latensi',
+    // Carried here instead of left to the machine pass, for the reason recorded for Korean above:
+    // this is a long prompt sentence, and a long sentence is exactly where a machine pass leaves the
+    // source language behind. A hand entry always wins, so this one never depends on the model.
+    liveHint:
+      'Mulai siaran adalah intel paling sensitif waktu — lebih layak langsung diketahui ' +
+      'daripada kata kunci mana pun. Di sini ditampilkan status siaran dari objek pemantauan, ' +
+      'dan beberapa ruang siaran bisa langsung disusun menjadi kisi untuk ditonton bersamaan ' +
+      '(memakai pemutar sematan resmi bilibili, tanpa perantara dan tanpa menyentuh status masuk). ' +
+      'Perhatikan bahwa "putar ulang" bukan siaran yang benar-benar mulai, jadi ditandai terpisah.',
+    // ── Corrections to the first machine pass, all of them kept here (never in machine.json,
+    //    which the pipeline regenerates): a hand entry wins over the machine layer.
+    //    Each note quotes the Chinese source string it is about, which is the one case
+    //    docs/ENGLISH-LOGIC.md section 3 allows the `english-logic:allow` marker for: the character
+    //    itself is the subject of the sentence, not a Chinese explanation kept around. The marker is
+    //    per line because the guard reads one `//` line at a time.
+    //
+    // 1. broken count label. The zh source is "{n} 个" and the model returned a bare "{n}" with the english-logic:allow
+    //    noun gone, so the UI rendered "12" on its own where it means "12 cookie". Every other
+    //    locale's machine entry kept a unit (ja "{n} 個" / de "{n} Stück" / ru "{n} шт."). Indonesian english-logic:allow
+    //    has no plural table (one category, `other`), so the number stays prepended and the only
+    //    thing that has to be right here is the noun.
+    cookieCount: '{n} cookie',
+    cookieCountWithSession: '{n} cookie (termasuk SESSDATA)',
+    // 2. Chinese left in the value. The zh source names a follow target in Chinese (盯日箱, a english-logic:allow
+    //    glossary term, so looksUntranslated() strips it before testing and the pipeline cannot see
+    //    it); the English source does not, and the model carried it into the Indonesian sentence.
+    //    A Chinese proper noun sitting inside an Indonesian hint is exactly the "half-translated
+    //    string" the layering rule is for, so the example is replaced with the Latin-script one the
+    //    English copy uses.
+    calHint:
+      'Hitung mundur ulang tahun, hari debut, 3D reveal, dan anniversary. "Hari ini" dihitung ' +
+      'menurut zona waktu yang ditandai di bawah (di Pengaturan bisa diubah ke zona waktu ' +
+      'orangnya, misalnya Asia/Tokyo kalau mengikuti agensi Jepang); ulang tahun 29 Februari pada ' +
+      'tahun bukan kabisat digeser ke 1 Maret dan ditandai, bukan dihitung salah diam-diam.',
+    // 3. An English word left inside an Indonesian sentence. `关注对象` is in the glossary with english-logic:allow
+    //    default "Followed people" -- a Latin term, so the pipeline substitutes it rather than
+    //    translating it, and the model happily embedded the English noun phrase in the middle of
+    //    Indonesian copy (the same shape as the documented "term protection cuts compounds in
+    //    half" pitfall, in the other direction). The glossary is shared with the 24 other locales,
+    //    so the fix belongs here and not in glossary.json.
+    chartsPeople: 'Aktivitas orang yang diikuti',
+    peopleMatched: 'cocok dengan orang yang diikuti',
+    vdbTitle: 'Impor orang yang diikuti dari VDB',
+    groupNoAgency: 'Belum ada orang yang diikuti dengan agensi',
+    // 4. Dropped head verb (`监视对象` = the watch targets): the model wrote "VDBFollowed people" english-logic:allow
+    //    with no space in one case and put the English noun in the modifier slot in the others.
+    watchDigest: 'Ringkasan perubahan pantauan',
+    runWatchOnly: 'Periksa hanya objek pantauan',
+    taskMode_watch: 'Hanya objek pantauan',
+    // 5. Plural where the source is singular (`来源` = one field label), so the form header read english-logic:allow
+    //    "Sources" in the Indonesian table.
+    field_source: 'Sumber',
+    sourcesTitle: 'Sumber',
+    eventsSources: 'sumber',
+    chartsSources: 'Porsi sumber dan peringatan',
   },
   'es-ES': {
     saveStateIdle: 'Sin cambios todavía',
@@ -1089,6 +1190,45 @@ export const HAND = {
     auto: 'تلقائي',
     latency: 'زمن الاستجابة',
     packetLoss: 'فقدان الحزم',
+  },
+  'id-ID': {
+    // Indonesian is an independent language with its own chain (['id-ID','en-US']), so this level
+    // has to exist on its own; nothing here is inherited from another locale.
+    appSub: 'Intelijen VTuber lokal',
+    tab_intel: 'Intel',
+    tab_run: 'Jalankan',
+    tab_sources: 'Sumber',
+    tab_watch: 'Pantau',
+    tab_settings: 'Pengaturan',
+    tab_reports: 'Laporan',
+    tab_live: 'Siaran',
+    tab_search: 'Cari',
+    tab_llm: 'LLM',
+    save: 'Simpan',
+    saving: 'Menyimpan…',
+    saved: 'Tersimpan',
+    saveStateIdle: 'Belum ada perubahan',
+    saveStateDirty: 'Ada perubahan yang belum disimpan',
+    delete: 'Hapus',
+    cancel: 'Batal',
+    add: 'Tambah',
+    refresh: 'Muat ulang',
+    probe: 'Uji koneksi',
+    loading: 'Memuat…',
+    error: 'Galat',
+    yes: 'Ya',
+    no: 'Tidak',
+    enabled: 'Aktif',
+    disabled: 'Nonaktif',
+    name: 'Nama',
+    time: 'Waktu',
+    date: 'Tanggal',
+    language: 'Bahasa',
+    proxy: 'Proksi',
+    direct: 'Koneksi langsung',
+    auto: 'Otomatis',
+    latency: 'Latensi',
+    packetLoss: 'Kehilangan paket',
   },
 };
 

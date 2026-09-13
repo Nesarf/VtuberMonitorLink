@@ -173,8 +173,11 @@ t('inflecting languages cover at least `items` (the core count label)', () => {
   }
 });
 
-t('non-inflecting languages (zh / ja / ko) need no table - prepending the number is already correct', () => {
-  for (const code of ['zh-Hans', 'ja-JP', 'ko-KR']) {
+t('non-inflecting languages (zh / ja / ko / id) need no table - prepending the number is already correct', () => {
+  // id-ID joined this list when the locale was added: Intl.PluralRules('id') resolves to a single
+  // category (`other`), so an Indonesian table could only ever hold one form, and the default
+  // "number in front" of countLabel() is already correct Indonesian word order.
+  for (const code of ['zh-Hans', 'ja-JP', 'ko-KR', 'id-ID']) {
     assert.equal(new Intl.PluralRules(code).resolvedOptions().pluralCategories.join(), 'other');
     assert.ok(!PLURALS[code], `${code} 不该有词形表`);
   }

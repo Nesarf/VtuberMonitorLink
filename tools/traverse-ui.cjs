@@ -297,6 +297,47 @@ async function main() {
       const leftover = [...new Set(rest.match(/[\u4e00-\u9fff]/g) || [])];
       check('no Chinese left in the Korean live page', leftover.length === 0, leftover.length ? 'leftover Han characters: ' + leftover.join('') : '0 leftover Han characters');
     }
+
+    // Indonesian: the locale that was registered but could have been left rendering English. Two
+    // distinct failure modes are covered here, and neither shows up in any offline table:
+    //   1. a locale that is registered in LOCALES but whose machine layer never landed (or whose
+    //      chain is wrong) still "works" - it just silently shows the English fallback;
+    //   2. the machine layer landed, but a Chinese proper noun survived inside an otherwise
+    //      Indonesian sentence (the same class as the Korean incident above; the Indonesian pass
+    //      really did leave a Chinese follow-target name in the calendar hint -- the glossary term is
+    //      stripped before looksUntranslated() tests a value, so no offline tool can see it).
+    await langSel.selectOption('id-ID');
+    await page.waitForTimeout(400);
+    const idTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('html lang follows the Indonesian selection', (await langIsHant.getAttribute('lang')) === 'id-ID', String(await langIsHant.getAttribute('lang')));
+    check('the Indonesian interface is in Indonesian', idTabs.includes('Intel') && idTabs.includes('Jalankan') && idTabs.includes('Pengaturan'), idTabs);
+    // The Indonesian anchor claim: the tab row must not still be the English fallback. Only words
+    // that the English copy spells the same way are excluded, so a locale that fell through to
+    // English fails here instead of passing on shared-looking labels.
+    check('no English fallback left in the Indonesian tab row', !/Run|Settings|Reports|Search|Live/.test(idTabs), idTabs);
+    const idLive = page.locator('nav.tabs button', { hasText: 'Siaran' }).first();
+    if (await idLive.count()) {
+      await idLive.click();
+      await page.waitForTimeout(800);
+      // Same rule as the Korean scan: only the interface's own copy (titles / hints / tabs), not the
+      // room titles that come from bilibili. Proper nouns the glossary keeps verbatim are stripped
+      // first, longest first.
+      const idChrome = [
+        ...(await page.locator('main h2').allInnerTexts()),
+        ...(await page.locator('main .hint').allInnerTexts()),
+        ...(await page.locator('nav.tabs button').allInnerTexts()),
+      ].join('\n');
+      const keep = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
+        .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
+        .map(([k]) => k)
+        .sort((a, b) => b.length - a.length);
+      let restId = idChrome;
+      for (const term of keep) restId = restId.split(term).join('');
+      const idLeftover = [...new Set(restId.match(/[\u4e00-\u9fff]/g) || [])];
+      check('no Chinese left in the Indonesian live page', idLeftover.length === 0, idLeftover.length ? 'leftover Han characters: ' + idLeftover.join('') : '0 leftover Han characters');
+      const idHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
+      check('the Indonesian live hint is Indonesian', idHints.includes('siaran'), idHints.slice(0, 140));
+    }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();

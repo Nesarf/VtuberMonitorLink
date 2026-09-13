@@ -281,23 +281,25 @@
         "workers/csharp/build.mjs"
       ],
       "artifact": {
-        "win32": "workers/csharp/dist/vmltext.exe",
-        "default": "workers/csharp/dist/vmltext"
+        "win32": "workers/csharp/dist/vmltext.dll",
+        "default": "workers/csharp/dist/vmltext.dll"
       },
       "launch": {
         "win32": [
-          "workers/csharp/dist/vmltext.exe"
+          "dotnet",
+          "workers/csharp/dist/vmltext.dll"
         ],
         "default": [
-          "workers/csharp/dist/vmltext"
+          "dotnet",
+          "workers/csharp/dist/vmltext.dll"
         ]
       },
-      "notes": ".NET 8+, BCL only, no packages: the shared tables are read from workers/spec at startup, and every comparison is ordinal or explicitly invariant because .NET's case and trim defaults are culture-aware"
+      "notes": ".NET 8+, BCL only, no packages: the shared tables are read from workers/spec at startup, and every comparison is ordinal or explicitly invariant because .NET's case and trim defaults are culture-aware. Launched through `dotnet <dll>` rather than the published apphost, because on the macOS runner the apphost could not resolve libhostfxr - the runtime is installed, but not where the apphost looks - and the muxer knows where its own runtime is. Linux and Windows work either way; this is the shape every other worker here has, where the interpreter starts the artifact."
     }
   ],
   "_planned": [
     "No new languages for now: this layer is consolidating. The published set is JavaScript, Java, C++, Go, Python, PowerShell and SQL, and every capability has at least two implementations - six for the text capabilities, three for search.query, two each for fetch.plan and llm.parse.",
-    "The machine-local workers (r-text, bash-text, j-text) live in workers/registry.local.json, which is gitignored, because their interpreters are not on every machine and the published registry must never depend on one. Their sources are tracked; only the launch command is local.",
+    "The machine-local workers (r-text, bash-text, perl-text) live in workers/registry.local.json, which is gitignored, because their interpreters are not confirmed to exist on every runner and the published registry must never depend on one. Their sources are tracked; only the launch command is local. Perl is measured present on the ubuntu runner (v5.38.2) and the same question is being asked of the other two by a step in workers.yml; R and the POSIX shell are machine-local until somebody measures them the same way.",
     "A language whose interpreter cannot read a live pipe is not excluded: give its registry entry \"batch\": true and the harness writes every case and then closes stdin (docs/WORKERS.md section 1.3). That is how the J worker is registered, and it is the durable result of the attempt - the worker itself is a documented experiment rather than an implementation this layer counts on.",
     "upc / linux: see the portability section of docs/WORKERS.md"
   ]

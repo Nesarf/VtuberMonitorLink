@@ -510,7 +510,26 @@ for (const id of buildFailures) {
   console.log(`   BUILD FAILED: ${id} - the toolchain is present but the build produced no artifact (see above)`);
 }
 for (const s of summary) console.log(`   ${s.capability.padEnd(18)} ${s.agree}/${s.cases} unanimous, ${s.implementations} implementation(s)`);
+
+// The layer's fallback promise, checked rather than assumed: "fall back to JavaScript when a worker is
+// missing" is only true if every capability has a JavaScript implementation that actually answered. This
+// used to be a hard-coded existence check for the text reference alone, which said nothing about the
+// capabilities added since - and a promise nobody checks is a sentence, not a property.
+const missingReference = [];
+for (const cap of capabilities) {
+  const perWorker = results.get(cap.capability);
+  const jsIds = [...perWorker.keys()].filter((id) => id.startsWith('js-'));
+  const answered = jsIds.some((id) => [...perWorker.get(id).perCase.values()].some((c) => c.output !== undefined));
+  if (!answered) missingReference.push(cap.capability);
+}
+if (missingReference.length) failures++;
+console.log(
+  `   reference : ${
+    missingReference.length
+      ? `MISSING for ${missingReference.join(', ')} - there is nothing to fall back to`
+      : 'every capability has a JavaScript implementation that answered'
+  }`,
+);
 console.log(`   ${failures === 0 ? 'all implementations agree' : failures + ' problem(s) (see above)'}`);
-console.log(`   reference: js-text (${fs.existsSync(path.join(ROOT, 'workers/js/vmltext.js')) ? 'present' : 'MISSING'})`);
 console.log('');
 process.exit(failures === 0 ? 0 : 1);

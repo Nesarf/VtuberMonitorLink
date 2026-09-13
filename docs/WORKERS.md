@@ -323,6 +323,11 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   contract itself gets corrected, by editing the snapshot *and* the reference together, on purpose.
 - `npm run workers -- --list` shows which languages/capabilities are present and which are missing a
   build; a missing worker is reported as `[skip]`, never as a pass, and never as a failure.
+- **The fallback is checked, not assumed.** Every run ends by asserting that each capability has a
+  JavaScript implementation that actually answered, because "fall back to JavaScript when a worker is
+  missing" is only true if there is one - and the check used to be a hard-coded existence test for the
+  text reference alone, which said nothing about the four capabilities added since. A promise nobody
+  checks is a sentence rather than a property.
 - The corpus is a floor, not a ceiling. `npm run workers:diff` (tool: `tools/workers-diff.mjs`) points
   the same diff at **generated** input: a seeded generator per capability produces cases nobody wrote
   down - random markup with quoted `>`, CDATA, astral characters, compatibility forms, schedules with a
@@ -386,8 +391,8 @@ another copy of anything:
 
 ## 8. Where this stands, and what is deliberately not here yet
 
-Landed: the contract, the two shared tables, the reference implementation, 115 corpus cases with a
-reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
+Landed: the contract, the two shared tables, the reference implementation, 148 corpus cases across six
+capabilities with a reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
 (`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, PowerShell and SQL.
 Editor tasks live in `.vscode/tasks.json`, and a CI job builds, diffs and fuzzes the layer on Linux and
 Windows (macOS informationally). The state of agreement is not a number to keep in this paragraph: the

@@ -155,7 +155,11 @@ export function parseAnswer(input) {
   if (slice === null) {
     repaired = true; // nothing parseable at all: the same "it arrived wrong" signal
   } else {
-    if (slice !== raw.trim()) repaired = true;
+    // Rule 9 names the whitespace set explicitly, and it is this capability's own set rather than the
+    // host's trim: JavaScript's trim strips U+00A0 and U+3000 while Java's strips everything below
+    // U+0021, so a trailing no-break space used to decide `repaired` differently per language. The
+    // Python worker found that by reproducing this file instead of the rule.
+    if (slice !== trimAscii(raw)) repaired = true;
     const fixed = dropTrailingCommas(slice);
     if (fixed.removed > 0) repaired = true;
     try {
@@ -268,6 +272,13 @@ const SELFCHECK = [
   ['a comma inside a string is data, not a trailing comma', () => {
     const r = parseAnswer({ raw: '{"summary": "a,}", "tags": []}' });
     return r.repaired === false && r.summary === 'a,}';
+  }],
+  ['the repair check trims the ASCII set, not the host trim', () => {
+    // A no-break space after the object is not ASCII whitespace, so the payload is not the whole
+    // trimmed input and the answer counts as repaired. JavaScript's own trim would call it clean.
+    const nbsp = parseAnswer({ raw: '{"tags": []}\u00A0' });
+    const space = parseAnswer({ raw: '{"tags": []} \n' });
+    return nbsp.repaired === true && space.repaired === false;
   }],
   ['broken JSON yields nothing and says it was repaired', () => {
     const r = parseAnswer({ raw: '{"tags": ["debut"', vocabulary: ['debut'] });

@@ -418,17 +418,20 @@ Deliberately not here yet:
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
-- **Two `llm.parse` gaps that neither the corpus nor the fuzzer can reach**, both found by the second
-  implementation of that capability. Rule 4 says a non-string element is reported as its JSON text with
-  "integers as decimal digits", and no JavaScript implementation can comply past 2^53: the input
-  `9007199254740993` stringifies through a Number and comes back as `9007199254740992`, while the Python
-  worker answers the exact digits. Nothing generates such a value, both behaviours are pinned in that
-  worker's self-check, and the honest repair is a sentence in the rule rather than a custom JSON parser
-  in the reference. The second is the word "trimmed" in rule 9: the reference uses its host's `trim`,
-  which strips U+00A0, U+2000-U+200A, U+2028, U+2029, U+3000 and U+FEFF and yet does *not* strip
-  U+001C-U+001F, so "repaired" is decided by a wider whitespace set than the one rules 4 and 8 define.
-  The Python worker reproduces the reference exactly instead of the rule, which is the right call for a
-  worker and the wrong place for a contract to stay. Both are decisions waiting to be made on purpose.
+- **Two `llm.parse` questions the second implementation raised, and what was decided.** The first was the
+  whitespace set behind rule 9: the rule said only "trimmed", the reference used its host's `trim`, and
+  those are not the same set - the reference strips U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F,
+  U+205F, U+3000 and U+FEFF and does not strip U+001C-U+001F, so a model that ended its answer with a
+  no-break space was `repaired: false` in one language and would have been `repaired: true` in another,
+  with neither of them wrong. The rule now names the capability's own ASCII set; the reference was
+  corrected to match, the Python worker dropped the workaround it had written to reproduce the reference,
+  and the corpus pins both directions. The second was the promise in rule 4 that a non-string element is
+  reported with "integers as decimal digits": no JavaScript implementation can honour that past 2^53,
+  because its parser has already rounded the number before any stringify can happen. The rule now says so
+  and puts such values outside the corpus, rather than asking a language to recover digits it cannot;
+  a worker that answers them exactly is not wrong, the difference is simply not compared. Neither case is
+  reachable by generated input, and both were found by a second implementation disagreeing with the first
+  - which is the argument for having one.
 - **Known open items** in the contract's own rules. Malformed-request error *text* differs per language by
   design, which is why only the code is compared. The
   **removed-element pre-scan ends an opening tag at the first `>`**, so a quoted attribute containing
@@ -686,7 +689,11 @@ Rules, in the order they are applied:
    insignificant whitespace: integers as decimal digits, `true`/`false`/`null` as written, strings in
    their JSON form, arrays and objects compactly with their original key order. Numbers that are not
    integers are outside the corpus on purpose - serializing a float is a formatting decision that each
-   language makes differently, and this capability does not need one. Each tag string is trimmed of
+   language makes differently, and this capability does not need one. An integer beyond 2^53-1 is outside
+   the corpus for a harder reason: a JavaScript implementation parses JSON through a double and cannot
+   recover the digits its own parser has already lost, so the contract does not ask it to, and an
+   implementation that answers the exact digits is not wrong - the difference is simply not compared.
+   Each tag string is trimmed of
    leading and trailing whitespace; an empty tag is dropped with reason `empty`.
 5. **Matching is ASCII case-insensitive and nothing else.** A tag matches a vocabulary entry when the
    two are equal after folding `A`-`Z` to `a`-`z`; the **output uses the vocabulary's spelling**, so a
@@ -707,8 +714,14 @@ Rules, in the order they are applied:
    half produces a lone surrogate, which is not text and cannot be re-encoded. `counts.truncated` is how
    many code points were removed.
 9. **`repaired`** is `true` when anything had to be fixed: a fence was stripped, the payload slice is not
-   the whole trimmed input, or at least one trailing comma was removed. The application uses it as a
-   prompt-quality signal, so it must mean "the answer arrived malformed", not "the answer was parsed".
+   the whole input once the **ASCII whitespace set of rule 4** is trimmed from both ends, or at least one
+   trailing comma was removed. That set is named here on purpose, because "trimmed" alone means the host
+   language's `trim`, and those do not agree: some strip U+00A0, U+3000 and U+FEFF and some do not, and
+   one of them strips everything below U+0021. A capability whose `repaired` flag depends on which
+   runtime asked the question is not a capability, and this one field is the only place where the
+   distinction is observable - the tags and the summary already trim the same set. The application uses
+   the flag as a prompt-quality signal, so it must mean "the answer arrived malformed", not "the answer
+   was parsed".
 10. **`dropped` is sorted** by `value` then by `reason`, each compared as UTF-8 bytes, so the same answer
     produces the same report in every language. `counts` holds integers.
 

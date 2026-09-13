@@ -158,6 +158,16 @@
       "input": { "raw": "{\"tags\": [NaN]}", "vocabulary": ["debut"] }
     },
     {
+      "id": "trailing-nbsp-is-a-repair",
+      "note": "rule 9's whitespace set is the capability's own ASCII set, so a no-break space after the object is a character the model emitted and the answer counts as repaired. The second implementation of this capability is what forced the decision: the JavaScript reference compared against its host's trim, which strips U+00A0, so the same answer was repaired in one language and clean in another and neither was wrong. The contract names the set now",
+      "input": { "raw": "{\"tags\": [\"debut\"]}\u00a0", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "trailing-ascii-space-is-not-a-repair",
+      "note": "the same comparison with whitespace that is in the set: the payload is the whole trimmed input, so nothing had to be fixed",
+      "input": { "raw": "{\"tags\": [\"debut\"]} \n", "vocabulary": ["debut"] }
+    },
+    {
       "id": "bad-input-no-raw",
       "note": "an error answer is comparable through its code",
       "input": { "vocabulary": ["debut"] }

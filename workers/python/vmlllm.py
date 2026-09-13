@@ -92,44 +92,25 @@ def diag(message: str) -> None:
 # vocabulary match that the contract says it is not.
 ASCII_WHITESPACE = " \t\n\r"
 
-# Rule 9: `repaired` is decided by comparing the payload slice with "the whole trimmed input", and
-# the reference implements "trimmed" with JavaScript's `String.prototype.trim`. That is a *wider*
-# set than ASCII_WHITESPACE - it includes U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F,
-# U+205F, U+3000 and U+FEFF - and the difference is observable: an answer whose object is followed
-# by a non-breaking space is `repaired: false` under the reference and would be `repaired: true`
-# under an ASCII-only comparison. The two sets are therefore kept apart here on purpose:
-# ASCII_WHITESPACE trims tags and summaries (rules 4 and 8), JS_TRIM_CHARS decides `repaired`.
-#
-# Python's `str.strip()` is not this set either: it does not strip U+FEFF, and it *does* strip
-# U+001C-U+001F and U+0085, which JavaScript's trim leaves alone - checked against Node rather than
-# assumed, because that difference is the same kind of near-miss as `str.strip()` versus rule 4.
-JS_TRIM_CHARS = (
-    "\t\n\v\f\r "
-    "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-    "\u2028\u2029\u202f\u205f\u3000\ufeff"
-)
-
+# Rule 9: `repaired` compares the payload slice with the whole input after trimming, and section 11 now
+# names the set: the same ASCII whitespace as rules 4 and 8, not the host's trim. This worker used to
+# reproduce JavaScript's `String.prototype.trim` instead - a wider set, which strips U+00A0, U+1680,
+# U+2000-U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF - because the rule said only "trimmed"
+# and the reference was the only thing that defined it. That is precisely the situation a second
+# implementation exists to expose: an answer followed by a no-break space came back `repaired: false` in
+# one language and would have come back `repaired: true` in another, and neither was wrong. The contract
+# decided, the reference was corrected to match it, the corpus pins the decision, and the workaround that
+# lived here is gone.
 _ASCII_UPPER = {cp: cp + 32 for cp in range(0x41, 0x5B)}
 
 
 def trim_ascii(text: str) -> str:
-    """Trim the four ASCII whitespace characters, and nothing else (rules 4 and 8)."""
+    """Trim the four ASCII whitespace characters, and nothing else (rules 4, 8 and 9)."""
     start = 0
     end = len(text)
     while start < end and text[start] in ASCII_WHITESPACE:
         start += 1
     while end > start and text[end - 1] in ASCII_WHITESPACE:
-        end -= 1
-    return text[start:end]
-
-
-def js_trim(text: str) -> str:
-    """Trim what `String.prototype.trim` trims, for the `repaired` comparison of rule 9."""
-    start = 0
-    end = len(text)
-    while start < end and text[start] in JS_TRIM_CHARS:
-        start += 1
-    while end > start and text[end - 1] in JS_TRIM_CHARS:
         end -= 1
     return text[start:end]
 
@@ -411,10 +392,9 @@ def parse_answer(payload) -> dict:
         # is empty and `repaired` says the answer arrived wrong - no partial recovery is attempted.
         repaired = True
     else:
-        # Rule 9: the slice being the whole trimmed input means the answer arrived as the object.
-        # `js_trim` and not `trim_ascii` - the comparison is with the reference's trim, and the
-        # difference is observable for a trailing U+00A0 (see JS_TRIM_CHARS above).
-        repaired = fenced or slice_text != js_trim(raw)
+        # Rule 9: the slice being the whole trimmed input means the answer arrived as the object, and
+        # the trim is this capability's own ASCII set (see the note above trim_ascii).
+        repaired = fenced or slice_text != trim_ascii(raw)
         fixed, comma_repairs = drop_trailing_commas(slice_text)
         if comma_repairs > 0:
             repaired = True
@@ -699,13 +679,15 @@ SELFCHECK_CASES = (
      {"raw": '{"tags": ["debut"]} ', "vocabulary": ["debut"]},
      {"tags": ["debut"], "summary": "", "dropped": [], "repaired": False,
       "counts": {"tags": 1, "dropped": 0, "truncated": 0}}),
-    ("trailing U+00A0 around the object is not a repair either, because the reference trims it",
+    ("trailing U+00A0 around the object is a repair: it is not in the ASCII whitespace set, so the"
+     " payload is not the whole trimmed input. The contract named the set after this implementation and"
+     " the reference disagreed about it - the decision is pinned here and in the corpus",
      {"raw": '{"tags": ["debut"]}\u00a0', "vocabulary": ["debut"]},
-     {"tags": ["debut"], "summary": "", "dropped": [], "repaired": False,
+     {"tags": ["debut"], "summary": "", "dropped": [], "repaired": True,
       "counts": {"tags": 1, "dropped": 0, "truncated": 0}}),
-    ("trailing U+1680 is trimmed by JavaScript's trim, so it is not a repair either",
+    ("trailing U+1680 is a repair for the same reason",
      {"raw": '{"tags": ["debut"]}\u1680', "vocabulary": ["debut"]},
-     {"tags": ["debut"], "summary": "", "dropped": [], "repaired": False,
+     {"tags": ["debut"], "summary": "", "dropped": [], "repaired": True,
       "counts": {"tags": 1, "dropped": 0, "truncated": 0}}),
     ("U+001C after the object is not trimmed by the reference, so the answer counts as repaired",
      {"raw": '{"tags": ["debut"]}\u001c', "vocabulary": ["debut"]},

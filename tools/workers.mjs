@@ -170,6 +170,8 @@ function resolveCommand(cmd) {
   return null;
 }
 
+const buildFailures = [];
+
 function tryBuild(w) {
   if (!w.build) return false;
   process.stdout.write(`   building ${w.id} (${w.build.join(' ')}) ... `);
@@ -177,7 +179,15 @@ function tryBuild(w) {
   const ok = res.status === 0 && workerAvailable(w);
   const tail = String(res.stdout ?? '').trim().split('\n').slice(-2).join(' | ');
   process.stdout.write((ok ? 'ok' : `FAILED (exit ${res.status})`) + (tail ? `  ${tail.slice(0, 120)}` : '') + '\n');
-  if (!ok && res.stderr) process.stdout.write('        ' + String(res.stderr).trim().split('\n').slice(-2).join(' | ').slice(0, 200) + '\n');
+  if (!ok) {
+    if (res.stderr) process.stdout.write('        ' + String(res.stderr).trim().split('\n').slice(-2).join(' | ').slice(0, 200) + '\n');
+    // A build that was attempted and failed is a FAILURE, not a skip. The distinction matters: a
+    // worker whose interpreter is simply not installed is "not applicable on this machine", but a
+    // toolchain that is present and a build that breaks is exactly what this layer exists to catch.
+    // Downgrading it to a skip made a macOS job report success while two of five implementations had
+    // failed to compile - a green light for a real portability bug.
+    buildFailures.push(w.id);
+  }
   return ok;
 }
 
@@ -462,6 +472,10 @@ if (flag('--update')) {
 }
 
 console.log('\n== summary');
+for (const id of buildFailures) {
+  failures++;
+  console.log(`   BUILD FAILED: ${id} - the toolchain is present but the build produced no artifact (see above)`);
+}
 for (const s of summary) console.log(`   ${s.capability.padEnd(18)} ${s.agree}/${s.cases} unanimous, ${s.implementations} implementation(s)`);
 console.log(`   ${failures === 0 ? 'all implementations agree' : failures + ' problem(s) (see above)'}`);
 console.log(`   reference: js-text (${fs.existsSync(path.join(ROOT, 'workers/js/vmltext.js')) ? 'present' : 'MISSING'})`);

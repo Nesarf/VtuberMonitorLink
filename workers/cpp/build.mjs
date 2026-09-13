@@ -270,11 +270,34 @@ function main() {
       );
     }
   } else {
-    args = ['-std=c++17', '-O2', '-static-libgcc', '-static-libstdc++', '-Wall', '-Wextra', '-o', ARTIFACT, ...sources];
-    out(`[cc]   ${compiler.label}: ${command} ${args.join(' ')}`);
-    const result = spawnSync(command, args, { stdio: 'inherit' });
-    if (result.error) fail(`failed to run ${command}: ${result.error.message}`);
-    if (result.status !== 0) fail(`${compiler.label} failed with exit code ${result.status}`);
+    // Two attempts, because "-static-libgcc -static-libstdc++" are GNU flags and clang rejects them -
+    // including the clang that answers to the name `g++` on macOS, which is why detecting the compiler
+    // by its name is not enough. Attempt one gives a self-contained artifact where that is possible;
+    // attempt two is the honest fallback, and it says so rather than failing the build. The macOS CI
+    // run is what found this: the build reported `g++ 21.0.0` and then "unsupported option
+    // '-static-libgcc'", and the job still went green because a build failure used to be downgraded to
+    // a skip (that half is fixed in tools/workers.mjs).
+    const common = ['-std=c++17', '-O2', '-Wall', '-Wextra'];
+    const tail = ['-o', ARTIFACT, ...sources];
+    const attempts = [
+      ['-static-libgcc', '-static-libstdc++'],
+      [],
+    ];
+    let built = false;
+    for (const extra of attempts) {
+      const args = [...common, ...extra, ...tail];
+      out(`[cc]   ${compiler.label}: ${command} ${args.join(' ')}`);
+      const result = spawnSync(command, args, { stdio: 'inherit' });
+      if (result.error) fail(`failed to run ${command}: ${result.error.message}`);
+      if (result.status === 0 && fs.existsSync(ARTIFACT)) {
+        if (!extra.length) out('[cc]   note: built without the static link flags (this compiler does not have them)');
+        built = true;
+        break;
+      }
+      if (extra.length) out(`[cc]   ${compiler.label} rejected the static link flags; retrying without them`);
+      else fail(`${compiler.label} failed with exit code ${result.status}`);
+    }
+    if (!built) fail(`${compiler.label} produced no artifact`);
   }
 
   if (!fs.existsSync(ARTIFACT)) fail(`the compiler reported success but ${ARTIFACT} does not exist`);

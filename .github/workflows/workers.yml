@@ -51,6 +51,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Go is present on the Linux and Windows runners but not on the macOS one, which is how the
+      # first run of this job found out: the macOS job reported go-text as "no hint directories" and
+      # the harness treated it as a skip. Installing it makes the three platforms comparable, which is
+      # the entire point of the matrix.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go/go.mod
+          cache: false
+
       # No `npm ci`: the harness and the reference implementation use Node's standard library only,
       # and a dependency-free layer that proves it on every push is worth more than a cache.
       - name: Build every implementation that can be built here, then diff the corpus

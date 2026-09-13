@@ -352,8 +352,10 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   memory rather than politeness: a JVM build, a .NET build and a C++ build running together spend more of
   the machine on compilers than the whole layer would ever use, and the symptom on a smaller developer
   machine is indistinguishable from a worker that has hung. The fuzzer is sequential for the same reason.
-  A machine that is short of memory should also keep its other work off the CPU while a build runs: the
-  layer is cheap at run time and expensive at build time, and the two should not be confused.
+  Measured on this project's development machine, and worth stating as the shape of the problem rather than
+  as a number about one computer: one heavy step runs at full speed, and every additional concurrent one
+  takes away **more than its share** - two at once are slower than the same two run one after the other. So
+  the cheap way to be fast here is sequence, and the expensive way is parallelism.
 - `--build-only` compiles everything that is missing and stops; `--cap` and `--only` narrow a run;
   `--update` re-records the snapshot from the reference.
 - The primary verdict is the **cross-implementation diff**, not "matches the reference": the tool

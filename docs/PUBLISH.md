@@ -65,6 +65,15 @@ drag the zip in -> Publish.
 
 ## Suggested self-check before publishing
 
+**One heavy step at a time.** Every command below is heavy in a different way - `workers` compiles Java,
+C++ and Go and then runs eight interpreters, `release` builds a portable package and drives a browser,
+`verify:fast` runs twenty-odd test scripts - and on a machine that is also running anything else, the cost
+of a second concurrent one is not additive. Measured on the development machine for this project: a single
+heavy command runs at full speed, and each additional concurrent one takes away more than its share, to the
+point where two together are slower than the same two run one after the other. So run them in sequence, and
+when a step exists in a narrow form, prefer it (`node tools/workers.mjs --cap <name> --only <worker>`)
+while anything else is running.
+
 ```powershell
 npm run sanitize-check   # any hard-coded paths / secrets / private names in the source
 npm run brand            # VML naming consistency: full name for outward-facing artifacts, VML for internal identifiers

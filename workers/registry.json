@@ -270,9 +270,9 @@
     }
   ],
   "_planned": [
-    "bash-text, zsh-text - the remaining shell implementations (byte-oriented where the shell is)",
-    "r-text, j-text, apl-text - the array languages, once the toolchains are installed and recorded",
-    "sql-text - SQLite FTS as the SQL implementation of search.query, later",
+    "No new languages for now: this layer is consolidating. The published set is JavaScript, Java, C++, Go, Python, PowerShell and SQL, and every capability has at least two implementations - six for the text capabilities, three for search.query, two each for fetch.plan and llm.parse.",
+    "The machine-local workers (r-text, bash-text, j-text) live in workers/registry.local.json, which is gitignored, because their interpreters are not on every machine and the published registry must never depend on one. Their sources are tracked; only the launch command is local.",
+    "A language whose interpreter cannot read a live pipe is not excluded: give its registry entry \"batch\": true and the harness writes every case and then closes stdin (docs/WORKERS.md section 1.3). That is how the J worker is registered, and it is the durable result of the attempt - the worker itself is a documented experiment rather than an implementation this layer counts on.",
     "upc / linux: see the portability section of docs/WORKERS.md"
   ]
 }

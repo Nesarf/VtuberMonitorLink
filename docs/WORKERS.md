@@ -425,7 +425,7 @@ another copy of anything:
 
 ## 8. Where this stands, and what is deliberately not here yet
 
-Landed: the contract, the two shared tables, the reference implementation, 150 corpus cases across six
+Landed: the contract, the two shared tables, the reference implementation, 152 corpus cases across six
 capabilities with a reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
 (`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, PowerShell and SQL.
 Editor tasks live in `.vscode/tasks.json`, and a CI job builds, diffs and fuzzes the layer on Linux and

@@ -213,11 +213,24 @@ _NAME_STOP = frozenset(" \t\n\r\f/>")
 _NAME_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:")
 _ENTITY_NAME_WINDOW = 12
 
+# Marks a fragment that is already character data (a CDATA body) in the link and title buffers, so
+# that nothing decodes an entity or reads a tag inside it: the walk never did, and neither may the
+# cleaner.
+_LITERAL_MARK = "\x00L"
+
+# Placeholder for a hidden CDATA body. It carries the body index and cannot be confused with, or
+# split by, a tag scan, an entity or the words the remover looks for.
+_CDATA_TOKEN = "\x00CDATA%d\x00"
+
 
 def _tag_end(text: str, i: int) -> int:
-    """Index of the `>` that ends the tag starting at `i`, or -1 for an unclosed tag.
+    """Index of the `>` that ends the tag starting at `i`, or -1 when there is none.
 
-    Inside a tag, `'` and `"` delimit attribute values, and a `>` inside them does not end it.
+    Inside a tag, `'` and `"` delimit attribute values, so a `>` inside them is ordinary text and does
+    not end the tag. A `<` inside a tag is ordinary text as well: section 3's "`<` starts a tag only
+    when followed by `[A-Za-z/!]`" is a rule about where a tag may *begin*, not a rule that a tag in
+    progress ends early, so `</p</A>text</p>` is one tag ending at the first `>` after its attribute
+    text. An unterminated attribute value (a quote with no partner) runs to the end of the input.
     """
     j = i
     n = len(text)
@@ -226,7 +239,7 @@ def _tag_end(text: str, i: int) -> int:
         if ch == '"' or ch == "'":
             k = text.find(ch, j + 1)
             if k < 0:
-                return -1
+                return -1         # an unterminated attribute value runs to the end of the input
             j = k + 1
             continue
         if ch == ">":
@@ -363,12 +376,117 @@ def _is_absolute_href(href: str) -> bool:
     return False
 
 
-def clean(text: str, trim: bool) -> str:
-    """Drop tags and decode entities in an already-processed fragment (link text, title).
+def _hide_cdata(html: str, bodies: list) -> str:
+    """Pass 1: replace each CDATA body with an opaque placeholder and keep the body.
 
-    `trim` is the caller's decision, not this function's: the contract says extract never normalizes,
-    so the title is kept verbatim (only tags dropped and entities decoded), while a link's text is
-    trimmed of the padding around the `<a>` element.
+    The contract's word is "hide", and hiding is observable: the walk must not read tags or entities
+    inside a CDATA body, while the body still goes away with a removed element that contains it.
+    An unclosed section keeps its text to the end of the input, the same principle as a removed
+    element without its closing tag.
+    """
+    out = []
+    i = 0
+    n = len(html)
+    while i < n:
+        if html.startswith("<![CDATA[", i):
+            end = html.find("]]>", i + 9)
+            body = html[i + 9:] if end < 0 else html[i + 9:end]
+            out.append(_CDATA_TOKEN % len(bodies))
+            bodies.append(body)
+            i = n if end < 0 else end + 3
+            continue
+        out.append(html[i])
+        i += 1
+    return "".join(out)
+
+
+def _strip_comments_and_doctypes(text: str) -> str:
+    """Pass 2: remove `<!-- ... -->` (or an unclosed comment to end of input) and `<!DOCTYPE ...>`."""
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("<!--", i):
+            end = text.find("-->", i + 4)
+            i = n if end < 0 else end + 3
+            continue
+        if text.startswith("<!", i) and text[i:i + 9].lower() == "<!doctype":
+            end = text.find(">", i)
+            i = n if end < 0 else end + 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def _remove_listed_elements(text: str) -> str:
+    """Pass 3: remove the six listed elements with their content, on the raw remaining text."""
+    for name in sorted(REMOVED_ELEMENTS):
+        out = []
+        i = 0
+        n = len(text)
+        while i < n:
+            if text[i] == "<" and text[i + 1:i + 2] != "/":
+                j = i + 1
+                k = j
+                while k < n and text[k] in _NAME_CHARS or (k < n and text[k] == "-"):
+                    k += 1
+                if text[j:k].lower() == name and (k >= n or text[k] in " \t\n\r\f/>"):
+                    end = _tag_end(text, i)
+                    if end < 0:
+                        i = n          # not a complete opening tag: nothing to remove
+                        continue
+                    close_at = _find_close(text, end + 1, name)
+                    if close_at < 0:
+                        i = n          # a missing closing tag means "to end of input"
+                        continue
+                    close_end = _tag_end(text, close_at)
+                    i = n if close_end < 0 else close_end + 1
+                    continue
+            out.append(text[i])
+            i += 1
+        text = "".join(out)
+    return text
+
+
+def _find_close(text: str, start: int, name: str) -> int:
+    """Index of `</name` at or after `start`, respecting quotes, or -1."""
+    i = start
+    n = len(text)
+    needle = "</" + name
+    while i < n:
+        at = text.find(needle, i)
+        if at < 0:
+            return -1
+        after = at + len(needle)
+        if after >= n or text[after] in " \t\n\r\f/>":
+            return at
+        i = after
+    return -1
+
+
+def _clean_pieces(pieces) -> str:
+    """Clean collected fragments for `links[].text` and `title`.
+
+    A fragment carried as character data (a CDATA body) is already exactly the text the contract
+    wants, so it is passed through untouched: decoding an entity or reading a tag inside it would undo
+    the whole point of hiding it before the removal passes.
+    """
+    out = []
+    for piece in pieces:
+        if piece.startswith(_LITERAL_MARK):
+            out.append(piece[len(_LITERAL_MARK):])
+        else:
+            out.append(clean(piece))
+    return "".join(out)
+
+
+def clean(text: str) -> str:
+    """Drop tags and decode entities in a collected fragment (link text, title).
+
+    Nothing is trimmed or collapsed: the contract's rule 4 says a link's text "obeys exactly the same
+    rules as the main text", and the main text keeps its newlines, so a block tag inside a link
+    contributes a newline here too.
     """
     out = []
     i = 0
@@ -377,7 +495,7 @@ def clean(text: str, trim: bool) -> str:
         ch = text[i]
         if ch == "<":
             nxt = text[i + 1] if i + 1 < n else ""
-            if nxt and (nxt.isascii() and (nxt.isalpha() or nxt == "/")):
+            if nxt and nxt.isascii() and (nxt.isalpha() or nxt == "/"):
                 end = _tag_end(text, i)
                 if end < 0:
                     break
@@ -394,15 +512,27 @@ def clean(text: str, trim: bool) -> str:
                 continue
         out.append(ch)
         i += 1
-    joined = "".join(out)
-    return joined.strip() if trim else joined
+    return "".join(out)
 
 
 def extract(html: str, base_url):
     """Steps 1-8 of section 3. `baseUrl` is accepted and deliberately ignored (no URL resolution).
 
+    The contract's observable pass order is: hide every CDATA body, remove comments and doctypes,
+    remove the listed elements with their content, and only then walk what is left (steps 3 to 7).
+    The order is observable, not cosmetic: hiding CDATA first is what keeps a `<script>` inside a
+    CDATA body as text, while a CDATA section inside a removed element still goes with the element.
+
     Returns the fields in the order the contract lists them.
     """
+    hidden = []
+    chunk = _hide_cdata(html, hidden)             # 1: hide CDATA bodies
+    chunk = _strip_comments_and_doctypes(chunk)   # 2: comments and doctypes
+    chunk = _remove_listed_elements(chunk)        # 3: listed elements with their content
+
+    # 4: walk what is left. A hidden CDATA body is opaque here: the walk can neither read markup
+    # inside it nor decode an entity there. It is put back at the very end, once no rule can mistake
+    # it for markup, which is also what makes a CDATA body inside an anchor part of the link's text.
     out = []
     links = []
     anchor_text = []
@@ -412,8 +542,6 @@ def extract(html: str, base_url):
     title_open = False
     title_seen = False
     images = 0
-    i = 0
-    n = len(html)
 
     def emit(value: str) -> None:
         if not value:
@@ -428,94 +556,70 @@ def extract(html: str, base_url):
         if inside_anchor:
             anchor_text.append(value)
 
+    i = 0
+    n = len(chunk)
     while i < n:
-        ch = html[i]
+        ch = chunk[i]
 
         if ch == "<":
-            nxt = html[i + 1] if i + 1 < n else ""
+            nxt = chunk[i + 1] if i + 1 < n else ""
             if not nxt or not nxt.isascii() or not (nxt.isalpha() or nxt == "/" or nxt == "!"):
                 # `<` not followed by [A-Za-z/!] is literal text.
                 emit(ch)
                 i += 1
                 continue
 
-            if nxt == "!":
-                if html.startswith("<!--", i):
-                    end = html.find("-->", i + 4)
-                    i = n if end < 0 else end + 3
-                    continue
-                if html.startswith("<![CDATA[", i):
-                    end = html.find("]]>", i + 9)
-                    inner = html[i + 9:] if end < 0 else html[i + 9:end]
-                    emit(inner)  # CDATA keeps its inner text, verbatim
-                    i = n if end < 0 else end + 3
-                    continue
-                end = _tag_end(html, i)
-                if end < 0:
-                    break
-                raw = html[i + 1:end]
-                if raw.lower().startswith("!doctype"):
-                    i = end + 1
-                    continue
-                i = end + 1  # any other declaration is dropped as a tag
-                continue
-
-            closing = nxt == "/"
-            end = _tag_end(html, i)
+            end = _tag_end(chunk, i)
             if end < 0:
-                break  # an unclosed tag at end of input is dropped as a tag
-            raw = html[i + 1:end]
+                # The tag never closed, either because the input ended inside it or because a `<`
+                # that starts another tag took over. Either way it is dropped including its name
+                # characters, the way a browser's eof-in-tag handling drops it, so it contributes no
+                # newline, no link and no image, and nothing after it is walked either.
+                break
+            raw = chunk[i + 1:end]
+            closing = nxt == "/"
             name = _tag_name(raw, closing)
+            i = end + 1
 
-            if not closing and name in REMOVED_ELEMENTS:
-                # Step 1: remove the element with its content; a missing closing tag means
-                # "to end of input".
-                close_at = html.find("</" + name, end + 1)
-                i = n if close_at < 0 else close_at
-                if close_at >= 0:
-                    close_end = _tag_end(html, close_at)
-                    i = n if close_end < 0 else close_end + 1
+            if name == "title":
+                if not closing and not title_seen:
+                    title_seen = True
+                    title_open = True
+                elif closing and title_open:
+                    title_open = False
                 continue
 
             if not closing and name == "img":
                 images += 1
 
-            if not closing and name == "title" and not title_seen:
-                title_seen = True
-                title_open = True
-
-            if not closing and name == "a":
-                if anchor_open is not None:
-                    # Nested anchors follow the browser: opening an <a> while one is open closes the
-                    # outer one, which is reported with the text it collected, and the inner one
-                    # becomes the current anchor.
-                    anchor_open["text"] = clean("".join(anchor_text), trim=True)
+            if name == "a":
+                if not closing:
+                    if anchor_open is not None:
+                        # Nesting: a browser closes the open anchor and starts the new one, so the
+                        # outer link is reported with the text it had collected.
+                        anchor_open["text"] = "".join(anchor_text)
+                        links.append(anchor_open)
+                    anchor_text = []
+                    inside_anchor = True
+                    href = _attr_value(raw, "href")
+                    anchor_open = {
+                        "href": href or "",
+                        "absolute": _is_absolute_href(href or ""),
+                        "text": "",
+                    }
+                elif anchor_open is not None:
+                    anchor_open["text"] = "".join(anchor_text)
                     links.append(anchor_open)
-                anchor_text = []
-                inside_anchor = True
-                href = _attr_value(raw, "href")
-                anchor_open = {
-                    "href": href or "",
-                    "absolute": _is_absolute_href(href or ""),
-                    "text": "",
-                }
-            elif closing and name == "a" and anchor_open is not None:
-                anchor_open["text"] = clean("".join(anchor_text), trim=True)
-                links.append(anchor_open)
-                anchor_open = None
-                inside_anchor = False
-
-            if closing and name == "title" and title_open:
-                title_open = False
+                    anchor_open = None
+                    inside_anchor = False
+                continue
 
             if name in NEWLINE_ELEMENTS:
                 emit("\n")
-
-            i = end + 1
             continue
 
         if ch == "&":
-            got = _emit_entity(html, i)
+            got = _emit_entity(chunk, i)
             if got is not None:
                 emit(got[0])
                 i = got[1]
@@ -530,15 +634,20 @@ def extract(html: str, base_url):
     if anchor_open is not None:
         # An anchor still open at the end of input is reported with the text it collected, rather
         # than dropped (section 3 step 4).
-        anchor_open["text"] = clean("".join(anchor_text), trim=True)
+        anchor_open["text"] = "".join(anchor_text)
         links.append(anchor_open)
 
-    title = clean("".join(title_out), trim=False)
+    def restore(value: str) -> str:
+        """Put the hidden CDATA bodies back; they are text, not markup, and are not walked."""
+        for index, body in enumerate(hidden):
+            value = value.replace(_CDATA_TOKEN % index, body)
+        return value
 
     return {
-        "title": title,
-        "text": "".join(out),
-        "links": links,
+        "title": restore("".join(title_out)),
+        "text": restore("".join(out)),
+        "links": [{"href": link["href"], "absolute": link["absolute"],
+                   "text": restore(link["text"])} for link in links],
         "images": images,
     }
 
@@ -1003,3 +1112,4 @@ if __name__ == "__main__":
         sys.exit(main(sys.argv[1:]))
     except BrokenPipeError:
         sys.exit(0)
+

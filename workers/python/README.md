@@ -113,22 +113,47 @@ escapes. Key order is the order the contract lists fields in (`dict` preserves i
 `python workers/python/vmltext.py --selfcheck` → `32/32 checks passed`, exit 0.
 
 `node tools/workers.mjs --no-build --published-only` → `python-text` agrees with the reviewed
-snapshots on **31/31 text.extract, 16/16 text.fingerprint, 20/20 text.normalize**. The single
-divergence reported in that run is `go-text` on `cdata-inside-removed-element`; `python-text` is in the
-largest agreeing group on every case of every capability.
+snapshots on **31/31 text.extract, 16/16 text.fingerprint, 22/22 text.normalize**, and the run reports
+"all implementations agree".
 
 A 156-input differential run against the JavaScript reference (inputs beyond the corpus, covering
 unclosed tags, entity edge cases, nesting, CDATA, zero-width characters, full-width ASCII, CJK, kana,
-Hangul, Cyrillic, Arabic and punctuation-only tokens) is now **156/156 identical**. The four
-differences that run originally reported — CDATA re-parsing, unclosed CDATA, `<p` at end of input and a
-`<title>` inside an `<a>` — were fixed in the reference and are now pinned in the corpus, which is the
-one contribution of this worker to the layer that a corpus alone could not have produced.
+Hangul, Cyrillic, Arabic and punctuation-only tokens) was **156/156 identical** at the point the four
+differences it had reported — CDATA re-parsing, unclosed CDATA, `<p` at end of input and a `<title>`
+inside an `<a>` — were fixed in the reference and pinned in the corpus.
 
-Additional evidence gathered for this worker: 67/67 corpus inputs produce byte-identical stdout bytes
+**Seeded fuzz differential (`tools/workers-diff.mjs --n 60 --cap text.extract`)**: seeds 7, 11 and 23
+all report **60/60 generated cases unanimous across six implementations** and "no divergence found",
+with 360 repeat answers per seed identical when the same questions are asked again in the opposite
+order.
+
+Getting there required fixing three real defects in this worker that the hand-written corpus could not
+see, all of them in `text.extract`:
+
+1. **The link's text was trimmed.** Rule 4 says a link's text "obeys exactly the same rules as the main
+   text", and the main text keeps its newlines, so a link containing a block element keeps the newline
+   that element contributes. The cleaner now trims nothing and collapses nothing.
+2. **Removal ran during the walk instead of as the contract's ordered pre-pass.** Section 3 states the
+   observable order: hide every CDATA body, remove comments and doctypes, remove the listed elements
+   with their content, and only then walk what is left. In `<p t<style>...</style>` a single-pass walk
+   reads the `<style>` as attribute text, so the element survived and its CSS leaked into the text. The
+   three passes now run first, on the raw text.
+3. **A tag scan stopped at an inner `<`.** "`<` starts a tag only when followed by `[A-Za-z/!]`" is a
+   rule about where a tag may *begin*, not a rule that a tag in progress ends early. Scanning a tag to
+   the first unquoted `>` is what makes `</p</A>text</p>` a single tag, `<p t<p` a tag that never closes
+   (so nothing after it is walked), and `<p t<style>` a tag at all.
+
+The CDATA design is the reference's, and it is what makes the ordered passes work end to end: each body
+is replaced by a sentinel that no rule can match or split, the walk treats it as opaque (no markup
+inside it, no entity inside it), and the bodies are put back at the very end. That is why a CDATA body
+inside an anchor becomes part of the link's text, while a `<script>` inside a CDATA body survives and a
+CDATA section inside a `<script>` still goes with the element.
+
+Additional evidence gathered for this worker: 69/69 corpus inputs produce byte-identical stdout bytes
 across three fresh processes; every stdout line parses as JSON; no `CR` byte appears in protocol output
 (so the stream is LF-only on Windows); malformed command lines exit 2 with empty stdout; FNV-1a matches
 the published 64-bit vectors (`0xcbf29ce484222325`, `a` → `0xaf63dc4c8601ec8c`,
-`foobar` → `0x85944171f73967e8`); and all 20 normalize corpus cases are idempotent.
+`foobar` → `0x85944171f73967e8`); and all 22 normalize corpus cases are idempotent.
 
 ## Known limits and divergences
 
@@ -157,3 +182,178 @@ the published 64-bit vectors (`0xcbf29ce484222325`, `a` → `0xaf63dc4c8601ec8c`
 6. **The tables are read at startup from `workers/spec/`.** If those files change, this worker's
    answers change with them, with no rebuild — which is the intent of the shared-table decision, but
    worth knowing when diffing a run that spans a table edit.
+
+---
+
+# Python worker for `llm.parse` (`vmlllm.py`)
+
+The Python implementation of the fourth capability, `llm.parse`, specified by `docs/WORKERS.md`
+section 11: the **believing half** of the LLM glue. Asking a model — HTTP, retries, a key, a budget —
+is I/O and stays in the application; turning the answer into a small, checked structure and saying
+what had to be thrown away is pure text work, and that is the part several languages get subtly and
+silently different. This is a second worker in this directory rather than three more capabilities
+added to `vmltext.py`, for the same reason `workers/js` has one file per capability and Java has a
+second build script: one worker process implements one capability, and a contract section is a unit
+of work.
+
+- **Artifact:** `workers/python/vmlllm.py` (the source file *is* the artifact — see "No build step")
+- **Launch:** `python workers/python/vmlllm.py --capability llm.parse`
+- **Capabilities:** `llm.parse` (one process, one capability)
+- **Worker id:** `python-llm`
+
+## How to run
+
+```bash
+# from the repository root
+python workers/python/vmlllm.py --capability llm.parse    # stdio JSON-Lines protocol
+python workers/python/vmlllm.py --selfcheck                # 46 built-in checks, no protocol traffic
+node   workers/python/build-llm.mjs                        # interpreter check; prints the artifact path
+node   tools/workers.mjs --published-only --only python-llm --no-build
+node   tools/workers-diff.mjs --cap llm.parse --n 200 --seed 7
+```
+
+The protocol, the encoding rules, the error-code rule, the one-argument command line and the exit
+codes are exactly those of the section above. `build-llm.mjs` exists because `build.mjs` checks
+`vmltext.py`: a build script that validated the wrong artifact would report this worker as `[skip]`
+or as a pass for reasons that belong to another file. `build-llm.mjs` checks `vmlllm.py --selfcheck`
+and nothing else.
+
+## Strategy
+
+**The contract's sets, not the runtime's defaults.** Five rules of section 11 are traps in Python
+specifically, because the obvious call is one that almost agrees:
+
+- `ASCII_WHITESPACE = " \t\n\r"` trims tags (rule 4) and summaries (rule 8). `str.strip()` is **not**
+  this function: it strips the whole Unicode whitespace property, so a tag of `U+00A0` followed by
+  `debut` would become a vocabulary match that the contract says it is not. `U+3000` is the same trap
+  with a wider space, and the corpus pins both by name (`nbsp-is-not-whitespace`).
+- `fold_ascii` maps `A`–`Z` with `str.translate` and nothing else. `str.lower()` is **not** this
+  function: it folds the Kelvin sign `U+212A` to `k` and `U+0130` to `i` + `U+0307`, either of which
+  returns a tag the application never defined (`ascii-folding-only`, `turkish-i-is-not-a-locale-question`).
+- `parse_payload` calls `json.loads(..., parse_constant=_reject_constant)`. `json.loads` accepts the
+  bare tokens `NaN`, `Infinity` and `-Infinity` by default, which are not JSON; raising in the hook
+  turns them into a parse failure with no payload, which is what rule 3 asks for (`not-really-json`).
+  `strict=True` (the default) already rejects an unescaped control character inside a string — the
+  other half of "JSON here means RFC 8259" (`unescaped-control-character-in-a-string`).
+- Truncation uses `len()` and slicing on a Python `str`, which is already counted in code points, so
+  an astral character is one unit and `counts.truncated` is code points removed. A bytes- or
+  UTF-16-based implementation cuts an emoji in half here (`truncation-never-splits-an-emoji`).
+- Order is part of the answer: the output dict is built as `tags`, `summary`, `dropped`, `repaired`,
+  `counts`; every `dropped[]` element is built as `value`, `reason`; and the report is sorted with
+  `key=(utf8(value), utf8(reason))` — the UTF-8 byte comparison rule 10 asks for, written as an
+  explicit encoding rather than left to Python's default string order.
+
+**`repaired` uses a second whitespace set on purpose.** Rule 9 compares the slice with "the whole
+trimmed input", and the reference implements "trimmed" with JavaScript's `String.prototype.trim`,
+which is *wider* than the ASCII set: it also strips `U+00A0`, `U+1680`, `U+2000`–`U+200A`, `U+2028`,
+`U+2029`, `U+202F`, `U+205F`, `U+3000` and `U+FEFF`. The two sets are kept apart as
+`ASCII_WHITESPACE` (rules 4 and 8) and `JS_TRIM_CHARS` (rule 9), because the difference is
+observable: an answer whose object is followed by a non-breaking space, an en quad or an ogham space
+is `repaired: false` under the reference. The reference also does *not* trim `U+001C`–`U+001F` or
+`U+0085` — measured against Node rather than assumed, because that is the same near-miss as
+`str.strip()` — so a trailing `U+001C` is `repaired: true` there and here. Both directions are pinned
+in the self-check. One footnote about the reference's own code, because it decides an answer:
+JavaScript's `WHITESPACE.includes(c)` test in that file compares UTF-16 **code units**, so the low
+surrogate half of an astral character would look like whitespace to it. No astral character is
+whitespace, so the only way to reach that is a raw answer containing a lone surrogate, which is not
+encodable and which rule 3 refuses as input anyway; this worker compares whole characters, so the
+`repaired` flag is identical everywhere the case is reachable. **And the two-set split above is a
+reference-shaped inconsistency in the contract, not a bug in this worker;** the honest fix is
+chapter-wide agreement on one whitespace set for `repaired`, and that is a contract decision rather
+than an implementation one.
+
+**The number path.** Rule 4 keeps non-integer numbers out of the capability on purpose ("serializing a
+float is a formatting decision that each language makes differently"), and the corpus carries none.
+Integers go through `_json_number_text`, which writes decimal digits; `-0` is normalised to `0`
+because `JSON.stringify(-0)` is `0` (JavaScript has one zero, Python keeps the sign). `true`/`false`
+are handled before the integer branch, because `isinstance(True, int)` is true in Python and would
+otherwise be reported as `1` — the same class of runtime default as the other four.
+
+## JSON shape
+
+The same choice as `vmltext.py`: `json.dumps(payload, ensure_ascii=False, separators=(",", ":"))`,
+written as explicit UTF-8 bytes with one LF per protocol line, so every byte of the answer is the same
+on Windows and on Linux.
+
+- response envelope: `id`, `ok`, then `output` **or** `error`
+- `llm.parse` → `tags`, `summary`, `dropped`, `repaired`, `counts`; each `dropped[]` → `value`, `reason`
+- `counts` → `tags`, `dropped`, `truncated`
+- `describe` → `id`, `ok`, `worker`; `worker` → `protocol`, `capability`, `language`, `impl`,
+  `runtime`, `deterministic` (`impl` is `scan-and-check`)
+
+## What `--selfcheck` pins
+
+46 checks, all of them edges rather than happy paths:
+
+- `str.strip()` versus the ASCII set: a tag padded with `U+00A0` or `U+3000` is *not* trimmed into a
+  match; a tag padded with tab/newline *is*; a summary padded with `U+00A0` keeps it; a trailing
+  `U+00A0` around the object is not a repair, a trailing `U+001C` or `U+0085` is one.
+- `str.lower()` versus ASCII folding: the Kelvin sign and the dotted capital I match nothing; the
+  vocabulary's own spelling comes back for `DEBUT`, and the first spelling wins when a vocabulary
+  lists the same word twice.
+- `json.loads` leniency: a bare `NaN`, a bare `Infinity`/`-Infinity` and an unescaped control
+  character inside a string each yield no payload and `repaired: true`, with no partial recovery.
+- Code points: two emoji and two letters truncated to three keeps two emoji and one letter;
+  `maxSummaryChars: 2` over `ab` plus an emoji never emits half a character; a paired surrogate
+  escape decodes to the astral character it encodes.
+- The one repair: a trailing comma in an object and in an array is dropped; a comma inside a string —
+  including one followed by `}` or `]` — is data and is not touched; a string `tags` field
+  contributes nothing and is not split; an array is not the payload.
+- Order: the output field order, the `dropped[]` key order, the report sorted by `value` then
+  `reason` as UTF-8 bytes, and the envelope and descriptor key orders.
+- Every `bad-input` rule (missing `raw`, a non-string `raw`, a negative limit, a non-integer limit, a
+  boolean `maxTags`, a vocabulary that is not an array, a vocabulary entry that is not a string), and
+  `unsupported` for another capability.
+
+## Evidence
+
+- `python workers/python/vmlllm.py --selfcheck` → `46/46 checks passed`, exit 0.
+- `node workers/python/build-llm.mjs` → prints the interpreter, the self-check summary and
+  `workers/python/vmlllm.py` as its last stdout line, exit 0 (with forward slashes, so the line is the
+  same on every platform).
+- `node tools/workers.mjs --published-only` → `llm.parse 34/34 cases unanimous across 2
+  implementation(s)` (`js-llm`, `python-llm`); the whole published run ends `all implementations
+  agree`, exit 0. The narrower `--only python-llm` run prints the same `34/34` line but **exits 1**:
+  `--only` filters the JavaScript reference out of the run, and the runner's closing check — "every
+  capability has a JavaScript implementation that answered" — then correctly reports `reference :
+  MISSING for …` for all six capabilities. That is the check doing its job, not a verdict on this
+  worker; the unfiltered run above is the one that decides.
+- `node tools/workers-diff.mjs --cap llm.parse --n 200 --seed 7`, `--seed 11` and `--n 600 --seed 3`
+  → `200/200`, `200/200` and `600/600 generated cases unanimous across 2 implementations`, with
+  `400`, `400` and `1200 repeat answer(s) identical when asked again in the opposite order`, and
+  `no divergence found` in all three, exit 0.
+- `python workers/python/_llm_probe.py` (a scratch differ, covered by the `workers/*/_*` convention
+  for machine-local probes) asks both implementations over the real protocol for 89 hand-picked
+  adversarial inputs — the whitespace sets in both directions, the folding, bare `NaN`/`Infinity`,
+  `1e999`, unescaped control characters, an unbalanced `{{`, `{a}{b}`, a comma before `}`, a
+  comma-before-bracket inside a string, astral tags, every non-string element kind, and the whole
+  bad-input set — and reports `89/89 inputs identical`.
+
+## Known limits and divergences
+
+1. **A JSON integer larger than 2^53 is reported with its own digits here and rounded by the
+   reference.** For `{"tags": [9007199254740993]}` this worker answers `9007199254740993`;
+   `workers/js/vmlllm.js` answers `9007199254740992`, because the value has already been rounded to a
+   JavaScript `Number` before the report is built. Rule 4 says "integers as decimal digits", which is
+   what this worker does. Nothing in the corpus or the fuzzer produces such a value, the difference is
+   confined to `dropped[].value` for a non-string element, and it is pinned by a self-check case so a
+   future corpus case has to make the choice explicitly instead of meeting it as a surprise.
+2. **Non-integer numbers are outside the capability and outside the corpus** (rule 4), so
+   `_json_number_text` does not promise `JSON.stringify`'s float formatting. Where it was measured the
+   two agree (`-1.5e-3` → `-0.0015`, `1e21` → `1e+21`); `1e999` is the interesting one and they do
+   not: the reference answers `null`, because `JSON.stringify(Infinity)` is `"null"`, while this
+   worker answers `Infinity`. No implementation may depend on either.
+3. **A lone surrogate escape is not text and the two languages disagree about it.** For an input
+   whose raw field is `{"tags": ["` + `\uD83D` + `debut"]}` (written, inside the raw answer, as a
+   JSON escape naming a high surrogate on its own), the reference reports one `U+FFFD` where this
+   worker reports three: Python applies JSON's own escape decoding and Node decodes a lone surrogate
+   at the UTF-8 boundary. The transport is UTF-8, which cannot carry a lone surrogate, so a host
+   cannot put this input on the wire — the case is reachable only by calling the function directly,
+   and no language can be asked to agree about text that cannot be encoded.
+4. **Performance** is not a goal: the payload scan, the comma repair and the JSON text builder are
+   per-code-point Python loops, which is fast enough for a model answer and is not optimised for
+   throughput.
+5. **`--selfcheck` exercises `handle` as well as the capability**, so the envelopes and the capability
+   guard are checked in the same run; protocol mode still answers exactly one capability per process,
+   as section 1 requires.
+

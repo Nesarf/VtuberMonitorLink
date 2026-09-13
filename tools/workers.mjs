@@ -559,6 +559,22 @@ if (onlyFilter) {
     }`,
   );
 }
+// Two more promises that were kept by habit rather than by construction, and habit is how a claim goes
+// quietly false: every capability has a **reviewed snapshot**, and every capability is **named in the
+// contract document**. A capability without a snapshot has no agreed answer to compare against, so its
+// corpus proves nothing but self-consistency; a capability the document does not mention is one nobody
+// can implement without reading somebody's code. Both are cheap to check and neither was checked.
+const CONTRACT_DOC = path.join(ROOT, 'docs', 'WORKERS.md');
+const contractText = fs.existsSync(CONTRACT_DOC) ? fs.readFileSync(CONTRACT_DOC, 'utf8') : '';
+const undocumented = [];
+for (const cap of capabilities) {
+  if (!contractText.includes(cap.capability)) undocumented.push(`${cap.capability} is not named in docs/WORKERS.md`);
+  if (!loadSnapshot(cap.capability)) undocumented.push(`${cap.capability} has no reviewed snapshot`);
+}
+if (undocumented.length) failures++;
+console.log(
+  `   contract   : ${undocumented.length ? undocumented.join('; ') : `${capabilities.length} ${capabilities.length === 1 ? 'capability' : 'capabilities'}, each named in the contract and each with a reviewed snapshot`}`,
+);
 console.log(`   ${failures === 0 ? 'all implementations agree' : failures + ' problem(s) (see above)'}`);
 console.log('');
 process.exit(failures === 0 ? 0 : 1);

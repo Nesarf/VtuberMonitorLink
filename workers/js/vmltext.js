@@ -506,6 +506,16 @@ function main() {
         process.stdout.write(JSON.stringify({ id: req.id ?? null, ok: true, worker: describeWith(capability) }) + '\n');
         continue;
       }
+      // The contract says a worker answers `unsupported` when it is asked for a capability it was not
+      // launched for. This file ignored that field for as long as nobody asked: every corpus case
+      // arrives with the matching capability, so nothing could see it, and what the reference actually
+      // did was run the capability it had been launched with and report whatever went wrong inside
+      // that - a wiring mistake dressed up as a bad request. The C# worker's mismatch probe surfaced
+      // it, and `tools/workers.mjs` now asks every implementation this question on every run.
+      if (req.capability && req.capability !== capability) {
+        process.stdout.write(JSON.stringify({ id: req.id ?? null, ok: false, error: { code: 'unsupported', message: `this worker implements ${capability}` } }) + '\n');
+        continue;
+      }
       if (req.op !== 'invoke') {
         process.stdout.write(JSON.stringify({ id: req.id ?? null, ok: false, error: { code: 'unsupported', message: `unknown op ${req.op}` } }) + '\n');
         continue;

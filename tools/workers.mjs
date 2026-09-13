@@ -125,10 +125,16 @@ function applyOverlay(base) {
 }
 const registry = applyOverlay(baseRegistry);
 
-const capabilities = fs
+// Every capability in the corpus, before `--cap` narrows the run, because the mismatch probe needs to
+// name one this worker was *not* launched for. Using the narrowed list for that made the probe disable
+// itself silently under `--cap`: there was no other name to ask for, so it asked nothing and reported
+// the all-clear line, which is worse than not having the check at all.
+const allCapabilities = fs
   .readdirSync(CASES_DIR)
   .filter((f) => f.endsWith('.json'))
-  .map((f) => JSON.parse(fs.readFileSync(path.join(CASES_DIR, f), 'utf8')))
+  .map((f) => JSON.parse(fs.readFileSync(path.join(CASES_DIR, f), 'utf8')));
+
+const capabilities = allCapabilities
   .filter((c) => !value('--cap') || c.capability === value('--cap'));
 
 /**
@@ -215,7 +221,7 @@ function tryBuild(w) {
 }
 
 /** Ask one worker for a descriptor and then for every case, over the real protocol. */
-function runWorker(w, capability, cases) {
+function runWorker(w, capability, cases, probeCapability) {
   return new Promise((resolve) => {
     const launch = launchFor(w);
     const child = spawn(launch[0], [...launch.slice(1), '--capability', capability], {
@@ -290,12 +296,20 @@ function runWorker(w, capability, cases) {
         if (msg.id === 'describe') descriptor = msg;
         else if (msg.id !== null && msg.id !== undefined) answers.set(msg.id, msg);
       }
-      if (answers.size >= cases.length) finish();
+      if (answers.size >= cases.length + (probeCapability ? 1 : 0)) finish();
     });
 
     child.stdin.write(JSON.stringify({ id: 'describe', op: 'describe' }) + '\n');
     for (const c of cases) {
       child.stdin.write(JSON.stringify({ id: c.id, op: 'invoke', capability, input: c.input }) + '\n');
+    }
+    // One extra request, asking this worker for a capability it was not launched for. The contract says
+    // that answers `unsupported` and keeps the worker alive, and nothing else in this runner could see
+    // whether an implementation does: every corpus case is sent with the matching capability, so the
+    // reference implementation ignored the field for as long as nobody looked. Found by the C# worker,
+    // which checked it because the contract sentence was in its brief.
+    if (probeCapability) {
+      child.stdin.write(JSON.stringify({ id: '__mismatch', op: 'invoke', capability: probeCapability, input: {} }) + '\n');
     }
     // A batch worker is one whose interpreter cannot read a live pipe: it sees everything at once and
     // answers when stdin closes. Section 1.3 explains the language that forced this - J, where reading
@@ -371,7 +385,10 @@ for (const cap of capabilities) {
       skipped.push(`${w.id}/${cap.capability} (interpreter not on this machine: ${launchArgv ? launchArgv[0] : w.launch[0]})`);
       continue;
     }
-    const r = await runWorker(w, cap.capability, cap.cases);
+    // One capability other than this one, for the mismatch probe - from the full corpus list, not the
+    // narrowed one, or `--cap` would leave the probe with nothing to ask for.
+    const probeCapability = allCapabilities.map((c) => c.capability).find((name) => name !== cap.capability) ?? null;
+    const r = await runWorker(w, cap.capability, cap.cases, probeCapability);
     const perCase = new Map();
     const issues = [];
     if (!r.descriptor) issues.push('no describe answer');
@@ -387,7 +404,13 @@ for (const cap of capabilities) {
       }
       perCase.set(c.id, { output: a.output, issues: keyOrderIssues(cap.capability, a.output) });
     }
-    results.get(cap.capability).set(w.id, { perCase, issues, descriptor: r.descriptor, stderrTail: r.stderrTail });
+    results.get(cap.capability).set(w.id, {
+      perCase,
+      issues,
+      descriptor: r.descriptor,
+      stderrTail: r.stderrTail,
+      mismatch: { asked: probeCapability, answer: r.answers.get('__mismatch') ?? null },
+    });
   }
 }
 
@@ -465,6 +488,29 @@ for (const cap of capabilities) {
     if (!silent || unusable.includes(id)) continue;
     console.log(`   note       : ${id} answered nothing for ${silent}/${cap.cases.length} case(s)${w.stderrTail ? '; worker stderr tail: ' + w.stderrTail.slice(0, 220) : ' (and said nothing on stderr)'}`);
   }
+  // The capability-mismatch probe. The contract says a worker answers `unsupported` when it is asked
+  // for a capability it was not launched for, and no corpus case can ask that question, because every
+  // case is sent with the matching capability - which is how the reference implementation came to
+  // ignore the field for as long as nobody looked. It was found by the C# worker, whose brief quoted
+  // the sentence, and it is checked here rather than in a comment.
+  const mismatchProblems = [];
+  for (const id of active) {
+    const { mismatch } = perWorker.get(id);
+    if (!mismatch?.asked) continue;
+    const answer = mismatch.answer;
+    if (!answer) mismatchProblems.push(`${id} said nothing`);
+    else if (answer.ok === false && answer.error?.code === 'unsupported') continue;
+    else if (answer.ok === false) mismatchProblems.push(`${id} answered ${answer.error?.code}, not unsupported`);
+    else mismatchProblems.push(`${id} answered an output`);
+  }
+  if (mismatchProblems.length) failures++;
+  console.log(
+    `   mismatch   : ${
+      mismatchProblems.length
+        ? `a capability it was not launched for: ${mismatchProblems.join('; ')}`
+        : `every implementation refuses a capability it was not launched for (${active.length} asked)`
+    }`,
+  );
   for (const d of disagreements) {
     failures++;
     console.log(`   DIVERGES   : ${d.case.id}  (${d.case.note ?? ''})`);

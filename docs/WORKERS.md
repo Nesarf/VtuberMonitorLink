@@ -369,6 +369,13 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   contract itself gets corrected, by editing the snapshot *and* the reference together, on purpose.
 - `npm run workers -- --list` shows which languages/capabilities are present and which are missing a
   build; a missing worker is reported as `[skip]`, never as a pass, and never as a failure.
+- **The mismatch is asked about, not assumed.** Every worker is sent one request for a capability it was
+  not launched for, and the contract says the answer is `unsupported` with the worker still alive. No
+  corpus case can ask that question, because every case arrives with the matching capability - which is
+  how the reference implementation came to ignore the field entirely and answer with whatever went wrong
+  inside the capability it *was* launched with. The C# worker found it by quoting the sentence, the probe
+  found a second implementation with the same hole on its first run, and both now answer `unsupported`
+  like the other five.
 - **The fallback is checked, not assumed.** Every run ends by asserting that each capability has a
   JavaScript implementation that actually answered, because "fall back to JavaScript when a worker is
   missing" is only true if there is one - and the check used to be a hard-coded existence test for the

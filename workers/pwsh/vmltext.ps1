@@ -1032,6 +1032,15 @@ function Invoke-RequestLine {
     if ($op -is [string] -and $op -ceq 'invoke') {
         $invokeInput = $null
         foreach ($prop in $request.psobject.Properties) { if ($prop.Name -ceq 'input') { $invokeInput = $prop.Value } }
+        # The contract says a worker answers `unsupported` when it is asked for a capability it was not
+        # launched for. This worker used to run whatever it had been launched with and report whatever
+        # went wrong inside that - a wiring mistake dressed up as a bad request. Found by the mismatch
+        # probe in tools/workers.mjs, which asks every worker for a capability it does not implement.
+        foreach ($prop in $request.psobject.Properties) {
+            if ($prop.Name -ceq 'capability' -and $prop.Value -is [string] -and $prop.Value -cne $Capability) {
+                return (Get-ErrorResponse -Id $id -Code 'unsupported' -Message ('this worker implements ' + $Capability))
+            }
+        }
         try {
             $output = ConvertTo-CapabilityOutput -Capability $Capability -Payload $invokeInput
         }

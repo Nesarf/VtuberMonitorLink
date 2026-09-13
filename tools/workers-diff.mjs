@@ -11,6 +11,11 @@
 // diverge are printed as corpus case entries, ready to paste and review - promoting one is a decision,
 // so this tool never writes to workers/spec/ itself.
 //
+// Every case is also asked twice, the second time in the opposite order. Every capability in this layer
+// is specified to be deterministic, so the repeat is a check in its own right: it catches a hash-map
+// order leaking into an answer, a random seed a runtime picked for itself, and state kept between
+// requests - and it is the only check here that means anything for a capability with one implementation.
+//
 // Only the published registry is fuzzed by default. A worker under active development lives in the
 // machine-local overlay and would report its own half-finished state as a divergence of the layer.
 import fs from 'node:fs';
@@ -101,6 +106,38 @@ function randomHtml(rnd) {
 
 const EGRESS_NAMES = ['direct', 'proxy', 'tor', 'zebra', '\u00E9clair', 'a10', 'a9'];
 
+/** A vocabulary with the traps in it: a tag that needs trimming, one that must not match, one astral. */
+const LLM_VOCABULARY = ['debut', '3d', 'karaoke', 'idol', 'singing'];
+
+function randomLlmInput(rnd) {
+  const tags = [];
+  const count = Math.floor(rnd() * 5);
+  for (let i = 0; i < count; i++) {
+    const r = rnd();
+    if (r < 0.14) tags.push(pick(rnd, LLM_VOCABULARY).toUpperCase());
+    else if (r < 0.28) tags.push('\t' + pick(rnd, LLM_VOCABULARY) + '\n');
+    else if (r < 0.38) tags.push('\u00A0' + pick(rnd, LLM_VOCABULARY));
+    else if (r < 0.46) tags.push(pick(rnd, ['unknown', 'sing', '\u{1F600}', '\u00E9']));
+    else if (r < 0.54) tags.push(Math.floor(rnd() * 10));
+    else if (r < 0.58) tags.push(null);
+    else tags.push(pick(rnd, LLM_VOCABULARY));
+  }
+  const payload = { tags };
+  if (rnd() < 0.8) payload.summary = randomString(rnd, { maxLen: 10, punctuation: 0.15, interesting: 0.3 });
+  let text = JSON.stringify(payload);
+  const shape = rnd();
+  if (shape < 0.18) text = text.replace(/]$/, ',]').replace(/}$/, ',}'); // the one repair the contract allows
+  else if (shape < 0.34) text = '```json\n' + text + '\n```\n';
+  else if (shape < 0.44) text = '```\r\n' + text + '\r\n```\r\n';
+  else if (shape < 0.56) text = 'Sure! ' + text + ' Let me know if you need more.';
+  else if (shape < 0.64) text = text.slice(0, -1); // broken: no partial recovery allowed
+  else if (shape < 0.7) text = 'I am not sure what you want.';
+  const input = { raw: text, vocabulary: LLM_VOCABULARY };
+  if (rnd() < 0.5) input.maxTags = Math.floor(rnd() * 4);
+  if (rnd() < 0.6) input.maxSummaryChars = Math.floor(rnd() * 12);
+  return input;
+}
+
 function randomFetchInput(rnd) {
   const names = EGRESS_NAMES.filter(() => rnd() < 0.7);
   if (!names.length) names.push('direct');
@@ -168,6 +205,7 @@ const GENERATORS = {
   'text.fingerprint': (rnd) => ({ text: randomString(rnd, { maxLen: 40 }) }),
   'search.query': randomSearchInput,
   'fetch.plan': randomFetchInput,
+  'llm.parse': randomLlmInput,
 };
 
 // ── worker plumbing (deliberately self-contained: this tool owns its own protocol talk) ──────
@@ -220,12 +258,19 @@ function runWorker(worker, capability, cases) {
         if (msg.worker) { descriptor = msg.worker; continue; }
         if (msg.id !== undefined && msg.id !== null) answers.set(String(msg.id), msg);
       }
-      if (answers.size >= cases.length && descriptor) finish();
+      if (answers.size >= cases.length * 2 && descriptor) finish();
     });
     child.on('close', finish);
     child.stdin.write(JSON.stringify({ id: 'describe', op: 'describe' }) + '\n');
     for (let i = 0; i < cases.length; i++) {
       child.stdin.write(JSON.stringify({ id: 'c' + i, op: 'invoke', capability, input: cases[i] }) + '\n');
+    }
+    // And the same cases again, in the opposite order. Every capability in this layer is specified to be
+    // deterministic, so asking twice is a check in its own right: it catches a hash-map order that leaks
+    // into an answer, a random seed a runtime decided for itself, and any state a worker keeps between
+    // requests. It is also the only check that means anything for a capability with one implementation.
+    for (let i = cases.length - 1; i >= 0; i--) {
+      child.stdin.write(JSON.stringify({ id: 'r' + i, op: 'invoke', capability, input: cases[i] }) + '\n');
     }
   });
 }
@@ -288,18 +333,28 @@ for (const capability of capabilities) {
 
   console.log(`\n== ${capability}  (${COUNT} generated cases x ${answers.size} implementation(s): ${[...answers.keys()].join(', ')})`);
   if (skipped.length) console.log(`   skipped    : ${skipped.join(', ')}`);
-  if (answers.size < 2) {
-    console.log('   [skip] fewer than two implementations answered: there is nothing to diff against');
-    continue;
+  const canDiff = answers.size >= 2;
+  if (!canDiff) {
+    console.log('   [note] one implementation answered: there is no cross-implementation diff to make, and the');
+    console.log('          repeat check below still runs, because determinism is a property of one implementation.');
   }
 
   let agree = 0;
+  let stablePairs = 0;
+  const unstable = [];
   for (let i = 0; i < cases.length; i++) {
     const id = 'c' + i;
     const byKey = new Map();
     const byShape = new Map();
     for (const [workerId, map] of answers) {
       const msg = map.get(id);
+      const repeated = map.get('r' + i);
+      if (msg && repeated) {
+        const first = answerKey(msg);
+        const second = answerKey(repeated);
+        if (first !== second) unstable.push(`${workerId} case ${i}: ${first.slice(0, 120)} != ${second.slice(0, 120)}`);
+        else stablePairs++;
+      }
       if (!msg) { byKey.set('MISSING:' + workerId, [workerId]); continue; }
       const key = answerKey(msg);
       if (!byKey.has(key)) byKey.set(key, []);
@@ -320,13 +375,21 @@ for (const capability of capabilities) {
       }
       continue;
     }
+    if (!canDiff) continue; // with one implementation there is no disagreement to report
     divergences++;
     console.log(`   DIVERGES   : case ${i} (seed ${SEED})`);
     for (const [key, who] of byKey) console.log(`       ${who.join(', ').padEnd(28)} ${key.slice(0, 220)}`);
     const entry = { id: `fuzz-${SEED}-${i}`, note: `found by tools/workers-diff.mjs --seed ${SEED} --n ${COUNT}`, input: cases[i] };
     console.log(`       promote as: ${JSON.stringify(entry).slice(0, 900)}`);
   }
-  console.log(`   agreement  : ${agree}/${cases.length} generated cases unanimous across ${answers.size} implementation(s)`);
+  console.log(`   agreement  : ${canDiff ? `${agree}/${cases.length} generated cases unanimous across ${answers.size} implementations` : 'not applicable: one implementation answered'}`);
+  if (unstable.length) {
+    divergences += unstable.length;
+    console.log(`   UNSTABLE   : ${unstable.length} answer(s) changed when the same case was asked again in a different order`);
+    for (const line of unstable.slice(0, 5)) console.log(`       ${line}`);
+  } else {
+    console.log(`   stability  : ${stablePairs} repeat answer(s) identical when asked again in the opposite order`);
+  }
 }
 
 console.log(`\n${divergences === 0 ? 'no divergence found' : divergences + ' divergence(s) found'} over ${COUNT} generated case(s) per capability, seed ${SEED}`);

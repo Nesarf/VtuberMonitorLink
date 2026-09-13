@@ -234,6 +234,11 @@
       "input": { "now": 0, "sources": [], "egress": {}, "budget": { "maxRequests": -1 } }
     },
     {
+      "id": "bad-input-egress-not-a-string",
+      "note": "the hole the Go implementation found by disagreeing with the JavaScript reference: a number where an egress name belongs is a malformed request, not a source pointing at an egress that does not exist, and answering no-egress would dress the typo up as a plausible-looking configuration problem. Section 10 now says so in rule 1",
+      "input": { "now": 0, "sources": [{ "id": "a", "egress": 5 }], "egress": { "direct": {} } }
+    },
+    {
       "id": "bad-input-negative-interval",
       "note": "a negative interval would make every source due before it ran",
       "input": { "now": 0, "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 0, "minIntervalMs": -1 }], "egress": { "direct": {} } }

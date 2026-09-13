@@ -331,7 +331,18 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   the seed and case index it prints, and each one is printed as a ready-to-paste corpus entry:
   promoting a case is a review decision, so the tool never writes to `workers/spec/` itself. It fuzzes
   the published registry only, because a worker under development would report its own half-finished
-  state as a divergence of the layer.
+  state as a divergence of the layer. Every case is also asked **twice**, the second time in the opposite
+  order: every capability here is specified to be deterministic, so the repeat catches a hash-map order
+  leaking into an answer, a random seed a runtime picked for itself, and state a worker kept between
+  requests - and it is the one check that still means something for a capability with a single
+  implementation, which is what the newest capability has today.
+- A second implementation is also how a *contract* gets tested, not only an implementation. The Go
+  worker found a hole in section 10 on its first run: for an `egress` of `5` it answered `bad-input`
+  while the JavaScript reference reported `no-egress`, and both readings followed from the text - the
+  shape paragraph said one thing and rule 1 said another. The contract now decides (a non-string egress
+  is `bad-input`, because a typo in a type must not come back as a plausible-looking plan), the reference
+  was corrected to match, and the corpus pins it. That is what "the implementations supervise each other"
+  is supposed to mean: the disagreement was worth more than the implementation.
 - That is not a hypothetical: the first fuzz run found a real bug in a published worker. The PowerShell
   implementation rejected **every** astral code point - it walked UTF-16 code units and asked .NET for a
   code point by code unit, which throws on a lone surrogate - so an emoji, which a Vtuber monitoring tool
@@ -554,7 +565,12 @@ Rules, in the order they are applied:
 
 1. **Egress must exist.** A source whose `egress` is not a key of the input's `egress` object is
    **skipped** with reason `no-egress`, whatever the clock says: that is a broken configuration the
-   user has to fix, not a source that is merely early. Skipped means "this source cannot be planned at
+   user has to fix, not a source that is merely early. A source whose `egress` is not a **string** at all
+   is `bad-input` instead, and the difference is the point: a typo in a type is a malformed request, and
+   answering it with `no-egress` would dress it up as a plausible-looking configuration problem. Rule 2
+   treats a non-boolean `due` as absent rather than as an error, because an optional flag that is missing
+   only means "not forced", while the field that routes the request is not optional and has no default.
+   Skipped means "this source cannot be planned at
    all"; deferred means "not this round". The distinction is what the application shows a user, so it
    is part of the contract.
 2. **Due.** A source is due when `due` is `true`, or when `lastRunAt` is `null` (never run), or when

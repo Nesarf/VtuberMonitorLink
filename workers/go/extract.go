@@ -354,18 +354,23 @@ func startsTag(c byte) bool {
 }
 
 // scanTag inspects the '<' at index start and returns the index just past the tag, the lowercased
-// tag name, and whether this '<' starts a tag at all. The name is the contract's name: an optional
-// '/', optional spaces, then [A-Za-z][A-Za-z0-9:-]*. A '>' inside a quoted attribute value does not
-// end the tag; an unclosed tag at end of input is dropped as a tag, so end == len(s).
-func scanTag(s string, start int) (int, string, bool) {
+// tag name, whether this '<' starts a tag at all, and whether the tag was CLOSED by a '>' before end
+// of input. The name is the contract's name: an optional '/', optional spaces, then
+// [A-Za-z][A-Za-z0-9:-]*. A '>' inside a quoted attribute value does not end the tag.
+//
+// The closed flag is returned rather than inferred by the caller from "the tag text ends with '>'":
+// that inference is wrong exactly when the input ends with a '>' that belongs to an inner quoted
+// attribute value, as in `<p title="unclosed</div>`, where the final '>' is the div's own. An
+// unclosed tag is dropped as a tag and contributes nothing, not even a block-tag newline.
+func scanTag(s string, start int) (end int, name string, ok bool, closed bool) {
 	if start+1 >= len(s) || s[start] != '<' || !startsTag(s[start+1]) {
-		return start + 1, "", false
+		return start + 1, "", false, false
 	}
 	nameStart := start + 1
 	if s[nameStart] == '/' {
 		nameStart++
 	}
-	for nameStart < len(s) && (s[nameStart] == ' ' || s[nameStart] == '\t' || s[nameStart] == '\n' || s[nameStart] == '\r') {
+	for nameStart < len(s) && isSpaceByte(s[nameStart]) {
 		nameStart++
 	}
 	i := nameStart
@@ -375,7 +380,7 @@ func scanTag(s string, start int) (int, string, bool) {
 			i++
 		}
 	}
-	name := strings.ToLower(s[nameStart:i])
+	name = strings.ToLower(s[nameStart:i])
 
 	j := start + 1
 	for j < len(s) {
@@ -391,7 +396,7 @@ func scanTag(s string, start int) (int, string, bool) {
 			continue
 		}
 		if c == '>' {
-			return j + 1, name, true
+			return j + 1, name, true, true
 		}
 		j++
 	}

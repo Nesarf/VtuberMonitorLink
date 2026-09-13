@@ -1,7 +1,7 @@
 {
  "capability": "fetch.plan",
  "generatedBy": "js-fetch (workers/js/vmlfetch.js)",
- "generatedAt": "2026-09-13T20:48:11.035Z",
+ "generatedAt": "2026-09-13T21:20:50.625Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "empty-sources": {
@@ -382,6 +382,9 @@
    "__error": "bad-input"
   },
   "bad-input-negative-budget": {
+   "__error": "bad-input"
+  },
+  "bad-input-egress-not-a-string": {
    "__error": "bad-input"
   },
   "bad-input-negative-interval": {

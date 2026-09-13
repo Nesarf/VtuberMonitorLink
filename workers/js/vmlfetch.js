@@ -58,8 +58,13 @@ export function plan(input) {
 
     // Rule 1 first: a source pointing at an egress that does not exist is a configuration the user has
     // to fix, whether or not it is due. Reporting it as "deferred" would hide it behind the clock.
+    // A non-string is a different thing entirely - a malformed request rather than a broken setup - and
+    // answering it with no-egress would dress a typo up as a plausible-looking plan. The Go
+    // implementation found this hole in section 10 by disagreeing with this file, which is the whole
+    // reason the layer has two of them.
     const egressName = source?.egress;
-    if (typeof egressName !== 'string' || !Object.prototype.hasOwnProperty.call(egress, egressName)) {
+    if (typeof egressName !== 'string') throw bad(`source ${id}: egress must be a string`);
+    if (!Object.prototype.hasOwnProperty.call(egress, egressName)) {
       skipped.push({ id, reason: 'no-egress' });
       continue;
     }
@@ -180,6 +185,16 @@ const SELFCHECK = [
   ['an unknown egress is skipped even when the source is not due', () => {
     const r = plan({ now: 0, sources: [{ id: 'a', egress: 'nope', due: false, lastRunAt: 5000 }], egress: {} });
     return r.counts.skipped === 1 && r.skipped[0].reason === 'no-egress' && r.counts.deferred === 0;
+  }],
+  ['an egress that is not a string is bad input, not an unknown egress', () => {
+    // The hole the Go implementation found: a typo in a type must not be answered with a plan that
+    // looks like a configuration problem.
+    try {
+      plan({ now: 0, sources: [{ id: 'a', egress: 5 }], egress: { direct: {} } });
+      return false;
+    } catch (e) {
+      return e.code === 'bad-input';
+    }
   }],
   ['due:true wins over a fresh lastRunAt', () => {
     const r = plan({

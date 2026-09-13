@@ -418,10 +418,19 @@ Deliberately not here yet:
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
-- **Known open items.** Six implementations agree on every corpus case except the one this section's
-  fuzzer pinned and whose fix is still in flight (see section 5 and `docs/BUGS.md`), so what is left
-  here is what the corpus still cannot see. Malformed-request error *text* differs per language by
-  design. The
+- **Two `llm.parse` gaps that neither the corpus nor the fuzzer can reach**, both found by the second
+  implementation of that capability. Rule 4 says a non-string element is reported as its JSON text with
+  "integers as decimal digits", and no JavaScript implementation can comply past 2^53: the input
+  `9007199254740993` stringifies through a Number and comes back as `9007199254740992`, while the Python
+  worker answers the exact digits. Nothing generates such a value, both behaviours are pinned in that
+  worker's self-check, and the honest repair is a sentence in the rule rather than a custom JSON parser
+  in the reference. The second is the word "trimmed" in rule 9: the reference uses its host's `trim`,
+  which strips U+00A0, U+2000-U+200A, U+2028, U+2029, U+3000 and U+FEFF and yet does *not* strip
+  U+001C-U+001F, so "repaired" is decided by a wider whitespace set than the one rules 4 and 8 define.
+  The Python worker reproduces the reference exactly instead of the rule, which is the right call for a
+  worker and the wrong place for a contract to stay. Both are decisions waiting to be made on purpose.
+- **Known open items** in the contract's own rules. Malformed-request error *text* differs per language by
+  design, which is why only the code is compared. The
   **removed-element pre-scan ends an opening tag at the first `>`**, so a quoted attribute containing
   `>` (`<script src="a>b">`) is mis-scanned and the whole element may not be removed; the main tag
   scanner *is* quote-aware, so this is an inconsistency between two passes of the same function. No

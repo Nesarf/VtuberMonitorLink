@@ -189,6 +189,29 @@
       "notes": "Python 3.13, standard library only, no build step (build.mjs only checks the interpreter)"
     },
     {
+      "id": "python-llm",
+      "language": "python",
+      "capabilities": [
+        "llm.parse"
+      ],
+      "build": [
+        "node",
+        "workers/python/build-llm.mjs"
+      ],
+      "artifact": "workers/python/vmlllm.py",
+      "launch": [
+        [
+          "python",
+          "workers/python/vmlllm.py"
+        ],
+        [
+          "python3",
+          "workers/python/vmlllm.py"
+        ]
+      ],
+      "notes": "Python 3.13, standard library only, no build step: ASCII-only whitespace and folding, a strict RFC 8259 parse, and truncation by code points"
+    },
+    {
       "id": "pwsh-text",
       "language": "pwsh",
       "capabilities": [

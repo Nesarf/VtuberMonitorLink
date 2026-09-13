@@ -515,21 +515,30 @@ for (const s of summary) console.log(`   ${s.capability.padEnd(18)} ${s.agree}/$
 // missing" is only true if every capability has a JavaScript implementation that actually answered. This
 // used to be a hard-coded existence check for the text reference alone, which said nothing about the
 // capabilities added since - and a promise nobody checks is a sentence, not a property.
+//
+// A narrowed run is not the whole layer, so `--only` turns this off with a line saying so: asking one
+// worker whether it agrees with the corpus is a legitimate question, and answering it with "there is
+// nothing to fall back to" would be a false alarm about a run that was never trying to answer that.
+const onlyFilter = value('--only');
 const missingReference = [];
-for (const cap of capabilities) {
-  const perWorker = results.get(cap.capability);
-  const jsIds = [...perWorker.keys()].filter((id) => id.startsWith('js-'));
-  const answered = jsIds.some((id) => [...perWorker.get(id).perCase.values()].some((c) => c.output !== undefined));
-  if (!answered) missingReference.push(cap.capability);
+if (onlyFilter) {
+  console.log(`   reference : not checked (--only ${onlyFilter}: a narrowed run is not the whole layer)`);
+} else {
+  for (const cap of capabilities) {
+    const perWorker = results.get(cap.capability);
+    const jsIds = [...perWorker.keys()].filter((id) => id.startsWith('js-'));
+    const answered = jsIds.some((id) => [...perWorker.get(id).perCase.values()].some((c) => c.output !== undefined));
+    if (!answered) missingReference.push(cap.capability);
+  }
+  if (missingReference.length) failures++;
+  console.log(
+    `   reference : ${
+      missingReference.length
+        ? `MISSING for ${missingReference.join(', ')} - there is nothing to fall back to`
+        : 'every capability has a JavaScript implementation that answered'
+    }`,
+  );
 }
-if (missingReference.length) failures++;
-console.log(
-  `   reference : ${
-    missingReference.length
-      ? `MISSING for ${missingReference.join(', ')} - there is nothing to fall back to`
-      : 'every capability has a JavaScript implementation that answered'
-  }`,
-);
 console.log(`   ${failures === 0 ? 'all implementations agree' : failures + ' problem(s) (see above)'}`);
 console.log('');
 process.exit(failures === 0 ? 0 : 1);

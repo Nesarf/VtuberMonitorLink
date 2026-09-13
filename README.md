@@ -161,8 +161,12 @@ npm run i18n:coverage:update              # 覆盖度上涨后更新基线（棘
 
 **① 直接跑发行版**
 
-下载 `VtuberMonitorLink.zip`，解压到任意目录，双击 `VtuberMonitorLink.exe`。
+下载 `VtuberMonitorLink-1.0.0-win-x64.zip`（Releases 页），解压到任意目录，双击 `VtuberMonitorLink.exe`。
 不需要装 Node，不需要管理员权限，不需要命令行。
+
+> 命名约定：**面向使用者的文件用全名**（exe / zip / 解压出来的目录），**内部标识用短名 `VML`**
+> （npm 包名、环境变量 `VML_*`、`localStorage` 的 `vml-*`、临时文件…）。
+> 这条规则由 `npm run brand` 守着，理由写在 `docs/RELEASE.md` 的 1.0.0 一节。
 
 **② 跑源码**
 
@@ -197,13 +201,15 @@ npm run mock-llm         # 监听 127.0.0.1:43197
 npm run verify        # 校对发行包：必需文件 / ASCII / UTF-8 / 密钥与个人路径残留 / 运行数据
 npm run traverse      # 遍历全部 HTTP 端点、SPA 兜底、错误路径
 npm run traverse:ui   # 真实浏览器里走完十一个页面，并用 mock LLM 真跑一次
+npm run brand         # 命名一致性：对外件用全名、内部标识用 VML
+npm run english       # 英文覆盖率（工程层 / 界面两侧的百分比）
 npm run release       # 上述全套
 ```
 
-另外三条「约定」类守卫也在这条链里（`verify:fast`）：
+另外四条「约定」类守卫也在这条链里（`verify:fast`）：
 `tools/english-logic.mjs`（工程层只许英文 —— 注释与日志，界面词条与产品文案不在此列，
-见 `docs/ENGLISH-LOGIC.md`）、`tools/i18n-plural-test.mjs`（数词词形完整性）、
-`tools/hint-md-test.mjs`（带 markdown 记号的文案必须走 `<Inline>`）。
+见 `docs/ENGLISH-LOGIC.md`；`npm run english` 会打印覆盖率）、`tools/vml-brand.mjs`（两条名字不许串用）、
+`tools/i18n-plural-test.mjs`（数词词形完整性）、`tools/hint-md-test.mjs`（带 markdown 记号的文案必须走 `<Inline>`）。
 
 ### 第三方数据与署名
 
@@ -341,7 +347,9 @@ locked or modified.
 
 ### Two ways to run
 
-**1. Use the release build** — download `VtuberMonitorLink.zip`, unpack anywhere, double-click `VtuberMonitorLink.exe`. No Node install, no admin rights, no terminal.
+**1. Use the release build** — download `VtuberMonitorLink-1.0.0-win-x64.zip` from the Releases page, unpack anywhere, double-click `VtuberMonitorLink.exe`. No Node install, no admin rights, no terminal.
+
+> Naming: **user-facing files keep the full name** (exe / zip / the unpacked folder), **internal identifiers use the short brand `VML`** (npm package names, `VML_*` environment variables, `vml-*` storage keys, temp files). `npm run brand` enforces the split.
 
 **2. Run from source** — `npm install`, then `npm run dev` (server 43110 + frontend 43111) or `npm run build && npm start`.
 
@@ -381,12 +389,15 @@ Scraped items belong to their own publishers. This tool aggregates them locally 
 npm run verify        # proofread the release: required files / ASCII / UTF-8 / leaked keys & paths / run data
 npm run traverse      # walk every HTTP endpoint, the SPA fallback and the error paths
 npm run traverse:ui   # walk all eleven pages in a real browser and do a real run against the mock LLM
+npm run brand         # naming: user-facing files keep the full name, internal identifiers use VML
+npm run english       # English coverage, for both the engineering layer and the UI
 npm run release       # all of the above
 ```
 
-Three convention guards ride along in the same chain (`verify:fast`):
+Four convention guards ride along in the same chain (`verify:fast`):
 `tools/english-logic.mjs` (the engineering layer is English only — comments and logs; UI strings and
-product copy are out of scope, see `docs/ENGLISH-LOGIC.md`), `tools/i18n-plural-test.mjs`
+product copy are out of scope, see `docs/ENGLISH-LOGIC.md`; `npm run english` prints the coverage),
+`tools/vml-brand.mjs` (the two names must not swap roles), `tools/i18n-plural-test.mjs`
 (plural-form tables are complete per language) and `tools/hint-md-test.mjs`
 (any string carrying markdown must be rendered through `<Inline>`).
 

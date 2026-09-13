@@ -167,7 +167,7 @@ if (torUp) {
 process.stdout.write('\nsocks: Tor launch arguments\n');
 
 const TB_EXE = 'E:\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe';
-const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: 'E:\\VtuberMonitorLink\\dist\\VtuberMonitorLink\\app' });
+const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: 'C:\\vml-test\\pkg\\app' });
 
 await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNetwork forced to 0', async () => {
   if (!realPlan.ok) {

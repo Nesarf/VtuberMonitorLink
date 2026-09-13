@@ -66,8 +66,28 @@ dist\VtuberMonitorLink-1.0.0-win-x64.zip   40 MB
 
 ```powershell
 npm run sanitize-check   # 源码里有没有硬编码路径 / 密钥 / 私人名字
+npm run brand            # VML 命名一致性：对外件用全名、内部标识用 VML
+npm run english          # 英文覆盖率（工程层 / 界面两侧的百分比）
 npm run release          # 构建 + 校对 + 端点遍历 + UI 遍历（需要本机有浏览器）
 ```
+
+`npm run verify:fast` 已经把上面三条里的前两条（`vml-brand`、`english-logic`）连同
+25 个语言的校对一起卡住了，所以「能构建」和「命名/语言/校对没退化」是同一道闸门。
+
+**关于 git 历史里的本机路径**：工作区里已经没有任何机器专属路径（`tools/verify-release.cjs`
+的规则会在 `npm run release` 时把残留拦下，本文件自己也被拦过一次），但**历史**里仍留着
+早期文档中「cd 到开发目录」这类命令示例 —— 只有盘符与项目名，**不含用户名与凭据**。
+
+不重写历史不影响安全；若你希望连历史也干净，在 push 之前重写即可（尚未 push，不影响任何人）：
+
+```powershell
+# 1) 先备份：把整个 .git 目录复制一份到仓库外
+# 2) 用 git filter-branch --tree-filter，或更省事的 git-filter-repo --replace-text，
+#    把历史里那串开发目录的绝对路径替换成 <clone dir>
+# 3) 重写后确认闸门仍然全过：npm run verify:fast
+```
+
+重写会改变全部提交哈希 —— 因为还没有远程分支，这不会影响任何人。
 
 `ci.yml` 会在每次 push / PR 上自动跑：构建前端、`sanitize-check`、
 四个工具的语法检查、`launcher --doctor` / `--paths`、启动器脚本的 ASCII 断言。

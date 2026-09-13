@@ -32,7 +32,7 @@ export const VDB_DEFAULTS = {
   url: 'https://codeload.github.com/dd-center/vdb/tar.gz/refs/heads/master',
   ttlDays: 7, // the roster changes very slowly; once a week is plenty, and `force` refreshes immediately
   timeoutMs: 60000,
-  software: 'vtuber-monitor-link',
+  software: 'VML',
 };
 
 /** The "canonical link shape" for each platform's account — used to turn an id into a matchable alias and to display it in the UI */

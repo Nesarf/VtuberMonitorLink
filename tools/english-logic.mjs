@@ -250,14 +250,66 @@ export function checkTree() {
   const files = targets();
   const report = [];
   let total = 0;
+  let comments = 0;
+  let outputs = 0;
   for (const f of files) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const scanned = scanSource(src);
+    comments += scanned.comments.length;
+    outputs += scanned.outputStrings.length;
     const bad = checkFile(f);
     if (bad.length) {
       report.push({ file: f, count: bad.length, items: bad });
       total += bad.length;
     }
   }
-  return { files: files.length, total, report };
+  return { files: files.length, total, report, checked: { comments, outputStrings: outputs } };
+}
+
+/**
+ * English coverage: the share of the engineering layer that is actually English, plus the share of
+ * UI strings that are localised — the two numbers that decide whether this is maintainable by
+ * someone who does not read Chinese. The Chinese docs and the Chinese product copy are deliberate
+ * exemptions, and are named as such rather than silently counted.
+ */
+export function coverage() {
+  const res = checkTree();
+  const baselinePath = path.join(ROOT, 'web/src/locales/coverage.json');
+  let locales = null;
+  if (fs.existsSync(baselinePath)) {
+    const data = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+    // The baseline is `{ generatedAt, total, locales: { 'ja-JP': 633, ... } }` — a bare number per
+    // locale (covered keys), with the denominator at the top level.
+    const rows = data.locales ?? data;
+    const total = Number(data.total ?? 0);
+    const entries = Object.entries(rows).filter(([, v]) => typeof v === 'number');
+    if (entries.length && total) {
+      const covered = entries.reduce((n, [, v]) => n + v, 0);
+      locales = {
+        count: entries.length,
+        covered,
+        total: total * entries.length,
+        pct: Math.round((covered / (total * entries.length)) * 100),
+      };
+    }
+  }
+  const engineeringChecked = res.checked.comments + res.checked.outputStrings;
+  return {
+    engineering: {
+      files: res.files,
+      commentBlocks: res.checked.comments,
+      outputStrings: res.checked.outputStrings,
+      checked: engineeringChecked,
+      chineseHits: res.total,
+      pct: engineeringChecked ? Math.round(((engineeringChecked - res.total) / engineeringChecked) * 100) : 100,
+    },
+    ui: locales,
+    exemptions: [
+      'docs/*.md — written in Chinese on purpose (they explain decisions to the maintainer)',
+      'web/src/i18n.jsx zh dictionary + locales/*.json — UI source strings',
+      'API error strings and report/push/export copy — product text, see docs/ENGLISH-LOGIC.md §4',
+    ],
+  };
 }
 
 // -- CLI ------------------------------------------------------------
@@ -273,6 +325,19 @@ if (invokedDirectly) {
       for (const it of f.items) process.stdout.write(`    ${String(it.line).padStart(5)}  ${it.kind === 'comment' ? '//' : it.call + '()'}  ${it.text}\n`);
     }
     process.stdout.write(`\ntotal ${res.total} hits in ${res.report.length} files (scanned ${res.files} files)\n`);
+  } else if (args.includes('--coverage')) {
+    const c = coverage();
+    process.stdout.write('\nEnglish coverage (maintainability)\n');
+    process.stdout.write(`  engineering layer : ${c.engineering.pct}%  (${c.engineering.checked} checked: ${c.engineering.commentBlocks} comment blocks + ${c.engineering.outputStrings} output strings; ${c.engineering.chineseHits} Chinese left)\n`);
+    process.stdout.write(`  files scanned     : ${c.engineering.files}\n`);
+    if (c.ui) {
+      process.stdout.write(`  UI strings        : ${c.ui.pct}%  (${c.ui.covered}/${c.ui.total} key-locale pairs across ${c.ui.count} locales)\n`);
+    } else {
+      process.stdout.write('  UI strings        : n/a (no coverage baseline found)\n');
+    }
+    process.stdout.write('  exemptions (deliberate, not counted as gaps):\n');
+    for (const e of c.exemptions) process.stdout.write(`    - ${e}\n`);
+    if (c.engineering.chineseHits) process.exit(1);
   } else {
     if (!res.total) {
       process.stdout.write(`english-logic: clean (scanned ${res.files} files, no Chinese left in comments or output strings)\n`);

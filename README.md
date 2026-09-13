@@ -48,7 +48,7 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 | **Event merge & source weight** | IDF-weighted similarity + union-find single link + time window; weights grow from "who reported it first" |
 | **SQLite archive & charts** | Idempotent incremental writes keyed by item id; daily counts; charts are **inline SVG**, no chart library |
 | **One-click share** | A single HTML file with zero external references (readable offline); **login requirements stated honestly per platform**, unsupported ones are labelled as such |
-| **Locales & regions** | 25 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar); RTL; dates, numbers and week start formatted per region; **plural forms** chosen by `Intl.PluralRules` (`1 запись / 2 записи / 5 записей`, which also fixes the old English `1 items`); per-entry proofreading, a coverage ratchet and a markup-rendering guard all run inside `verify:fast` |
+| **Locales & regions** | 28 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar, id-ID, fil-PH, th-TH); RTL; dates, numbers and week start formatted per region; **plural forms** chosen by `Intl.PluralRules` (`1 запись / 2 записи / 5 записей`, which also fixes the old English `1 items`); per-entry proofreading, a coverage ratchet and a markup-rendering guard all run inside `verify:fast` |
 | **Automatic egress** | Each site picks direct or proxy by "effective latency = mean latency × (1 + loss × 4)", with stickiness (no switch below a 20% edge); real fetch results feed the decision back |
 
 ## VDB roster (multi-platform)
@@ -128,7 +128,7 @@ locked or modified.
 
 ## Locales & the translation pipeline
 
-The UI ships **25 locales** (`zh-Hans/Hant/HK/TW`, `en-US/GB/AU/CA`, `es-ES/419/MX/AR`, `pt-PT/BR`, `fr-FR/CA`, `de/it/ja/ko/ru/uk/pl/sr/ar`). Arabic is RTL, and dates, numbers, the first day of the week and plural forms all follow the region.
+The UI ships **28 locales** (`zh-Hans/Hant/HK/TW`, `en-US/GB/AU/CA`, `es-ES/419/MX/AR`, `pt-PT/BR`, `fr-FR/CA`, `de/it/ja/ko/ru/uk/pl/sr/ar`, `id-ID`, `fil-PH`, `th-TH`). Arabic is RTL, and dates, numbers, the first day of the week and plural forms all follow the region.
 
 **Fallback rule**: regional differences are inherited **within one language only** (`es-MX → es-419 → es-ES`, `zh-TW → zh-Hant → zh-Hans`), and anything missing falls back to **English**, never to a different language. That rule was written after a real incident: the `uk/pl/sr` chains once pointed at Russian, so Ukrainian users were shown Russian. That is not "imperfect translation", it is simply wrong.
 

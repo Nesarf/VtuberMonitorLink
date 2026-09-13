@@ -29,7 +29,7 @@ point for it either.
 | Fast self-check | `npm run verify:fast` | all passed (26 steps) |
 | README endpoint | `npm run traverse` | **85/85** (5 new: both languages returned and their content differs, `available` correct, unknown language falls back, body length sane) |
 | UI panel | `npm run traverse:ui` | **210/210** (8 new: the button opens it, the body renders into real structure, both language options are present, the text really changes after switching, **no navigation**, no full-page refresh, Esc closes it) |
-| i18n | `npm run i18n:coverage` / `i18n:proofread` | 25 locales **638/638 = 100%**; proofread hard failures **0** |
+| i18n | `npm run i18n:coverage` / `i18n:proofread` | every shipped locale **638/638 = 100%**; proofread hard failures **0** |
 | Release chain | `npm run release` | build ✓; proofread clean; both traversals passed |
 
 ### Not yet verified
@@ -68,7 +68,7 @@ VtuberMonitorLink-1.0.0-win-x64.zip     ~40 MB, unzip and double-click
 | Observe mode | sampling + jitter + Tor only for the sites whose logs are held by the other side, reducing the traces of "someone swept the whole agency" |
 | Push and silence hours | 12 channel types; notifications inside silence hours are queued and sent later instead of dropped |
 | Reports and archive | SQLite incremental archive, inline SVG charts, anniversary countdown, one-click share as a single file, Word/Excel export |
-| 25 locales | including RTL, locale-specific dates/numbers/first day of week, plural forms driven by `Intl.PluralRules` |
+| 28 locales | including RTL, locale-specific dates/numbers/first day of week, plural forms driven by `Intl.PluralRules` |
 | Usage dashboard | accounting per call and per model, optional daily budget, over-limit calls can be blocked; calls that report no usage are counted separately |
 | Desktop form factor | single-file exe + local web UI (`127.0.0.1:43110`), no dependency on any online service; LLM optional |
 | Bilingual manual | `README.md` (English) and `README.zh-CN.md` (Chinese); **read directly from `关于` (About) in the top-right of the UI**, with instant language switching (overlay, no navigation, no refresh) |

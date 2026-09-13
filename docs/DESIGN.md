@@ -246,7 +246,7 @@ has to understand the differences between fetch methods.
 ## 11. Localisation / i18n
 
 Every string in the UI comes from the two source books in the source tree (`STRINGS.zh` / `STRINGS.en`
-in `web/src/i18n.jsx`); the other 23 locales inherit through a **fallback chain**
+in `web/src/i18n.jsx`); every other locale inherits through a **fallback chain**
 (`zh-TW -> zh-Hant -> zh-Hans`, `pt-BR -> pt-PT` ...), which never crosses languages and always lands on
 English. Precedence: **machine translation -> hand-written generic keys -> the locale's own keys**
 (hand-written always beats machine; `locales/overlays.js` is the hand-written layer, `locales/machine.json`

@@ -84,7 +84,7 @@ npm run release          # build + proofread + endpoint traversal + UI traversal
 ```
 
 `npm run verify:fast` already gates the first two of those (`vml-brand`, `english-logic`) together
-with the proofread pass for 25 languages, so "it builds" and "naming/language/proofread have not
+with the proofread pass for every shipped locale, so "it builds" and "naming/language/proofread have not
 regressed" are the same gate.
 `npm run commit-msg` is not part of `verify:fast` (it has to read the **whole git history**, and a
 shallow clone only sees the tip), so it is guarded in two places: the `check` job of `ci.yml`

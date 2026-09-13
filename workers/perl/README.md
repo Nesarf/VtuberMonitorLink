@@ -68,8 +68,11 @@ Each of these produced a plausible wrong answer first:
   rather than wrong answers - the reference implementation and the shingle hash computed on its own
   both agreed with the worker - and the zero-width expectation was wrong in the same way. They were
   corrected against the reference, not against this file.
-- The worker is registered in `workers/registry.local.json` (machine-local), not in the published
-  registry: Perl is present on the three CI runners as far as anyone knows, and "as far as anyone
-  knows" is not the same as measured, so the entry moves only once that has been checked.
+- **Registered in the published registry**, which took a measurement rather than an expectation: a step
+  in `workers.yml` asks each runner whether it has Perl and prints the answer, and it came back
+  `v5.38.2` on ubuntu, `v5.42.3` (cygwin) on windows and `v5.44.0` on darwin. Before that it lived in
+  `workers/registry.local.json` precisely because nobody had checked - "it probably is" is not a
+  measurement, and a registry that depends on one is not a registry. R and the POSIX shell are still
+  local, for the same reason, until somebody measures them the same way.
 - Anything the contract does not describe is not implemented here on purpose; the three capabilities
   are the whole worker.

@@ -1,0 +1,166 @@
+{
+  "capability": "llm.parse",
+  "note": "Hand-written inputs for docs/WORKERS.md section 11, written before any implementation of it existed. This is the believing half of the LLM glue: the model call is the application's business (HTTP, retries, a key), and what is comparable across languages is what happens to the answer, which is dirty by nature - fenced, wrapped in prose, with a trailing comma, with tags outside the vocabulary, with a summary longer than the field holds. Section 11 pins the two places where a runtime's default would otherwise decide the contract: whitespace is the ASCII set (Java's trim strips code units below U+0021, Python's strip strips U+00A0), and truncation counts code points (half an emoji is not text). Only the error code is comparable across languages, so the bad-input cases are part of the corpus rather than a comment.",
+  "cases": [
+    {
+      "id": "clean-object-needs-no-repair",
+      "note": "the answer arrived exactly as asked for: nothing had to be fixed",
+      "input": { "raw": "{\"tags\": [\"debut\"], \"summary\": \"ok\"}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "fenced-with-language-tag",
+      "note": "a fenced block is stripped, the language tag goes with the fence, and the answer counts as repaired because it did not arrive as the object",
+      "input": { "raw": "Sure!\n```json\n{\"tags\": [\"debut\"], \"summary\": \"ok\"}\n```\n", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "fenced-without-language-tag",
+      "note": "the fence is the same fence without a language after it",
+      "input": { "raw": "```\n{\"tags\": [\"3d\"], \"summary\": \"x\"}\n```", "vocabulary": ["3d"] }
+    },
+    {
+      "id": "fence-with-crlf-endings",
+      "note": "model output arrives over HTTP with either line ending, so a carriage return is a line ending and not content",
+      "input": { "raw": "```json\r\n{\"tags\": [\"debut\"]}\r\n```\r\n", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "prose-around-the-object",
+      "note": "the first complete object is the payload and everything else is discarded",
+      "input": { "raw": "Here you go: {\"tags\": [\"debut\"], \"summary\": \"ok\"} Let me know if you need more.", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "braces-inside-a-string",
+      "note": "the scan counts depth and ignores braces inside JSON strings, so the string closes the object and not the first brace",
+      "input": { "raw": "prose {\"summary\": \"a } b { c\", \"tags\": [\"debut\"]} more prose", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "escaped-quote-inside-a-string",
+      "note": "a backslash escapes exactly the next character, so the escaped quote does not end the string",
+      "input": { "raw": "{\"summary\": \"say \\\"ok\\\" now\", \"tags\": []}" }
+    },
+    {
+      "id": "trailing-comma-in-object",
+      "note": "the one repair the contract specifies, and the answer counts as repaired",
+      "input": { "raw": "{\"tags\": [\"debut\"], \"summary\": \"ok\",}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "trailing-comma-in-array",
+      "note": "the same repair inside an array, with whitespace between the comma and the bracket",
+      "input": { "raw": "{\"tags\": [\"debut\" ,\n  ], \"summary\": \"ok\"}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "comma-inside-a-string-is-data",
+      "note": "a comma inside a string is a character of that string: a repair that removes it there is corrupting data, and this answer is not repaired at all",
+      "input": { "raw": "{\"summary\": \"a,}\", \"tags\": []}" }
+    },
+    {
+      "id": "broken-json-yields-nothing",
+      "note": "the object never closes, so there is no payload: no partial recovery, no tags, and the answer is reported as repaired",
+      "input": { "raw": "{\"tags\": [\"debut\"", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "no-object-at-all",
+      "note": "a model that answered prose is a normal event, not an error: empty tags, empty summary, counts zero, repaired true",
+      "input": { "raw": "I am not sure what you want." }
+    },
+    {
+      "id": "empty-answer",
+      "note": "the empty string is a valid answer and behaves like prose with nothing in it",
+      "input": { "raw": "" }
+    },
+    {
+      "id": "tags-that-are-not-an-array",
+      "note": "splitting a free-form string is guessing, not parsing, so a string contributes no tags and no dropped entries",
+      "input": { "raw": "{\"tags\": \"debut, 3d\"}", "vocabulary": ["debut", "3d"] }
+    },
+    {
+      "id": "vocabulary-spelling-wins",
+      "note": "the model writes DEBUT and the application's own label is what comes out",
+      "input": { "raw": "{\"tags\": [\"DEBUT\"]}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "turkish-i-is-not-a-locale-question",
+      "note": "folding is ASCII-only, so IDOL matches idol on every machine. A locale-aware lowercase would map the capital I to a dotless one under a Turkish default locale and silently stop matching - the trap this rule exists to prevent",
+      "input": { "raw": "{\"tags\": [\"IDOL\"]}", "vocabulary": ["idol"] }
+    },
+    {
+      "id": "tag-outside-the-vocabulary",
+      "note": "an unmatched tag is dropped and named, never guessed into a nearby vocabulary entry",
+      "input": { "raw": "{\"tags\": [\"singing\"], \"summary\": \"ok\"}", "vocabulary": ["debut", "karaoke"] }
+    },
+    {
+      "id": "duplicates-in-three-spellings",
+      "note": "duplicates are decided on the matched canonical form: the first occurrence wins and the others are named",
+      "input": { "raw": "{\"tags\": [\"debut\", \"Debut\", \"DEBUT\", \"karaoke\"]}", "vocabulary": ["debut", "karaoke"] }
+    },
+    {
+      "id": "max-tags-keeps-model-order",
+      "note": "the limit applies after deduplication and keeps the model's own order, not the vocabulary's",
+      "input": { "raw": "{\"tags\": [\"3d\", \"debut\", \"karaoke\", \"debut\"]}", "vocabulary": ["debut", "3d", "karaoke"], "maxTags": 2 }
+    },
+    {
+      "id": "empty-and-non-string-elements",
+      "note": "three different reasons in one answer: an empty tag after trimming, and two elements that are not strings at all",
+      "input": { "raw": "{\"tags\": [\"  \", 7, [\"x\"], \"debut\"]}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "json-text-for-non-strings",
+      "note": "a non-string element is reported as its JSON text with no insignificant whitespace, which is the only way the report is comparable across languages",
+      "input": { "raw": "{\"tags\": [{\"a\": 1, \"b\": [2, 3]}, true, null, 42]}" }
+    },
+    {
+      "id": "summary-truncated-by-code-points",
+      "note": "the summary is measured in code points, so two emoji and two letters with a limit of three keeps two emoji and one letter",
+      "input": { "raw": "{\"summary\": \"\ud83d\ude00\ud83d\ude00ab\"}", "maxSummaryChars": 3 }
+    },
+    {
+      "id": "truncation-never-splits-an-emoji",
+      "note": "the limit falls inside an astral character: a truncation by UTF-16 code units would emit half of one, which is not text and cannot be re-encoded",
+      "input": { "raw": "{\"summary\": \"ab\ud83d\ude00\"}", "maxSummaryChars": 2 }
+    },
+    {
+      "id": "summary-limit-of-zero-means-no-limit",
+      "note": "zero is the absent value here, as in maxTags",
+      "input": { "raw": "{\"summary\": \"a long summary that stays whole\"}", "maxSummaryChars": 0 }
+    },
+    {
+      "id": "nbsp-is-not-whitespace",
+      "note": "whitespace is the ASCII set of section 2 and nothing else: U+00A0 stays part of the tag, so it does not match the vocabulary, and the report names it as it arrived. The tab and the newline around the first tag arrive as JSON escapes, which is the only way they can arrive inside a JSON string",
+      "input": { "raw": "{\"tags\": [\"\\tdebut\\n\", \"\u00a0debut\"]}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "unescaped-control-character-in-a-string",
+      "note": "JSON here means RFC 8259: a control character inside a string has to be escaped, so a model that emitted a real newline inside one produced no parseable answer. Nothing is recovered and the answer is reported as repaired. This is pinned because a lenient parser would accept it and quietly return a tag nobody asked for",
+      "input": { "raw": "{\"tags\": [\"debut\nkaraoke\"]}", "vocabulary": ["debut", "karaoke"] }
+    },
+    {
+      "id": "astral-tag-is-reported-by-value",
+      "note": "an astral character in an unmatched tag survives into the report, in byte order with the rest",
+      "input": { "raw": "{\"tags\": [\"\ud83d\ude00debut\", \"debut\"]}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "dropped-report-is-sorted",
+      "note": "the report is sorted by value then reason as UTF-8 bytes, so two runs in two languages can be compared as reports and not only as sets",
+      "input": { "raw": "{\"tags\": [\"zeta\", \"alpha\", \"Alpha\"]}", "vocabulary": ["alpha"] }
+    },
+    {
+      "id": "summary-that-is-not-a-string",
+      "note": "a list where a string was asked for is a prompt problem, not a parse error: the summary is empty and the tags still work",
+      "input": { "raw": "{\"summary\": [\"a\", \"b\"], \"tags\": [\"debut\"]}", "vocabulary": ["debut"] }
+    },
+    {
+      "id": "bad-input-no-raw",
+      "note": "an error answer is comparable through its code",
+      "input": { "vocabulary": ["debut"] }
+    },
+    {
+      "id": "bad-input-negative-max-tags",
+      "note": "a negative limit is not a limit",
+      "input": { "raw": "{}", "maxTags": -1 }
+    },
+    {
+      "id": "bad-input-vocabulary-entry-not-a-string",
+      "note": "a vocabulary the application cannot compare against is a caller bug, not a model bug",
+      "input": { "raw": "{}", "vocabulary": ["debut", 5] }
+    }
+  ]
+}

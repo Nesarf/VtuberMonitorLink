@@ -1,0 +1,444 @@
+{
+ "capability": "llm.parse",
+ "generatedBy": "js-llm (workers/js/vmlllm.js)",
+ "generatedAt": "2026-09-13T21:14:21.086Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "clean-object-needs-no-repair": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "ok",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "fenced-with-language-tag": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "ok",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "fenced-without-language-tag": {
+   "tags": [
+    "3d"
+   ],
+   "summary": "x",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "fence-with-crlf-endings": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "prose-around-the-object": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "ok",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "braces-inside-a-string": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "a } b { c",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "escaped-quote-inside-a-string": {
+   "tags": [],
+   "summary": "say \"ok\" now",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "trailing-comma-in-object": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "ok",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "trailing-comma-in-array": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "ok",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "comma-inside-a-string-is-data": {
+   "tags": [],
+   "summary": "a,}",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "broken-json-yields-nothing": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "no-object-at-all": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "empty-answer": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "tags-that-are-not-an-array": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "vocabulary-spelling-wins": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "turkish-i-is-not-a-locale-question": {
+   "tags": [
+    "idol"
+   ],
+   "summary": "",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "tag-outside-the-vocabulary": {
+   "tags": [],
+   "summary": "ok",
+   "dropped": [
+    {
+     "value": "singing",
+     "reason": "not-in-vocabulary"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 1,
+    "truncated": 0
+   }
+  },
+  "duplicates-in-three-spellings": {
+   "tags": [
+    "debut",
+    "karaoke"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "debut",
+     "reason": "duplicate"
+    },
+    {
+     "value": "debut",
+     "reason": "duplicate"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 2,
+    "dropped": 2,
+    "truncated": 0
+   }
+  },
+  "max-tags-keeps-model-order": {
+   "tags": [
+    "3d",
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "debut",
+     "reason": "duplicate"
+    },
+    {
+     "value": "karaoke",
+     "reason": "over-limit"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 2,
+    "dropped": 2,
+    "truncated": 0
+   }
+  },
+  "empty-and-non-string-elements": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "",
+     "reason": "empty"
+    },
+    {
+     "value": "7",
+     "reason": "not-a-string"
+    },
+    {
+     "value": "[\"x\"]",
+     "reason": "not-a-string"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 3,
+    "truncated": 0
+   }
+  },
+  "json-text-for-non-strings": {
+   "tags": [],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "42",
+     "reason": "not-a-string"
+    },
+    {
+     "value": "null",
+     "reason": "not-a-string"
+    },
+    {
+     "value": "true",
+     "reason": "not-a-string"
+    },
+    {
+     "value": "{\"a\":1,\"b\":[2,3]}",
+     "reason": "not-a-string"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 4,
+    "truncated": 0
+   }
+  },
+  "summary-truncated-by-code-points": {
+   "tags": [],
+   "summary": "😀😀a",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 1
+   }
+  },
+  "truncation-never-splits-an-emoji": {
+   "tags": [],
+   "summary": "ab",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 1
+   }
+  },
+  "summary-limit-of-zero-means-no-limit": {
+   "tags": [],
+   "summary": "a long summary that stays whole",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "nbsp-is-not-whitespace": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": " debut",
+     "reason": "not-in-vocabulary"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 1,
+    "truncated": 0
+   }
+  },
+  "unescaped-control-character-in-a-string": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 0,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "astral-tag-is-reported-by-value": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "😀debut",
+     "reason": "not-in-vocabulary"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 1,
+    "truncated": 0
+   }
+  },
+  "dropped-report-is-sorted": {
+   "tags": [
+    "alpha"
+   ],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "alpha",
+     "reason": "duplicate"
+    },
+    {
+     "value": "zeta",
+     "reason": "not-in-vocabulary"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 2,
+    "truncated": 0
+   }
+  },
+  "summary-that-is-not-a-string": {
+   "tags": [
+    "debut"
+   ],
+   "summary": "",
+   "dropped": [],
+   "repaired": false,
+   "counts": {
+    "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "bad-input-no-raw": {
+   "__error": "bad-input"
+  },
+  "bad-input-negative-max-tags": {
+   "__error": "bad-input"
+  },
+  "bad-input-vocabulary-entry-not-a-string": {
+   "__error": "bad-input"
+  }
+ }
+}

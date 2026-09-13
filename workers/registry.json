@@ -39,6 +39,19 @@
       "notes": "the reference implementation of search.query (docs/WORKERS.md section 9): integers only, a total ordering, and the same tokenizer as text.fingerprint. No build step."
     },
     {
+      "id": "js-llm",
+      "language": "javascript",
+      "capabilities": [
+        "llm.parse"
+      ],
+      "artifact": "workers/js/vmlllm.js",
+      "launch": [
+        "node",
+        "workers/js/vmlllm.js"
+      ],
+      "notes": "the reference implementation of llm.parse (docs/WORKERS.md section 11): the believing half of the LLM glue. Asking a model is I/O and stays in the application; parsing, repairing and checking the answer is pure text work, and that is the part several languages get subtly different. No build step."
+    },
+    {
       "id": "js-fetch",
       "language": "javascript",
       "capabilities": [
@@ -125,6 +138,30 @@
         ]
       },
       "notes": "Go, standard library only"
+    },
+    {
+      "id": "go-fetch",
+      "language": "go",
+      "capabilities": [
+        "fetch.plan"
+      ],
+      "build": [
+        "node",
+        "workers/go/build.mjs"
+      ],
+      "artifact": {
+        "win32": "workers/go/dist/vmlfetch.exe",
+        "default": "workers/go/dist/vmlfetch"
+      },
+      "launch": {
+        "win32": [
+          "workers/go/dist/vmlfetch.exe"
+        ],
+        "default": [
+          "workers/go/dist/vmlfetch"
+        ]
+      },
+      "notes": "Go, standard library only: the fetch.plan planner, exact integer arithmetic, no clock of its own"
     },
     {
       "id": "python-text",

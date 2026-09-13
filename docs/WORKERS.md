@@ -584,3 +584,101 @@ Determinism: no clock is read (`now` is an input), no randomness, no floats, and
 specified order. That is what makes a scheduler comparable across languages at all - and Go is the
 first implementation planned for it, because concurrency and scheduling are what Go is for in this
 project, with the JavaScript reference alongside it so the corpus has something to diff against.
+
+## 11. Next capability, specified before it exists: `llm.parse`
+
+The LLM and vision glue the project planned for Python is two problems wearing one name: **asking** a
+model (HTTP, retries, a key, a budget) and **believing** what it answered. Only the second one is a
+capability here. The asking half is I/O and stays in the application, where the mock LLM and the mock
+vision server already live; the believing half is pure text work over a response that is *dirty by
+nature*, which is exactly the kind of thing that several languages get subtly and silently different.
+
+A model answers with a fenced block, or with prose around the object, or with a trailing comma, because
+a trailing comma is legal in every language the model was trained on that is not JSON. It answers with
+tags that are not in the vocabulary, with the same tag twice in two spellings, with a summary longer
+than the field can hold. `llm.parse` turns that answer into the small, checked structure the rest of the
+application is allowed to depend on, and it says what it had to throw away.
+
+Input:
+
+```json
+{
+  "raw": "Sure!\n```json\n{\"tags\": [\"Debut\", \"3d\", \"debut\"], \"summary\": \"...\"}\n```\n",
+  "vocabulary": ["debut", "3d", "karaoke"],
+  "maxTags": 5,
+  "maxSummaryChars": 200
+}
+```
+
+Output:
+
+```json
+{
+  "tags": ["debut", "3d"],
+  "summary": "...",
+  "dropped": [{"value": "debut", "reason": "duplicate"}, {"value": "singing", "reason": "not-in-vocabulary"}],
+  "repaired": true,
+  "counts": {"tags": 2, "dropped": 2, "truncated": 0}
+}
+```
+
+Rules, in the order they are applied:
+
+1. **Find the payload.** If the first non-whitespace characters of `raw` are three backticks, drop the
+   rest of that line (a language tag after the fence goes with it) and stop at the next line whose
+   content is exactly three backticks - a trailing carriage return is not content, since model output
+   arrives over HTTP with either line ending - or at the end of the input if there is none. Then take
+   the first `{` and the `}` that closes it, counting depth and **ignoring braces inside JSON strings**:
+   a string opens at an unescaped `"`, closes at the next unescaped `"`, and a backslash escapes exactly
+   the character after it. Everything outside that slice is discarded.
+2. **Repair, narrowly.** Exactly one repair is specified, because it is the one models actually
+   produce: a comma followed - after whitespace only - by `}` or `]` is dropped. A comma inside a string
+   is a character of that string, so the removal has to respect string state; a parser that strips one
+   there is corrupting data, and precision matters more than tolerance here.
+3. **Parse.** The slice is parsed as JSON, and JSON here means RFC 8259: a control character inside a
+   string has to be escaped, and an implementation must not reach for a lenient parser that accepts one,
+   because that returns a tag nobody asked for and calls it a success. If parsing fails - and equally
+   when no complete object is found at all - an implementation must **not** attempt partial recovery: the
+   answer is `tags: []`, `summary: ""`, both counts zero and `repaired: true`, because an answer that had
+   to be recovered from is by definition not the answer that was sent. A parser that half-reads a broken
+   answer is worse than one that reports nothing, since the application cannot tell the difference
+   afterwards.
+4. **`tags`** must be an array; anything else - including a string like `"debut, 3d"` - contributes no
+   tags and no dropped entries, because splitting a free-form string is guessing, not parsing. An element
+   that is not a string is dropped with reason `not-a-string`, and its `value` is its JSON text with no
+   insignificant whitespace: integers as decimal digits, `true`/`false`/`null` as written, strings in
+   their JSON form, arrays and objects compactly with their original key order. Numbers that are not
+   integers are outside the corpus on purpose - serializing a float is a formatting decision that each
+   language makes differently, and this capability does not need one. Each tag string is trimmed of
+   leading and trailing whitespace; an empty tag is dropped with reason `empty`.
+5. **Matching is ASCII case-insensitive and nothing else.** A tag matches a vocabulary entry when the
+   two are equal after folding `A`-`Z` to `a`-`z`; the **output uses the vocabulary's spelling**, so a
+   model that writes `Debut` cannot change the application's own labels. Folding is ASCII-only on
+   purpose: a locale-aware lowercase would make the answer depend on the *interface language* of the
+   machine that ran it - Turkish `I` alone is enough to prove that - and a capability whose output
+   depends on the runner's locale is not a capability. No match is reason `not-in-vocabulary`, reported
+   with the trimmed tag as it arrived.
+6. **Duplicates** are decided on the matched, canonical form: the first occurrence wins, and every later
+   one is dropped with reason `duplicate` and the canonical form as its `value`.
+7. **`maxTags`** (default `0`, meaning no limit) keeps the first N tags in the model's own order after
+   deduplication; the rest are dropped with reason `over-limit` and the canonical form as their `value`.
+   A negative `maxTags` is `bad-input`; so is a `raw` that is not a string, and a `vocabulary` entry that
+   is not a string.
+8. **`summary`** that is not a string is `""` (a model that answered a list where a string was asked for
+   is a prompt problem, not a parse error). It is trimmed, then truncated to `maxSummaryChars`
+   **code points** (default `0`, no limit). Code points, not UTF-16 code units: truncating an emoji in
+   half produces a lone surrogate, which is not text and cannot be re-encoded. `counts.truncated` is how
+   many code points were removed.
+9. **`repaired`** is `true` when anything had to be fixed: a fence was stripped, the payload slice is not
+   the whole trimmed input, or at least one trailing comma was removed. The application uses it as a
+   prompt-quality signal, so it must mean "the answer arrived malformed", not "the answer was parsed".
+10. **`dropped` is sorted** by `value` then by `reason`, each compared as UTF-8 bytes, so the same answer
+    produces the same report in every language. `counts` holds integers.
+
+Determinism: no clock, no randomness, no network, no floats, and every list has a specified order. The
+model call is the application's business; this is the part where two languages can be compared, and
+where a wrong answer is a wrong tag in the user's face.
+
+The first implementation of it is planned for **Python**, because that is the half of the project the
+LLM glue was planned in - with the JavaScript reference beside it, as with every other capability, so
+the corpus has something to diff against rather than something to trust.

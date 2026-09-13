@@ -43,6 +43,7 @@ const FIELD_ORDER = {
   'text.fingerprint': ['simhash', 'tokens', 'shingles'],
   'search.query': ['hits', 'total', 'facets', 'excludedByTime'],
   'fetch.plan': ['batches', 'deferred', 'skipped', 'counts'],
+  'llm.parse': ['tags', 'summary', 'dropped', 'repaired', 'counts'],
 };
 const NESTED_ORDER = {
   links: ['href', 'absolute', 'text'],
@@ -50,6 +51,7 @@ const NESTED_ORDER = {
   batches: ['egress', 'sources'],
   deferred: ['id', 'reason'],
   skipped: ['id', 'reason'],
+  dropped: ['value', 'reason'],
 };
 /** Facet objects are specified to be emitted with their keys sorted by UTF-8 bytes. */
 const SORTED_KEY_OBJECTS = ['facets.tags', 'facets.months'];

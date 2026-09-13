@@ -164,7 +164,7 @@ func removeElement(s, tag string) string {
 			i++
 			continue
 		}
-		_, name, ok := scanTag(s, i)
+		_, name, ok, _ := scanTag(s, i)
 		if !ok || name != tag {
 			b.WriteByte(s[i])
 			i++
@@ -226,8 +226,9 @@ func walkHTML(src string, cdataBodies []string) extractOutput {
 		}
 	}
 
-	// pushCharData restores a lifted CDATA body. It is character data: routed to the body or the
-	// title like any other text, and never re-parsed as markup.
+	// pushCharData restores a lifted CDATA body. It is character data: routed exactly like the main
+	// text - body and open anchor both - except inside a title, whose text belongs to the title and
+	// to nothing else. It is never re-parsed as markup and its entities stay inert.
 	pushCharData := func(chunk string) {
 		if chunk == "" {
 			return
@@ -237,6 +238,9 @@ func walkHTML(src string, cdataBodies []string) extractOutput {
 			return
 		}
 		text.WriteString(chunk)
+		if pending != nil {
+			pending.text.WriteString(chunk)
+		}
 	}
 
 	for i := 0; i < len(src); {
@@ -251,16 +255,16 @@ func walkHTML(src string, cdataBodies []string) extractOutput {
 			continue
 		}
 		if ch == '<' && i+1 < len(src) && startsTag(src[i+1]) {
-			end, name, _ := scanTag(src, i)
+			end, name, _, closed := scanTag(src, i)
 			raw := src[i+1 : end] // without the angle brackets; an unclosed tag has no '>'
-			closed := end > i+1 && src[end-1] == '>'
 			if closed {
 				raw = src[i+1 : end-1]
 			}
 			i = end
 			closing := strings.HasPrefix(raw, "/")
 			// A tag that is never closed before end of input is dropped as a tag and contributes
-			// nothing at all - not a newline either. "<p" at EOF is therefore not a paragraph.
+			// nothing at all - not a newline either. "<p" at EOF is therefore not a paragraph, and
+			// neither is "<p title=\"x</div>", whose last '>' belongs to a quoted value.
 			if !closed {
 				continue
 			}
@@ -400,7 +404,7 @@ func scanTag(s string, start int) (end int, name string, ok bool, closed bool) {
 		}
 		j++
 	}
-	return len(s), name, true
+	return len(s), name, true, false // unclosed: runs to end of input
 }
 
 func isNameByte(c byte) bool {

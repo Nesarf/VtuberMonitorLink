@@ -149,6 +149,24 @@ func checkCases() []checkCase {
 			want:       `{"title":"","text":"","links":[],"images":0}`,
 		},
 		{
+			name:       "extract/an unclosed tag whose last '>' belongs to a quoted value is still unclosed (fuzz seed 7 case 2)",
+			capability: capExtract,
+			input:      `{"html":"<br><p title=\"unclosed&#X41</div>","baseUrl":null}`,
+			want:       `{"title":"","text":"\n","links":[],"images":0}`,
+		},
+		{
+			name:       "extract/a CDATA body inside an anchor belongs to the link text too (fuzz seed 7 case 1)",
+			capability: capExtract,
+			input:      `{"html":"<br><a href=\"x\"><img src=\"i.png\" alt=\"t\"><br/><![CDATA[<b>raw</b>]]></a>debut\u01c4debut< p><script src=\"a>b\"><br/>","baseUrl":null}`,
+			want:       `{"title":"","text":"\n\n<b>raw</b>debutǄdebut< p>","links":[{"href":"x","absolute":false,"text":"\n<b>raw</b>"}],"images":1}`,
+		},
+		{
+			name:       "extract/a CDATA body inside an anchor reaches the body text and the link text alike",
+			capability: capExtract,
+			input:      `{"html":"<a href=\"/x\"><![CDATA[<b>raw</b>]]></a>","baseUrl":null}`,
+			want:       `{"title":"","text":"<b>raw</b>","links":[{"href":"/x","absolute":false,"text":"<b>raw</b>"}],"images":0}`,
+		},
+		{
 			name:       "extract/CDATA is character data: its markup is not re-parsed",
 			capability: capExtract,
 			input:      `{"html":"<![CDATA[<b>raw</b>]]>","baseUrl":null}`,
@@ -183,6 +201,12 @@ func checkCases() []checkCase {
 			capability: capExtract,
 			input:      `{"html":"<a href=\"/x\"><title>T</title>t</a>","baseUrl":null}`,
 			want:       `{"title":"T","text":"t","links":[{"href":"/x","absolute":false,"text":"t"}],"images":0}`,
+		},
+		{
+			name:       "extract/a title inside an anchor still takes no CDATA body (title text is exclusive)",
+			capability: capExtract,
+			input:      `{"html":"<a href=\"/x\"><title>T<![CDATA[q]]></title>t</a>","baseUrl":null}`,
+			want:       `{"title":"Tq","text":"t","links":[{"href":"/x","absolute":false,"text":"t"}],"images":0}`,
 		},
 		{
 			name:       "extract/hex reference decodes to its own character (&#x2014; is U+2014, not '-')",

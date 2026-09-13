@@ -174,6 +174,14 @@ for (const loc of LOCALES) {
     const tSrc = literalTokens(src).join(' ');
     const tVal = literalTokens(val).join(' ');
     if (tSrc !== tVal) addHard(loc.code, key, `placeholder mismatch: source "${literalTokens(src).join('') || 'none'}" -> translation "${literalTokens(val).join('') || 'none'}"`, val, src);
+    // A count label with no noun left: "{n}" with the noun dropped passes every other gate the
+    // pipeline has - the placeholder is intact, there are no Han characters, no length rule fires -
+    // and the UI then shows a bare number. Indonesian's cookieCount shipped exactly like that and was
+    // caught by hand; this check exists so the next one is caught by the tool.
+    if (/\{n\}/.test(src)) {
+      const bare = String(val).replace(/\{n\}/g, '').replace(/[0-9\s.,'"(){}[\]<>:;!?…·–—-]/g, '');
+      if (!bare) addHard(loc.code, key, 'count label lost its noun: the value interpolates {n} and carries nothing else', val, src);
+    }
     if (SENTINEL_TEST.test(val)) addHard(loc.code, key, 'stray sentinel (a ⟦...⟧ the model invented, nothing should survive the restore)', val, src);
     const boldSrc = countOf(src, '**');
     const boldVal = countOf(val, '**');
@@ -236,6 +244,25 @@ for (const loc of LOCALES) {
       if (String(src).includes(term) && String(val).includes(term)) {
         ownSuspect.push({ key, why: `glossary term "${term}" should be written "${target}" but the translation still carries the source word`, val, src, kind: 'glossary' });
         break;
+      }
+    }
+    // A glossary term whose `default` is a **translation** rather than the source term leaks that
+    // translation into every locale without an override. The glossary's own note says `default` means
+    // "keep as-is", but 25 Chinese terms carry an English default, so a French or Russian sentence ends
+    // up with an English noun phrase inside it ("Importar desde VDBPersonas seguidas"), and nothing
+    // reported it: looksUntranslated() strips keep-terms before testing, and needsRetranslate() hashes
+    // the text after the term was substituted. This measures it instead of guessing.
+    if (lang !== 'en') {
+      for (const [term, spec] of Object.entries(GLOSSARY)) {
+        if (term.startsWith('_') || !spec || typeof spec.default !== 'string') continue;
+        if (!/[\u4e00-\u9fff]/.test(term)) continue; // a Latin term: keeping it is the whole point
+        if (/[\u4e00-\u9fff]/.test(spec.default)) continue; // default is the source term: keep as-is, fine
+        if (spec[loc.code]) continue; // this locale has agreed wording of its own
+        if (!String(src).includes(term)) continue;
+        if (String(val).includes(spec.default)) {
+          ownSuspect.push({ key, why: `glossary "${term}" fell back to its English default "${spec.default}" (this locale has no override for it)`, val, src, kind: 'glossary-default' });
+          break;
+        }
       }
     }
     if (lang !== 'zh' && lang !== 'ja' && looksUntranslated(val, loc.code, GLOSSARY)) {

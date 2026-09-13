@@ -116,6 +116,19 @@ the word form via `Intl.PluralRules` -- `21 элемент` rather than `21 эл
   record total length as a path length…). When you rewrite the wording and find the comment does not
   match the code, **flag it first**, and do not casually rewrite the comment to accommodate the code
   -- that turns a real problem into a smooth-sounding lie.
+- **A glossary `default` is not a translation** (added after BUGS #75). `web/src/locales/glossary.json`
+  substitutes each term into the source text *before* the model sees it, and the model is told to leave
+  substituted terms untouched — so whatever `default` says is what every locale without an override
+  displays **forever**. It must be the source term itself (`default: "来源"`), meaning "keep it as-is
+  in Chinese and translate it per language"; the only exception is a proper noun whose original
+  spelling *is* the convention (`bilibili`, `Feishu`, `Moegirlpedia`, `VTuber`). An English `default`
+  on a common noun is a translation smuggled into the glossary, and it cost 385 rows across 21 locales
+  — English noun phrases sitting inside French, Russian, Korean and Indonesian sentences, plus a
+  Chinese kept-term in two of them. Two guards now measure it: a term whose `default` is not the
+  source term is a suspect wherever a locale without an override displays it, and **a label
+  interpolating `{n}` must carry something besides the number** — a count label that had lost its noun
+  (`"{n}"`) passed every other gate the pipeline has, including the placeholder check, because the
+  placeholder was intact.
 
 ## 8. Commit messages are English too (added 2026-09-14)
 

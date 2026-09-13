@@ -1,0 +1,25 @@
+# Line endings: keep the working tree LF everywhere.
+#
+# Why this file exists at all: the first public release build failed on GitHub Actions while the
+# same command was green locally. The cause was not the code but the checkout — with
+# `core.autocrlf=true` (the Git for Windows default, and what the runner had) git hands every text
+# file back with CRLF, while the generators write LF. `tools/i18n-hant.mjs --check` then reported
+# `generated.js is stale` for a file whose content was identical, and the release job stopped
+# before it could build anything.
+#
+# Pinning the checkout to LF removes that whole class of "green here, red there": any byte
+# comparison, hash or generated-artifact check now sees the same bytes on every machine.
+* text=auto eol=lf
+
+# Binaries must never be touched by the conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.exe binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary

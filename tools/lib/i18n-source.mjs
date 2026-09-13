@@ -39,11 +39,21 @@ export function stripStrings(s) {
   return out;
 }
 
-/** Extract the text span of one dictionary (bounded by the 2-space-indented closing `},`) */
+/**
+ * Extract the text span of one dictionary (bounded by the 2-space-indented closing `},`).
+ *
+ * CRLF-tolerant on purpose: this parser is line-oriented, and on a checkout with
+ * `core.autocrlf=true` (Git for Windows' default) every line ends `\r\n`. The old terminator
+ * `/\n  \},\n/` never matched the *zh* block's own closing brace there, so it ran on to the end of
+ * the **en** block: both dictionaries came out identical, every key looked "language-neutral", and
+ * coverage reported 0% while proofreading compared Chinese against Chinese and saw no problems.
+ * It stayed invisible locally for exactly the reason it broke CI: the dev tree has LF.
+ */
 export function dictBlock(src, which) {
-  const startIdx = src.indexOf(`  ${which}: {`);
+  const text = String(src).replace(/\r\n/g, '\n');
+  const startIdx = text.indexOf(`  ${which}: {`);
   if (startIdx < 0) return '';
-  const after = src.slice(startIdx);
+  const after = text.slice(startIdx);
   const end = /\n  \},\n/.exec(after);
   return after.slice(0, end ? end.index : after.length);
 }

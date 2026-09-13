@@ -152,8 +152,13 @@ function main() {
     ';\n\nexport default GENERATED;\n';
 
   const prev = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
-  // The timestamp would make every comparison unequal: ignore it while comparing
-  const strip = (s) => s.replace(/^\/\/ 生成时间：.*$/m, '');
+  // Two things must be ignored while comparing, or "up to date" depends on the machine:
+  //   * the timestamp line (it changes on every generation), and
+  //   * CRLF: the generator writes LF, but git checks the file out with CRLF wherever
+  //     `core.autocrlf=true` (the Windows default, and what a fresh clone — or GitHub Actions —
+  //     got). Without this the artifact looked stale in CI while being byte-identical in content,
+  //     which is exactly how the first v1.0.0 release build failed.
+  const strip = (s) => s.replace(/^\/\/ 生成时间：.*$/m, '').replace(/\r\n/g, '\n');
   if (strip(prev) === strip(body)) {
     process.stdout.write('\nup to date: ' + path.relative(ROOT, OUT) + '\n');
     return;

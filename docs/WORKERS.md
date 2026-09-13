@@ -132,6 +132,15 @@ while still looking like it works, and the corpus then blames the wrong implemen
   shells need `LC_ALL=C.UTF-8` (or a `UTF-8` locale) and must not rely on the terminal's code page.
 - Also true for the **decimal separator**: never format a number with a locale, and never parse one
   that way. `1,5` is a bug in this protocol.
+- **Line endings are part of the same family, and one language cannot obey them.** The transport is
+  LF. Most languages emit LF without being asked, but **base R on Windows cannot**: its stdout is a
+  text-mode CRT stream that rewrites every LF as CR LF, `writeBin(..., stdout())` refuses with "can
+  only write to a binary connection", `file("stdout", "wb")` is not special-cased and creates a file
+  literally named `stdout`, and flipping the flag with `_setmode` through the CRT does not affect an
+  already-initialised stream. The R implementation answers with CR LF, says so in its README, and is
+  right to: the host parses JSON, and a trailing CR is whitespace there. This is a "this language
+  cannot do X exactly" result rather than an approximation — and the rule for reporting one is the
+  same as everywhere else here: write it down, in the README, with the evidence.
 
 ## 2. Capability: `text.normalize`
 
@@ -154,7 +163,7 @@ values:
 1. **Delete** these code points: `U+0000-U+0008`, `U+000B`, `U+000C`, `U+000E-U+001F`, `U+007F`,
    `U+200B-U+200F`, `U+202A-U+202E`, `U+2060-U+2064`, `U+FEFF`, and the combining marks
    `U+0300-U+036F`, `U+1AB0-U+1AFF`, `U+1DC0-U+1DFF`, `U+20D0-U+20FF`, `U+FE20-U+FE2F`. (Tab, LF and
-   CR are not deleted; step 6 folds them into spaces. Deleting the combining marks is what makes a
+   CR are not deleted; step 5 folds them into spaces. Deleting the combining marks is what makes a
    decomposed string — `e` + `U+0301`, which is what half the feeds on the web contain — compare
    equal to its composed form, without asking any language for NFKC.)
 2. **Map** code points, one to one, using this table (anything not listed is left alone):
@@ -193,7 +202,16 @@ Input `{"html": string, "baseUrl": string | null}` -> output
 `{"title": string, "text": string, "links": [{"href": string, "absolute": boolean, "text": string}], "images": number}`.
 
 A specified state machine, not "whatever the runtime's HTML parser does" (there is no HTML parser in
-C++ or Go without a dependency, and the project has no HTML dependency on purpose):
+C++ or Go without a dependency, and the project has no HTML dependency on purpose).
+
+**Pass order matters, and the numbering below is not the order to run the passes in.** The observable
+order is: hide every CDATA body first, then remove comments and doctypes, then remove the listed
+elements (step 1) with their content, and only then walk what is left (steps 3 to 7). The corpus pins
+the consequence: a CDATA section inside a removed element is removed with it, while a `<script>` inside
+a CDATA *body* is text and survives (`cdata-inside-removed-element`). An implementation that removes
+elements before hiding CDATA gets that case wrong — the Go implementation did, and this paragraph
+exists because of it. The reference implementation runs the passes in this order; the numbers below
+are a description of the rules, not a schedule.
 
 1. Remove, with their content, the elements `script`, `style`, `noscript`, `template`, `svg`,
    `iframe` (tag names matched case-insensitively; a missing closing tag means "to end of input").
@@ -363,14 +381,19 @@ Deliberately not here yet:
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
-- **Known open items.** The R worker's tokenizer agrees with everyone and its SimHash does not, which
-  is a 64-bit arithmetic problem rather than a language limit (its FNV-1a loop is testable against
-  published vectors). Malformed-request error *text* differs per language by design. The corpus is a
+- **Known open items.** Six implementations agree on all 67 cases, so what is left here is what the
+  corpus still cannot see. Malformed-request error *text* differs per language by design. The
+  **removed-element pre-scan ends an opening tag at the first `>`**, so a quoted attribute containing
+  `>` (`<script src="a>b">`) is mis-scanned and the whole element may not be removed; the main tag
+  scanner *is* quote-aware, so this is an inconsistency between two passes of the same function. No
+  corpus case covers it, and it is recorded here rather than fixed because fixing it means changing
+  six implementations for a malformed-input edge — the honest sequence is to pin it first, then fix
+  it, and nobody has needed it yet. The corpus is a
   floor, not a ceiling: two of the four bugs the reference had were found by an implementation
   diffing itself against the reference over inputs the corpus did not contain, which is the strongest
   argument yet for keeping more than one implementation around.
 
-## 10. Next capability, specified before it exists: `search.query`
+## 9. Next capability, specified before it exists: `search.query`
 
 Written down first on purpose. A ranked capability is the one place where four languages can quietly
 disagree forever: a floating-point score computed in a different order is a different number, and

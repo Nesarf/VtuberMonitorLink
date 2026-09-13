@@ -347,6 +347,13 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   release copy, because that copy walks the filesystem and excludes by name. A machine path inside a
   `.json` file is escaped, which is why both leak guards needed a second rule for it - see
   `docs/BUGS.md` #78.
+- **The runner is sequential on purpose, and so are the builds.** One worker is spawned at a time, and
+  one build runs at a time, even though several implementations could be driven in parallel. The reason is
+  memory rather than politeness: a JVM build, a .NET build and a C++ build running together spend more of
+  the machine on compilers than the whole layer would ever use, and the symptom on a smaller developer
+  machine is indistinguishable from a worker that has hung. The fuzzer is sequential for the same reason.
+  A machine that is short of memory should also keep its other work off the CPU while a build runs: the
+  layer is cheap at run time and expensive at build time, and the two should not be confused.
 - `--build-only` compiles everything that is missing and stops; `--cap` and `--only` narrow a run;
   `--update` re-records the snapshot from the reference.
 - The primary verdict is the **cross-implementation diff**, not "matches the reference": the tool

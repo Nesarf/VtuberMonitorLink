@@ -1,104 +1,104 @@
-# 观测模式 / Observation mode
+# Observation mode / 观测模式
 
-> 目标：**既能看出一整个箱的状态，又不留下「有人在盯整箱」的痕迹。**
-> 实测数据与判据都写在下面；实现见 `server/src/observe.js`，自检见 `tools/observe-test.mjs`。
+> Goal: **to see the state of a whole agency, without leaving a trace that "someone is watching the whole agency".**
+> The measured data and the criteria are below; the implementation is in `server/src/observe.js` and the self-check in `tools/observe-test.mjs`.
 
-## 1. 先把威胁模型说清楚
+## 1. First, state the threat model clearly
 
-想判断一个箱（团队）的真实状态，就得同时看箱内多人的行动。麻烦在于：**这件事本身**
-——「同一时刻把整箱扫一遍」—— 不依赖你是从哪个 IP 来的。
+To judge the real state of an agency (team), you have to look at what several of its members do at the same time. The trouble is that **this act itself**
+-- "sweep the whole agency at one moment" -- does not depend on which IP you come from.
 
-| 信号 | 谁能看到 | Tor 能挡住吗 |
+| Signal | Who can see it | Can Tor hide it |
 | --- | --- | --- |
-| 你的真实 IP | 被访问的站点 | **能**（换成一个 Tor 出口） |
-| 请求内容：一次查了哪些 uid、哪些成员 | 被访问的站点 | **不能** |
-| 时序：每天同一时刻、间隔精确相等、顺序固定 | 被访问的站点 | **不能** |
-| 登录态（SESSDATA / BotPassword / 账号） | 平台，且与你的实名身份绑定 | **不能**（反而更糟：把身份和观测连起来） |
-| 箱自己站点上的访问日志 | **箱自己** | **能** —— 这是唯一「日志在对方手上」的一类 |
+| Your real IP | The site being visited | **Yes** (replaced by a Tor exit) |
+| Request content: which uids and which members were queried at once | The site being visited | **No** |
+| Timing: the same moment every day, intervals exactly equal, fixed order | The site being visited | **No** |
+| Login state (SESSDATA / BotPassword / account) | The platform, and it is bound to your real-world identity | **No** (worse, in fact: it links the identity to the observation) |
+| Access logs on the agency's own site | **The agency itself** | **Yes** -- this is the only category where the logs are in the other party's hands |
 
-结论：Tor 只解决第一行。真正降敏感度的是**取样（改变「一次看多少」）**与**抖动（改变「什么时候看」）**，
-这两件与 Tor 无关；Tor 该用在哪，由「日志在谁手上」决定。
+Conclusion: Tor only solves the first row. What really reduces sensitivity is **sampling (changing "how much is looked at in one pass")** and **jitter (changing "when it is looked at")**,
+and neither of those has anything to do with Tor; where Tor should be used is decided by "whose hands the logs are in".
 
-另外要诚实：Tor 流量在安全部门眼里**是显眼的**（Tor 出口 IP 是公开清单）。
-它的价值不是「隐形」，而是**无法归因到你**；而「有一个 Tor 出口把全箱看了一遍」
-这个事实仍然在对方日志里 —— 所以才需要取样与抖动把「全箱一次性」这个模式消掉。
+Honesty also requires this: Tor traffic **is conspicuous** in the eyes of a security department (Tor exit IPs are a public list).
+Its value is not "invisibility", but that it **cannot be attributed to you**; and the fact that "a Tor exit looked at the whole agency once"
+is still in the other party's logs -- which is exactly why sampling and jitter are needed, to erase the "whole agency in one go" pattern.
 
-## 2. 实测边界（2026-09-12，本机）
+## 2. Measured boundaries (2026-09-12, local machine)
 
-用**项目自己的带签名 fetcher** 测（这一点很重要：直接用 curl 打 B 站接口会得到 412，
-那是「未签名」而不是「被 Tor 封」，我第一次就是这么误判的）：
+Measured with **the project's own signed fetcher** (this point matters: hitting bilibili's API directly with curl returns 412,
+which is "unsigned" rather than "blocked by Tor"; that was my first misjudgement):
 
-| 目标 | 直连 | 经 Tor |
+| Target | Direct | Via Tor |
 | --- | --- | --- |
-| `api.bilibili.com` 空间动态（bili-opus 来源） | `ok=true items=20`，321ms | **`ok=true items=20`，2521ms** |
-| `api.live.bilibili.com` 批量开播状态 | `code=0` | `code=0` |
-| `api.bilibili.com/x/web-interface/nav`（取 WBI key） | 可用 | 可用 |
-| `api.bilibili.com/x/space/acc/info` | 可用 | **`-799 请求过于频繁`** |
-| 箱自托管站点 | — | hololivepro 200 / vspo 200 / cover-corp 200、**anycolor 403（Cloudflare 拦 Tor）** / brave-group 超时 |
+| `api.bilibili.com` space dynamics (bili-opus source) | `ok=true items=20`, 321ms | **`ok=true items=20`, 2521ms** |
+| `api.live.bilibili.com` batch stream-start status | `code=0` | `code=0` |
+| `api.bilibili.com/x/web-interface/nav` (fetch the WBI key) | Works | Works |
+| `api.bilibili.com/x/space/acc/info` | Works | **`-799 请求过于频繁`** (transient: "requests too frequent") |
+| Agency self-hosted sites | — | hololivepro 200 / vspo 200 / cover-corp 200, **anycolor 403 (Cloudflare blocks Tor)** / brave-group timeout |
 
-换出口（Tor 的 `IsolateSOCKSAuth`，用 SOCKS 用户名隔离电路）：
+Changing exits (Tor's `IsolateSOCKSAuth`, isolating circuits by SOCKS username):
 
 ```
 obs1:x → 192.42.116.48     obs2:x → 193.189.100.201
 obs3:x → 45.84.107.174     obs4:x → 64.190.76.13
-不带用户名重复三次 → 199.195.253.124（三次同一个）
+repeated three times without a username → 199.195.253.124 (the same one all three times)
 ```
 
-也就是说**默认情况下整轮巡检都从同一个出口出去**；轮换之后才分散。
+In other words, **by default a whole sweep leaves through the same exit**; only after rotation is it spread out.
 
-## 3. 四件事怎么落地
+## 3. How the four things land
 
-### 3.1 取样（`sampleRatio`，默认 50%）
+### 3.1 Sampling (`sampleRatio`, default 50%)
 
-每轮只取一部分对象。取法不是纯随机、也不是纯 LRU：
+Each round takes only part of the objects. The selection is neither purely random nor purely LRU:
 
-- 纯随机会让某个对象连着好几轮都没被看到，覆盖补得很慢；
-- 纯 LRU 则「最久没看的那批」总是同一批，模式又变得可预测。
+- Purely random lets some object go unseen for several rounds in a row, so coverage is filled in very slowly;
+- Purely LRU means "the batch unseen longest" is always the same batch, and the pattern becomes predictable again.
 
-所以：**先按「最久没看过」排出候选池（池子比取样数大），再从池里随机取，取完打乱顺序。**
-覆盖由本地增量归档补齐 —— 几天下来画像照样完整，但任何**单次**观察都不指向「有人在盯整箱」。
+So: **first order a candidate pool by "unseen longest" (the pool is larger than the sample size), then take a random selection from the pool, then shuffle the order.**
+Coverage is filled in by the local incremental archive -- after a few days the profile is complete all the same, but no **single** observation points at "someone is watching the whole agency".
 
-监视对象（`watch.targets`）与来源（`sources`）各自取样，各有一个最少条数（默认 2 / 1），
-避免对象很少时一轮只取一个。
+Watch targets (`watch.targets`) and sources (`sources`) are sampled separately, each with its own minimum count (default 2 / 1),
+so that a round does not take only one when there are very few objects.
 
-### 3.2 抖动（`jitterSeconds`，默认 3–12 秒）
+### 3.2 Jitter (`jitterSeconds`, default 3-12 seconds)
 
-请求之间与监视对象之间都按区间随机等待，取代固定的 `run.defaultGapSeconds`。
-`base = 0` 时**不抖**（显式的「不要等」优先 —— 诊断路径靠它跳过限流等待）。
+Random waits drawn from the interval are applied both between requests and between watch targets, replacing the fixed `run.defaultGapSeconds`.
+When `base = 0` there is **no jitter** (an explicit "do not wait" wins -- the diagnostic path relies on it to skip rate-limit waits).
 
-### 3.3 按「日志在谁手上」分配出口（`torForAgency`）
+### 3.3 Assigning exits by "whose hands the logs are in" (`torForAgency`)
 
-- **箱自托管站点 → Tor。** 白名单在 `observe.js` 的 `AGENCY_HOSTS`（hololivepro / anycolor /
-  nijisanji / brave-group / vspo / cover-corp / a-soul / yousa…）。只有这类入口的日志
-  躺在对方服务器上，Tor 才有意义。
-- **平台源（bilibili / Reddit / Fandom）不动它** —— 箱看不到那些日志，而经 Tor 实测慢 8 倍、
-  个别接口还会被限流。使用者若在来源页显式钉了 `tor`，仍然尊重（那是明确意图）。
-- 没列进白名单的域名一律按平台处理：**宁可少用 Tor，也不乱套**。
+- **Agency self-hosted sites -> Tor.** The allowlist is `AGENCY_HOSTS` in `observe.js` (hololivepro / anycolor /
+  nijisanji / brave-group / vspo / cover-corp / a-soul / yousa...). Only for this kind of entry point do the logs
+  sit on the other party's server, which is where Tor means anything.
+- **Platform sources (bilibili / Reddit / Fandom) are left alone** -- the agency cannot see those logs, and via Tor they measured 8 times slower,
+  with individual endpoints getting rate-limited. If the user has explicitly pinned `tor` on the source page, that is still respected (it is an explicit intent).
+- Any domain not on the allowlist is treated as a platform: **better to use Tor less than to apply it indiscriminately**.
 
-### 3.4 不跑需要登录态的来源（`skipLoginSources`）
+### 3.4 Login-required sources are not run (`skipLoginSources`)
 
-`login: required` 的来源在这一模式下**直接跳过**，并在日志与报告里写明原因。
-把实名身份和观测行为绑在一起，比 IP 严重得多。
+Sources with `login: required` are **skipped outright** in this mode, and the reason is written into both the logs and the report.
+Binding a real-world identity to observation behaviour is far more serious than an IP.
 
-### 3.5 换出口（`rotateExit`）
+### 3.5 Changing exits (`rotateExit`)
 
-`net.js` 的 `torEgressUrl()` 给 SOCKS 地址塞一个用户名（`obs-<来源 id>`），
-Tor 按用户名隔离电路 → 不同来源走不同出口。同一个来源在同一轮里保持同一条链路
-（不是每个 HTTP 请求都换，避免重连开销与出口抖动）。
+`torEgressUrl()` in `net.js` stuffs a username into the SOCKS address (`obs-<source id>`),
+and Tor isolates circuits by username -> different sources take different exits. One source keeps the same circuit within one round
+(it does not change per HTTP request, avoiding reconnection overhead and exit jitter).
 
-## 4. 诚实显示
+## 4. Honest display
 
-取样会**改变**界面读数的含义，所以必须说出来，否则「本轮没取到样」会被读成「那个人没动静」：
+Sampling **changes** what the UI readings mean, so it has to be said, otherwise "no sample was taken this round" gets read as "that person did nothing":
 
-- 运行页：`本轮为取样 · 来源 3/6 · 监视对象 3/6 · Tor: official-hololive …`
-- 报告开头：一段引用，写明本轮取样比例、走 Tor 的来源、被跳过的登录态来源；
-- 运行日志：取样条数、Tor 来源、跳过原因各一行。
+- Run page: `本轮为取样 · 来源 3/6 · 监视对象 3/6 · Tor: official-hololive …` (transient: "this round sampled · sources 3/6 · watch targets 3/6")
+- Start of the report: a blockquote stating the sampling ratio for the round, which sources went via Tor, and which login-required sources were skipped;
+- Run log: one line each for the sampled counts, the Tor sources and the skip reasons.
 
-**「本轮没出现」≠「没有动静」**，这句话在界面与报告里都写了。
+**"Did not appear this round" ≠ "no activity"**, and this sentence is written in both the UI and the report.
 
-## 5. 配置
+## 5. Configuration
 
-设置页 →「观测模式」（也可以直接改 `config.json`）：
+Settings page -> "Observe mode" (UI string: `观测模式`) (or edit `config.json` directly):
 
 ```json
 "observation": {
@@ -113,15 +113,15 @@ Tor 按用户名隔离电路 → 不同来源走不同出口。同一个来源�
 }
 ```
 
-轮转状态保存在 `logs/observation.json`（运行期数据，不进仓库、不进发行包）。
+Rotation state is stored in `logs/observation.json` (runtime data; it does not enter the repository or the release package).
 
-## 6. 自检
+## 6. Self-check
 
-`npm run test:observe`（已接进 `verify:fast`）用**固定随机源**把行为钉住：
+`npm run test:observe` (already wired into `verify:fast`) pins the behaviour down with a **fixed random source**:
 
-- 日志归属判定（含「认不出来就当平台」）；
-- 取样比例、最少条数、**轮转公平**（8 轮后每个对象都被取到过）、**不可预测**（同一份历史 +
-  不同随机源 → 取到的集合不同）、顺序被打乱；
-- 抖动区间、显式 0 不抖、base 大于区间下限时不反而等更少；
-- 观测模式下的整体计划：取一半、箱站点改走 Tor、平台源不被强改、登录态来源被剔除并给出原因；
-- 白名单里每个域名都能被识别（防止手写域名写错）。
+- Log attribution decisions (including "if it cannot be recognised, treat it as a platform");
+- Sampling ratio, minimum counts, **rotation fairness** (after 8 rounds every object has been taken at least once), **unpredictability** (the same history plus
+  a different random source -> a different selected set), and the order being shuffled;
+- The jitter interval, explicit 0 meaning no jitter, and a base above the interval's lower bound not leading to shorter waits instead;
+- The overall plan in observe mode: take half, agency sites switched to Tor, platform sources not forced over, login-required sources removed with a stated reason;
+- Every domain in the allowlist is recognised (guarding against a typo in a hand-written domain).

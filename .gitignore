@@ -4,9 +4,10 @@ dist/
 .vite/
 
 # runtime data (never commit)
-# 这几个是**应用跑起来才会产生**的目录（监视历史、缩略图、自检诊断、端口文件）。
-# 漏掉任何一个都会重演同一个错误：某个工具有一天把它们写进仓库根目录，
-# 然后被 `git add -A` 顺手提交（advice/ 与 mock-vision-port.txt 都真的发生过）。
+# These are the directories the app only creates **while it is running** (watch history, thumbnails,
+# self-check diagnostics, the port file). Missing any one of them replays the same mistake: a tool
+# writes it into the repository root one day, and `git add -A` commits it (it really happened with
+# advice/ and with mock-vision-port.txt).
 config.json
 reports/
 feeds/
@@ -42,5 +43,14 @@ Desktop.ini
 build/
 
 
-# 机器翻译的工作缓存（源串哈希 → 译文）；machine.json 是产物，要提交
+# worker build outputs: the compiled artifacts of the multilingual layer are built locally by
+# `node workers/<language>/build.mjs` and are never committed (see docs/WORKERS.md)
+workers/*/dist/
+workers/*/build/
+workers/*/obj/
+workers/*/bin/
+
+
+# machine-translation working cache (source-string hash -> translation); machine.json is a product
+# of that pipeline and IS committed
 web/src/locales/.cache/

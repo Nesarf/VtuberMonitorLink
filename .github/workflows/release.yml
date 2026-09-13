@@ -1,17 +1,17 @@
 name: release
 
-# 推 tag（形如 v1.0.0）→ 出便携 exe → 附到 GitHub Release
-# 手动跑（workflow_dispatch）→ 只产出构建物，不发 Release
+# Push a tag (of the form v1.0.0) -> build the portable exe -> attach it to the GitHub Release
+# Run it by hand (workflow_dispatch) -> produce the build artifacts only, no Release
 #
-# 设计原则：**和本机发布完全同源**，避免「本机绿、CI 红」。
-#   1) 先跑「不需要构建」的自检（完整性 / 词条时效 / 键粘连 / 日历 / 推送）——快，失败就停
-#   2) 再用 tools/build-portable.cjs 出 exe 与 zip（**zip 与清单由它生成**，
-#      不用 Compress-Archive 整目录压 —— 那样既没有清单、也无法断言
-#      「包里没有运行期数据（config.json 里的 API Key、历史报告）」）
-#   3) 最后跑完整 verify（含发行版结构检查）并附上 SHA256SUMS
+# Design rule: **the exact same path as a local release**, so that "green locally, red in CI" cannot happen.
+#   1) First the self-checks that need no build (integrity / locales / i18n keys / calendar / push) -- fast, and a failure stops there
+#   2) Then tools/build-portable.cjs produces the exe and the zip (**it generates the zip and the manifest**;
+#      do not compress the whole directory with Compress-Archive -- that gives you no manifest and cannot assert
+#      "the package contains no runtime data (the API key in config.json, past reports)")
+#   3) Finally the full verify (including the release layout check) plus SHA256SUMS
 #
-# 注意 npm ci 必须 --ignore-scripts：playwright 的 postinstall 会去下 ~150MB 浏览器内核，
-# 而便携 exe 根本不需要它（使用者在设置里指定自己的浏览器即可）。
+# Note that npm ci has to pass --ignore-scripts: playwright's postinstall downloads a ~150MB browser engine,
+# and the portable exe does not need it at all (users point at their own browser in the settings).
 
 on:
   push:

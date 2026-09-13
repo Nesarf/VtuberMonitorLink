@@ -54,7 +54,9 @@ t('usage unavailable -> known=false (better to mark it unknown than to record a 
 t('a bad line does not affect the other lines (per-line fault tolerance)', () => {
   const { cfg, dir } = sandbox();
   recordUsage(cfg, { provider: 'a', model: 'm', totalTokens: 10 });
-  fs.appendFileSync(path.join(dir, 'cost.jsonl'), '{ 这不是 JSON\n', 'utf8');
+  // The fixture is deliberately a broken Chinese line: it only has to be invalid JSON, and using a
+  // non-ASCII body also proves the reader tolerates a half-written multi-byte line. Data, not text.
+  fs.appendFileSync(path.join(dir, 'cost.jsonl'), '{ 这不是 JSON\n', 'utf8'); // english-logic:allow
   recordUsage(cfg, { provider: 'b', model: 'n', totalTokens: 20 });
   const { rows, badLines } = loadUsage(cfg);
   assert.equal(rows.length, 2);

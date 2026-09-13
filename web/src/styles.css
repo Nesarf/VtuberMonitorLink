@@ -1,4 +1,4 @@
-/* 主题变量：默认深色，data-theme=light 时切浅色，auto 跟随系统 */
+/* Theme variables: dark by default; data-theme=light switches to light, auto follows the system */
 :root {
   --bg: #0f1115;
   --panel: #171a21;
@@ -165,12 +165,12 @@ pre.report {
   background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
   padding: 16px; max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
 }
-/* 每日情报的 .html 主文件：与在 VSCode 里打开的是同一个文件，这里原样预览 */
+/* The daily report's main .html file: the same file you would open in VSCode, previewed here as is */
 .report-frame {
   width: 100%; height: 62vh; border: 1px solid var(--border); border-radius: 8px; background: #fff;
 }
-/* 保存条：状态常驻在按钮旁边 —— 光靠角落的 toast 用户会当成没保存 */
-/* 折叠区块：长列表默认收起（代理节点列表一屏几十行，太占地方） */
+/* Save bar: the status stays next to the button -- a corner toast alone reads as "not saved" */
+/* Collapsible blocks: long lists start collapsed (the proxy node list runs to dozens of rows per screen and eats too much room) */
 .collapsible { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; background: var(--panel-2); }
 .collapsible-head {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
@@ -183,7 +183,7 @@ pre.report {
 .collapsible-head .cs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collapsible-head .grow { flex: 1; }
 .collapsible-body { padding: 4px 10px 10px; border-top: 1px solid var(--border); }
-/* 纪念日倒计时：月历网格 + 列表 */
+/* Anniversary countdown: month grid + list */
 .cal-grid {
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 8px;
 }
@@ -205,18 +205,18 @@ pre.report {
 }
 .sug-row input { margin-top: 2px; }
 
-/* 关注对象：名单 + 单人情报 */
+/* Followed people: roster + per-person feed */
 .people-feed { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
 .people-feed-row { padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .people-feed-row:last-child { border-bottom: 0; }
 .ok-text { color: #16a34a; font-weight: 600; }
 
-/* 已合并事件 */
+/* Merged events */
 .event-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .event-row.confirmed { border-left: 3px solid var(--accent); padding-left: 8px; }
 .event-head { display: flex; align-items: center; gap: 8px; }
 
-/* 趋势图表（内联 SVG，无图表库） */
+/* Trend charts (inline SVG, no chart library) */
 .chart { margin: 10px 0 14px; }
 .chart-title { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .chart-svg { width: 100%; height: 90px; display: block; }
@@ -227,7 +227,7 @@ pre.report {
 .hbar-track { flex: 1; height: 10px; background: var(--code-bg, rgba(127,127,127,.15)); border-radius: 5px; overflow: hidden; }
 .hbar-fill { display: block; height: 100%; background: var(--accent); opacity: .75; }
 
-/* 图片理解打标：卡片上的图片标签 */
+/* Image tagging: image tags on a card */
 .chip.img-tag { background: rgba(127, 127, 127, .18); border: 1px solid var(--border); }
 
 .save-bar {
@@ -260,7 +260,7 @@ pre.report {
 .delta-down { color: var(--err); }
 .reportlist button { background: transparent; border: none; color: var(--accent); cursor: pointer; text-align: left; padding: 0; font: inherit; }
 
-/* ── 情报卡片流 ── */
+/* ── Intelligence card feed ── */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
 .card {
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
@@ -280,7 +280,7 @@ pre.report {
 .watch-digest { margin: 0; padding-left: 18px; font-size: 13px; }
 .watch-digest li { margin-bottom: 4px; }
 
-/* ── 监视 ── */
+/* ── Watch ── */
 .rules { border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 6px; }
 .history details { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
 .history summary { cursor: pointer; font-size: 13px; }
@@ -295,12 +295,12 @@ pre.diff {
 .diff-line.op-ctx { color: var(--muted); }
 .diff-line.op-same { color: var(--muted); }
 
-/* ── 检索命中 ── */
+/* ── Search hits ── */
 .search-hits details { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
 .search-hits summary { cursor: pointer; }
 .search-hits ul { margin: 6px 0 0; padding-left: 18px; }
 
-/* ── Markdown 渲染 ── */
+/* ── Markdown rendering ── */
 .md { font-size: 14px; line-height: 1.75; word-break: break-word; }
 .md h1, .md h2, .md h3, .md h4 { margin: 20px 0 8px; line-height: 1.3; }
 .md h1 { font-size: 20px; }
@@ -329,7 +329,7 @@ pre.diff {
 .hint.warn-text { color: var(--warn); }
 
 
-/* ── 排版变量：由 App 从 config.ui.layout 写到 :root ── */
+/* ── Layout variables: written to :root by App from config.ui.layout ── */
 :root {
   --vml-cols: auto;
   --vml-gap: 12px;
@@ -338,7 +338,7 @@ pre.diff {
   --vml-accent: var(--accent);
 }
 
-/* ── 健康看板 ── */
+/* ── Health board ── */
 .board { margin: 10px 0 14px; }
 .board .summary { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .lat { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); margin-right: 6px; }
@@ -348,12 +348,12 @@ pre.diff {
 .lat.stale { opacity: .55; }
 .problems { border-left: 3px solid var(--err); background: var(--del-bg); padding: 8px 10px; border-radius: 6px; font-size: 12px; margin-bottom: 10px; }
 
-/* ── 站点缩略图 ── */
+/* ── Site thumbnails ── */
 .thumb { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); object-fit: cover; vertical-align: middle; flex: 0 0 auto; }
 .thumb.big { width: 100%; height: 96px; object-fit: cover; border-radius: 8px; margin-bottom: 6px; }
 .srcname { display: flex; align-items: center; gap: 8px; }
 
-/* ── 排版模式 ── */
+/* ── Layout modes ── */
 .cards { grid-template-columns: repeat(var(--vml-cols), minmax(0, 1fr)) !important; gap: var(--vml-gap) !important; }
 .cards, .layout-list, .layout-timeline { display: grid; }
 .layout-list { grid-template-columns: 1fr; gap: calc(var(--vml-gap) / 2); }
@@ -380,14 +380,14 @@ pre.diff {
 .nodes { max-height: 320px; overflow: auto; }
 .nodes tr.best td { background: var(--add-bg); }
 
-/* ── 多屏播放器 ── */
+/* ── Multi-screen player ── */
 .player { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .player-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--border); }
 .player iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }
 
-/* ── 箱视角 / group view ──
-   热力图是纯 div（不引图表库）：一行一个人、一格一天，深浅 = 当天条目数。
-   窄屏时横向滚动而不是把格子压扁（压扁就看不出「一格是一天」了）。 */
+/* ── Group view ──
+   The heatmap is plain divs (no chart library): one row per person, one cell per day, shade = that day's item count.
+   A narrow screen scrolls it sideways rather than squashing the cells (squashed cells stop reading as one cell = one day). */
 .group-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 10px; background: var(--panel-2); }
 .heat { margin-top: 8px; overflow-x: auto; }
 .heat-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; white-space: nowrap; }
@@ -398,8 +398,9 @@ pre.diff {
 .heat-cells i.heat-off { opacity: 0.4; }
 
 /* ── About / README panel ──
-   覆盖层而不是新页面：读文档时不该丢掉当前所在的页（运行进度、正在配的来源都不该被切走），
-   右上角的中英切换也只是换一份已取回的文本，不重新加载。 */
+   An overlay rather than a new page: reading the documentation should not lose the page you are on (a run's
+   progress, a source you are editing must not be taken away), and the EN/CN toggle in the top right only
+   swaps in an already-fetched text, without reloading. */
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 80;
   background: rgba(0, 0, 0, .55);
@@ -417,7 +418,7 @@ pre.diff {
 .modal-head .spacer { flex: 1; }
 .modal-body { padding: 4px 20px 16px; overflow: auto; }
 .modal-foot { padding: 8px 16px; border-top: 1px solid var(--border); }
-/* 两态分段按钮：当前语言一眼看得出，且它只管这份文档，与界面语言的下拉是两件事 */
+/* Two-state segmented button: the current language is visible at a glance, and it governs this document only -- it is a separate thing from the interface language dropdown */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg button {
   background: transparent; border: 0; color: var(--muted); font: inherit; font-size: 13px;
@@ -428,7 +429,7 @@ pre.diff {
 .readme-doc h1 { font-size: 22px; margin: 12px 0 8px; }
 .readme-doc h2 { font-size: 17px; margin: 20px 0 6px; padding-top: 10px; border-top: 1px solid var(--border); }
 .readme-doc h3 { font-size: 14px; margin: 14px 0 4px; }
-/* 复用 markdown.jsx 自己的类（md-code / md-table / md-list），只调字号与间距以适配面板宽度 */
+/* Reuse markdown.jsx's own classes (md-code / md-table / md-list); only font size and spacing are adjusted to fit the panel width */
 .readme-doc .md-code { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
 .readme-doc .md-code code { background: transparent; padding: 0; }
 .readme-doc code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }

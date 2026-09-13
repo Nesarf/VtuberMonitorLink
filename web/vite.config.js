@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 前端开发时把 /api 代理到本机后端 / proxy /api to the local backend in dev
+// Proxy /api to the local backend during development.
 export default defineConfig({
   root: __dirname,
   plugins: [react()],

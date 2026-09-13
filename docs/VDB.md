@@ -1,23 +1,23 @@
-# VDB 花名册 / VDB roster
+# VDB roster / VDB 花名册
 
-> 这一页说明「社团（箱）名册」这个能力是怎么接的、为什么这么接、边界在哪。
-> 它不是十项能力里的第十一项，而是**给「按人关注」和「箱视角」补上缺失的那一维**：社团。
+> This page explains how the agency (circle) roster capability is wired in, why it is wired that way, and where its boundaries are.
+> It is not an eleventh item next to the ten capabilities; it **supplies the missing dimension** for "follow by person" and "agency view": the agency.
 
 ---
 
-## 1. 为什么需要它（缺口在哪）
+## 1. Why it is needed (where the gap is)
 
-我们原本的「人」是从情报条目里长出来的：条目里出现名字 → 按别名归属到人。
-这套能跑，但缺三样东西，而且都是**结构化事实，靠抓新闻永远凑不齐**：
+The "people" we had originally grew out of intel items: a name appears in an item -> it is attributed to a person by alias.
+That works, but it lacks three things, and all three are **structured facts that scraping news will never assemble**:
 
-| 缺的 | 后果 |
+| Missing | Consequence |
 | --- | --- |
-| **社团（箱）** | 「箱视角」的热力图、共同静默、箱级信号全都要求每人先手填 Agency。一个箱 30 人就要手填 30 次 |
-| **多语言名字 / 别名** | 中文名、日文名、英文名各写一遍才会命中；拉丁词边界匹配再好，别名没填也是白搭 |
-| **各平台账号** | 同一个人在 bilibili / YouTube / Twitch / X 上的 id 是分散填的，漏一个就等于漏一条情报 |
+| **Agency (circle)** | The heat map, shared silence hours and agency-level signals of "agency view" all require every person to have Agency filled in by hand. An agency of 30 people means filling it in by hand 30 times |
+| **Multilingual names / aliases** | A Chinese name, a Japanese name and an English name each have to be written out before they match; however good Latin word-boundary matching is, unfilled aliases match nothing |
+| **Per-platform accounts** | The same person's ids on bilibili / YouTube / Twitch / X are entered in scattered places, and missing one means missing one intel item |
 
-VDB（`github.com/dd-center/vdb`，vtbs.moe 的上游数据库）就是干这个的：**一文件一人**，
-每条记录长这样——
+VDB (`github.com/dd-center/vdb`, the upstream database behind vtbs.moe) does exactly this: **one file per person**,
+and each record looks like this --
 
 ```json
 {
@@ -27,100 +27,100 @@ VDB（`github.com/dd-center/vdb`，vtbs.moe 的上游数据库）就是干这个
 }
 ```
 
-## 2. 为什么是「一条请求拿全库」
+## 2. Why "one request fetches the whole database"
 
-实测（2026 年）：整库 tarball **0.54 MB**、**10035 条记录**、**215 个社团**，一次 `codeload` 请求、一两秒拿完。
+Measured (2026): the whole database tarball is **0.54 MB**, **10035 records**, **215 agencies**, fetched in one `codeload` request in one or two seconds.
 
-对比逐个调 GitHub API：几千次请求、吃配额、会被限流、日志里全是噪声 —— 对使用者更吵，对上游更不礼貌。
-所以选择**整库快照 + 本地索引**，缓存 TTL 7 天（花名册变化很慢，要立刻刷新可以点「同步花名册」）。
+By comparison, calling the GitHub API item by item means thousands of requests, consumed quota, rate limiting, and pure noise in the logs -- noisier for the user and less polite to upstream.
+So we chose **a whole-database snapshot + a local index**, with a cache TTL of 7 days (the roster changes very slowly; to refresh it immediately, click "Sync roster" (UI string: `同步花名册`)).
 
-### 实测到的构成
+### Measured composition
 
-| 项 | 数量 |
+| Item | Count |
 | --- | --- |
-| 记录总数 | 10035 |
-| 社团数 | 215 |
-| 有社团归属的记录 | 1770 |
-| 按平台（有该平台账号的记录） | bilibili 9734 · twitter 680 · youtube 616 · youtubeAt 48 · twitch 45 · acfun 36 · weibo 30 … |
-| 人数最多的箱 | VirtuaReal 115 · NIJISANJI 104 · ChaosLiveSprout 52 · 极光社 51 · P-SP 36 · HoloLIVE 35 |
+| Total records | 10035 |
+| Agencies | 215 |
+| Records with an agency attribution | 1770 |
+| By platform (records with an account on that platform) | bilibili 9734 · twitter 680 · youtube 616 · youtubeAt 48 · twitch 45 · acfun 36 · weibo 30 … |
+| Largest agencies by member count | VirtuaReal 115 · NIJISANJI 104 · ChaosLiveSprout 52 · 极光社 (Aurora Circle) 51 · P-SP 36 · HoloLIVE 35 |
 
-> 注意：**有社团的只占 17.6%**。绝大多数独立势本来就没有社团，这不是数据缺陷，是现实。
-> 所以界面不把「没有社团」当异常，箱视角也只对真正填了 Agency 的人生效。
+> Note: **only 17.6% have an agency**. The vast majority of independents simply have no agency; this is not a data defect, it is reality.
+> So the UI does not treat "no agency" as an anomaly, and agency view only takes effect for people who actually have an Agency filled in.
 
-## 3. 许可（这一节比功能本身重要）
+## 3. Licence (this section matters more than the feature itself)
 
-VDB 的数据是 **CC BY-NC-SA 4.0**，代码是 **GPL**。我们是 MIT。结论：
+VDB's data is **CC BY-NC-SA 4.0**, its code is **GPL**. We are MIT. The conclusions:
 
-- ✅ **只运行时获取**：使用者点一下才下载，缓存在运行期目录 `app/vdb/index.json`
-- ❌ **绝不进仓库、绝不进发行包**：`vdb/` 在 `.gitignore` 里，`tools/make-zip.mjs` 与
-  `tools/verify-release.cjs` 都把 `app/vdb` 列进排除/校验清单 —— 有人把缓存提交进来会被巡检拦住
-- ✅ **署名**：界面花名册区块显示 `dd-center/vdb · CC BY-NC-SA 4.0`，README 与本文都有来源说明
-- ✅ **非商业**：个人工具用途没问题；要商用请自行联系上游
+- ✅ **Fetched only at runtime**: the user clicks before anything is downloaded, and it is cached in the runtime directory `app/vdb/index.json`
+- ❌ **Never enters the repository, never enters the release package**: `vdb/` is in `.gitignore`, and `tools/make-zip.mjs` and
+  `tools/verify-release.cjs` both list `app/vdb` in their exclusion/verification lists -- committing the cache gets caught by the check
+- ✅ **Attribution**: the roster block in the UI shows `dd-center/vdb · CC BY-NC-SA 4.0`, and both the README and this page state the source
+- ✅ **Non-commercial**: personal tooling use is fine; for commercial use, contact upstream yourself
 
-这份数据的所有权与解释权在上游。我们只读、只缓存、不改写、不二次分发。
+Ownership and final say over this data rest with upstream. We only read it, cache it, do not rewrite it, and do not redistribute it.
 
-## 4. 实现
+## 4. Implementation
 
-| 文件 | 干什么 |
+| File | What it does |
 | --- | --- |
-| `server/src/tar.js` | **零依赖** tar 读取：ustar / 目录 / GNU 长名 `L` / pax 扩展头 `x`。pax 的长度字段按**字节**算且要计入自身位数 |
-| `server/src/vdb.js` | 下载 → gunzip → 解 tar → 解析每条 JSON → 建索引；`searchIndex` / `membersOfGroup` / `toPerson` |
-| `server/src/people.js` | 别名改为**平台无关**：从 `PLATFORM_URLS` 生成「id / 带 www 的链接 / 裸链接 / `@handle`」四种形态 |
-| `web/src/pages/People.jsx` | 搜索 → 勾选 → 导入（花名册区块） |
+| `server/src/tar.js` | **Zero-dependency** tar reading: ustar / directories / GNU long names `L` / pax extended headers `x`. The pax length field is counted in **bytes** and must include its own digits |
+| `server/src/vdb.js` | Download -> gunzip -> untar -> parse each JSON record -> build the index; `searchIndex` / `membersOfGroup` / `toPerson` |
+| `server/src/people.js` | Aliases made **platform-agnostic**: `PLATFORM_URLS` generates four forms, "id / link with www / bare link / `@handle`" |
+| `web/src/pages/People.jsx` | Search -> tick -> import (the roster block) |
 
-### 平台无关是硬要求
+### Platform-agnostic is a hard requirement
 
-`PLATFORM_URLS` 现有 **27 个平台**：bilibili · youtube · youtubeAt · twitter · twitch · tiktok · weibo ·
+`PLATFORM_URLS` currently has **27 platforms**: bilibili · youtube · youtubeAt · twitter · twitch · tiktok · weibo ·
 weiboByName · acfun · niconico · showroom · pixiv · afdian · ci-en · booth · fantia · marshmallow ·
-userlocal · instagram · telegram · patreon · peing · 163music · line · github · web · other。
+userlocal · instagram · telegram · patreon · peing · 163music · line · github · web · other.
 
-代码里**不假设 bilibili**：`accounts` 里有什么平台就收什么平台，匹配与展示都走「平台 → id」的通用形状。
-搜索时，输入**任何平台**的账号 id 或链接形态（twitch 名、YouTube 频道、X handle…）都能命中。
+The code **does not assume bilibili**: whatever platforms exist under `accounts` are accepted, and both matching and display go through the generic "platform -> id" shape.
+When searching, the account id or link form on **any platform** (a Twitch name, a YouTube channel, an X handle...) matches.
 
-### 导入走同一条净化路径
+### Import goes through the same sanitising path
 
-导入不是后门：选中的记录先经过 `toPerson()` 变成标准关注对象形状，再**过和手工新增同一个
-`sanitizePerson()`**（id 冲突、别名长度、链接合法性都在那里挡）。挡下来的会逐条回报
-`skipped` 与原因，不静默丢弃。
+Import is not a back door: the selected records first pass through `toPerson()` into the standard follow-target shape, then **through the same
+`sanitizePerson()` as manual addition** (id conflicts, alias length and link validity are all blocked there). Anything blocked is reported back
+item by item as `skipped` with a reason, never silently dropped.
 
-## 5. 上游的判定标准（和我们的规则是否一致）
+## 5. Upstream's criteria (and whether they agree with our rules)
 
-VDB 自己的收录/删除标准里有一条值得记下来，因为它和我们独立设计的规则**撞上了**：
+One entry in VDB's own inclusion/deletion criteria is worth recording, because it **collided with a rule we designed independently**:
 
-| 上游标准 | 我们这边的对应 |
+| Upstream criterion | Our counterpart |
 | --- | --- |
-| 「删除历史信息…且 **6 个月无活动**」才删档 | 我们的「停止活动 / 毕业」判定就是 **≥6 个月无动静**（`DORMANT_DEFAULTS.months: 6`） |
-| 社团收录要求 **≥2 位符合条件的成员**佐证归属 | 箱视角的箱级信号要求 **≥3 位成员**才敢下结论（`SILENCE_DEFAULTS.minMembers`），同一种谨慎 |
+| A record is only deleted when "historical information is removed... and **6 months of no activity**" | Our "stopped activity / graduated" determination is **≥6 months of no movement** (`DORMANT_DEFAULTS.months: 6`) |
+| Agency inclusion requires **≥2 qualifying members** to corroborate attribution | Agency-level signals in agency view require **≥3 members** before drawing a conclusion (`SILENCE_DEFAULTS.minMembers`), the same caution |
 
-两边独立得出同一个数量级，算是一次交叉验证。
+The two sides arrived at the same order of magnitude independently, which counts as a cross-validation.
 
-## 6. 接口
+## 6. Endpoints
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/vdb/status` | **只读缓存、不联网**（离线可用）；返回 `cached / count / groups / platforms / generatedAt / source / license` |
-| POST | `/api/vdb/sync` | 真的去下载（0.54 MB 一条请求），`force` 语义 |
-| GET | `/api/vdb/search?q=&group=&limit=` | 名字（任意语言/别名）与**任意平台**的账号 id / 链接都能命中；缓存不存在时自动拉一次 |
-| GET | `/api/vdb/groups` | 社团 → 成员数 |
-| POST | `/api/vdb/import` | 把选中的 key 变成关注对象，返回 `added` / `skipped` |
+| GET | `/api/vdb/status` | **Reads the cache only, no network** (works offline); returns `cached / count / groups / platforms / generatedAt / source / license` |
+| POST | `/api/vdb/sync` | Actually downloads (0.54 MB in one request), `force` semantics |
+| GET | `/api/vdb/search?q=&group=&limit=` | Names (any language/alias) and account ids / links on **any platform** all match; fetches once automatically when no cache exists |
+| GET | `/api/vdb/groups` | Agency -> member count |
+| POST | `/api/vdb/import` | Turns the selected keys into follow targets, returns `added` / `skipped` |
 
-## 7. 自检（`npm run test:vdb`，25 项）
+## 7. Self-check (`npm run test:vdb`, 25 items)
 
-离线断言，不联网：
+Offline assertions, no network:
 
-- tar：ustar 头 / 目录 / GNU `L` 长名 / pax `x` 扩展头（含「长度字段要计入自身位数、按字节算」这个坑）
-- 解析：`{name:{cn,en}}` 多语言名、缺失字段、`accounts` 里的任意平台
-- 索引：社团分组、平台计数、搜索（中文名 / 英文名 / bilibili mid / twitch 名 / 带 www 的链接 / `@handle`）
-- 导入：`toPerson()` 的形状能被 `sanitizePerson()` 接受；重名 / 重复 id 被挡
-- **真 tarball 对账**：用本机 `tar.exe` 解同一份压缩包，逐条比对记录数（我们的 JS 读者 10035 条，与上游文件数一致）
+- tar: ustar headers / directories / GNU `L` long names / pax `x` extended headers (including the trap that "the length field must include its own digits and is counted in bytes")
+- parsing: `{name:{cn,en}}` multilingual names, missing fields, any platform under `accounts`
+- index: agency grouping, platform counts, search (Chinese name / English name / bilibili mid / Twitch name / link with www / `@handle`)
+- import: the shape from `toPerson()` is accepted by `sanitizePerson()`; duplicate names / duplicate ids are blocked
+- **Reconciliation against the real tarball**: unpack the same archive with the machine's `tar.exe` and compare record counts item by item (our JS reader gets 10035 records, matching upstream's file count)
 
-> 关于那次对账：`tar.exe` 解出来的条目名有 mojibake（`-大咲-` → `-婢堝瓙-`），导致它的记录数偏少。
-> 这反而说明我们的读取路径（显式按 UTF-8 解）是对的。
+> About that reconciliation: the entry names `tar.exe` produced had mojibake (`-大咲-` -> `-婢堝瓙-`), which made its record count come out low.
+> That in fact shows our reading path (explicitly decoding as UTF-8) is the correct one.
 
-## 8. 没做 / 待观察
+## 8. Not done / to watch
 
-- **不打包快照**：许可禁止我们再分发（NC/SA），所以离线环境下花名册不可用 —— 这是刻意的取舍
-- **不做增量**：每次整库快照。0.54 MB / 7 天，不值得为增量引入复杂性
-- **社团归属冲突不自动裁决**：同一个人在多处标了不同社团时，以 VDB 记录里的 `group` 为准；我们不去猜
-- **毕业判定不依赖 VDB**：VDB 是花名册不是时间线，没有「最近活动时间」。权威的毕业信号仍然来自我们自己的
-  条目 + 静默检测（见 `docs/DESIGN.md` §13）。VDB 只回答「这个人属于哪个箱、还有哪些账号」
+- **The snapshot is not bundled**: the licence forbids us from redistributing it (NC/SA), so the roster is unavailable in offline environments -- a deliberate trade-off
+- **No incremental updates**: a whole-database snapshot every time. 0.54 MB / 7 days is not worth introducing the complexity of incrementality
+- **Agency attribution conflicts are not adjudicated automatically**: when the same person is marked with different agencies in different places, the `group` in the VDB record wins; we do not guess
+- **Graduation determination does not depend on VDB**: VDB is a roster, not a timeline, and has no "last activity time". The authoritative graduation signal still comes from our own
+  items + silence detection (see `docs/DESIGN.md` §13). VDB only answers "which circle is this person in, and what other accounts do they have"

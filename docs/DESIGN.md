@@ -1,43 +1,42 @@
-# 设计说明 / Design
+# Design
 
-> Vtuber's Monitor Link —— 本地网页式的 VTuber 情报监测工具。
-> A local-web VTuber intelligence monitor.
+> Vtuber's Monitor Link - a local-web VTuber intelligence monitor.
 
-## 1. 总体架构 / Architecture
+## 1. Overall architecture
 
 ```
  launcher.exe
-      │  起本地服务 + 打开默认浏览器
+      │  start the local server + open the default browser
       ▼
- http://127.0.0.1:<port>   ← 仅监听回环，不对外暴露
+ http://127.0.0.1:<port>   <- loopback only, never exposed
       │
-      ├─ Web UI (React + Vite)      配置 / 运行 / 报告
+      ├─ Web UI (React + Vite)      configure / run / reports
       └─ Backend (Node)
-           ├─ config.js    配置读写（一切路径与密钥都在这里）
-           ├─ net.js       网络层：代理（Node fetch 默认不读系统代理）
-           ├─ sources.js   来源适配器目录（声明式）
+           ├─ config.js    config read/write (every path and secret lives here)
+           ├─ net.js       network layer: proxy (Node fetch does not read the system proxy by default)
+           ├─ sources.js   source adapter catalogue (declarative)
            ├─ fetchers/    rss / mediawiki-api / browser / search-only
-           ├─ digest.js    原始 feed → 精简摘要（控制 token）
-           ├─ analyze.js   LLM 分析（OpenAI 兼容）
-           ├─ runner.js    编排：前置检查 → 抓取 → 落 feeds → 分析 → 落报告
-           ├─ scheduler.js 内置调度器
-           └─ reports.js   报告与运行记录存储
+           ├─ digest.js    raw feed -> condensed digest (token control)
+           ├─ analyze.js   LLM analysis (OpenAI-compatible)
+           ├─ runner.js    orchestration: preflight -> fetch -> write feeds -> analyze -> write report
+           ├─ scheduler.js built-in scheduler
+           └─ reports.js   report and run-record storage
 ```
 
-## 2. 三个「用户可配置」的设计
+## 2. Three "user-configurable" designs
 
-### 2.1 浏览器
+### 2.1 Browser
 
-| 模式 | 实现 |
+| Mode | Implementation |
 | --- | --- |
-| `bundled` | 交给 Playwright 自带的 Chromium，开箱即用 |
-| `system` | `detectBrowsers()` 探测系统已装的 Chrome / Edge / Opera / Brave / Vivaldi |
-| `custom` | 用户填可执行文件路径 |
+| `bundled` | use the Chromium that ships with Playwright, works out of the box |
+| `system` | `detectBrowsers()` probes an installed Chrome / Edge / Opera / Brave / Vivaldi |
+| `custom` | the user supplies an executable path |
 
-要复用登录态时，额外填 `profileDir`（即该浏览器的 user-data-dir）。
-注意：**该浏览器必须处于关闭状态**，否则 profile 被锁。
+To reuse a logged-in session, fill in `profileDir` as well (that browser's user-data-dir).
+Note: **that browser must be closed**, otherwise the profile is locked.
 
-### 2.2 来源（声明式适配器）
+### 2.2 Sources (declarative adapters)
 
 ```js
 {
@@ -51,297 +50,333 @@
 }
 ```
 
-`fetch` 的含义：
+What `fetch` means:
 
-| 取值 | 用途 | 实战教训 |
+| Value | Purpose | Lesson from real use |
 | --- | --- | --- |
-| `rss` | Atom/RSS 订阅 | Reddit 只有 `.rss` 可用；限流按 IP，**主动拉开间隔**比连击重试有效 |
-| `mediawiki-api` | MediaWiki API | Fandom 的 `Special:RecentChanges` 被 Cloudflare 拦，API 直通 |
-| `browser` | 浏览器渲染 | SPA（Twitch/X）与 Cloudflare 站点（萌娘百科）必须走浏览器 |
-| `search-only` | 交给分析层检索 | YouTube、Fanbox、BOOTH 等无稳定直抓端点 |
+| `rss` | Atom/RSS subscription | on Reddit only `.rss` works; rate limiting is per IP, so **deliberately spacing requests out** beats hammering retries |
+| `mediawiki-api` | MediaWiki API | Fandom's `Special:RecentChanges` is blocked by Cloudflare, the API goes straight through |
+| `browser` | browser rendering | SPAs (Twitch/X) and Cloudflare-protected sites (Moegirlpedia) have to go through a browser |
+| `search-only` | handed to the analysis layer to search | YouTube, Fanbox, BOOTH etc. have no stable directly scrapable endpoint |
 
-### 2.3 登录要求
+### 2.3 Login requirements
 
-| 取值 | UI 表现 | 例子 |
+| Value | UI appearance | Example |
 | --- | --- | --- |
-| `none` | 绿色 | Reddit、Fandom、各家官方 NEWS |
-| `optional` | 黄色 | Twitch（登录后有「正在关注」） |
-| `required` | **红色** | X/Twitter（未登录只有登录墙） |
+| `none` | green | Reddit, Fandom, the official NEWS sites |
+| `optional` | yellow | Twitch (shows `正在关注`, the "following" list, once logged in) |
+| `required` | **red** | X/Twitter (logged out you only get a login wall) |
 
-**登录一律由用户在自己的浏览器完成，工具只借用 profile，绝不打包或上传凭据。**
+**Login always happens in the user's own browser; the tool only borrows the profile and never bundles or uploads credentials.**
 
-## 3. 网络层与代理
+## 3. Network layer and proxy
 
-实测结论：**Node 的 `fetch`（undici）默认不读系统代理**，在直连受限的网络下会 `ECONNRESET` / 连接超时。
-因此 `net.js` 把代理做成显式配置：
+Measured result: **Node's `fetch` (undici) does not read the system proxy by default**, so on a network where direct connections are blocked it gives `ECONNRESET` / connection timeouts.
+So `net.js` makes the proxy explicit configuration:
 
-- Node 侧抓取 → `undici` 的 `ProxyAgent` + `setGlobalDispatcher`
-- 浏览器渲染 → Playwright 的 `proxy` 选项
+- Node-side fetching -> undici's `ProxyAgent` + `setGlobalDispatcher`
+- browser rendering -> Playwright's `proxy` option
 
-UI 提供「探测本机常见代理端口」，逐个试探并填入可用地址（不做唯一硬编码）。
+The UI can probe the common local proxy ports: it tries them one by one and fills in a working address (nothing is hard-coded to a single value).
 
-## 4. 报告与节奏
+## 4. Reports and cadence
 
-- 常规扫描（默认周更）→ `reports/<date>.md`
-- 通贩/付费内容扫描（默认 14 天）→ `reports/merch-<date>.md`
-- 抓取原始数据 → `feeds/<date>/`，分析层只吃 `digest.js` 压缩后的摘要，避免 token 爆炸
+- regular scan (weekly by default) -> `reports/<date>.md`
+- merchandise/paid-content scan (14 days by default) -> `reports/merch-<date>.md`
+- raw fetched data -> `feeds/<date>/`; the analysis layer only consumes the digest condensed by `digest.js`, to avoid a token explosion
 
-## 5. 打包
+## 5. Packaging
 
-实际采用的形态：**单文件启动器 + `app/` 目录**。
+The shape actually adopted: **a single-file launcher + an `app/` directory**.
 
 ```
 dist/VtuberMonitorLink/
-  VtuberMonitorLink.exe     Node SEA 单文件启动器（内嵌 Node 运行时，约 90 MB）
-  package.json              启动器读取版本号
-  README.txt                纯 ASCII 快速上手
-  app/                      程序本体（server/ + web/dist/ + node_modules/）
+  VtuberMonitorLink.exe     Node SEA single-file launcher (Node runtime embedded, about 90 MB)
+  package.json              the launcher reads the version number
+  README.txt                plain-ASCII quick start
+  app/                      the program itself (server/ + web/dist/ + node_modules/)
 ```
 
-### 5.1 启动器为什么要做成 SEA
+### 5.1 Why the launcher is built as a SEA
 
-- 用 Node 自带的 SEA（single executable application）把 `launcher/launch.cjs`
-  注入一份 `node.exe`，得到真正的单文件 exe。用户不需要装 Node。
-- **入口必须是 CommonJS**：SEA 的嵌入式 `main` 在 Node 24 上仍按 CJS 加载，
-  用 ESM 会在运行时报 `Cannot use import statement outside a module`。
-  所以启动器是 `.cjs`。
-- **SEA 里 `process.execPath` 就是启动器自己**，所以不能靠「重新 spawn 自己」
-  去跑程序（会无限递归）。两种运行模式：
-  - `spawn`：包里存在 `runtime/node[.exe]` 时，用它拉起 `app/server/src/index.js`；
-  - `inline`：包里没有 `runtime/` 时，直接在自身进程里 `import()` 程序入口。
-    服务端本来就是磁盘上的普通 ESM，走标准 ESM loader 没有任何问题 —— 受限的
-    只是「嵌入的那段 main」。这样能省掉一份 90 MB 的运行时副本，发行包减半。
-- 路径解析全部相对启动器自身（`--paths` 可打印实际解析结果），不写死任何机器
-  路径；`--doctor` 在打包最后一步自动跑一遍，作为产物的自检门禁。
+- Use Node's built-in SEA (single executable application) to inject `launcher/launch.cjs`
+  into a copy of `node.exe`, which yields a real single-file exe. The user does not need to install Node.
+- **The entry point must be CommonJS**: on Node 24 the SEA's embedded `main` is still loaded
+  as CJS, and ESM fails at runtime with `Cannot use import statement outside a module`.
+  That is why the launcher is `.cjs`.
+- **Inside a SEA, `process.execPath` is the launcher itself**, so it cannot re-spawn itself
+  to run the program (that recurses forever). Two run modes:
+  - `spawn`: when `runtime/node[.exe]` exists in the package, use it to start `app/server/src/index.js`;
+  - `inline`: when the package has no `runtime/`, `import()` the program entry directly in its
+    own process. The server is ordinary ESM on disk, so the standard ESM loader handles it
+    without any problem - only the embedded `main` block is restricted. This saves a duplicate
+    90 MB runtime copy and halves the release package.
+- All path resolution is relative to the launcher itself (`--paths` prints the resolved results),
+  with no hard-coded machine paths; `--doctor` runs automatically as the last packaging step,
+  as the artifact's self-check gate.
 
-### 5.2 其它可选形态
+### 5.2 Other optional shapes
 
-| 方案 | 产物 | 说明 |
+| Option | Artifact | Notes |
 | --- | --- | --- |
-| 单文件 + app/（当前） | `VtuberMonitorLink.exe` + `app/` | 约 112 MB；无外部依赖，解压即用 |
-| 同上 + 自带内核 | 再加 `pw-browsers/` | `npm run build:portable`；完全不依赖系统浏览器 |
-| 带独立运行时 | 再加 `runtime/node.exe` | `--with-runtime`；启动器改走 `spawn` 模式 |
+| single file + app/ (current) | `VtuberMonitorLink.exe` + `app/` | about 112 MB; no external dependencies, unzip and run |
+| the same + bundled engine | plus `pw-browsers/` | `npm run build:portable`; no dependency on a system browser at all |
+| with a separate runtime | plus `runtime/node.exe` | `--with-runtime`; the launcher switches to `spawn` mode |
 
-### 5.3 发布校验
+### 5.3 Release verification
 
 ```bash
-npm run verify        # 校对：必需文件 / ASCII / UTF-8 / 隐私与密钥残留 / 运行数据
-npm run traverse      # 遍历：全部 HTTP 端点、SPA 兜底、错误路径
-npm run traverse:ui   # 遍历：真实浏览器里点完六个页面 + 用 mock LLM 真跑一次
-npm run release       # 上述全套
+npm run verify        # proofread: required files / ASCII / UTF-8 / privacy and secret residue / runtime data
+npm run traverse      # traversal: every HTTP endpoint, SPA fallback, error paths
+npm run traverse:ui   # traversal: click through all six pages in a real browser + one real run with a mock LLM
+npm run release       # all of the above
 ```
 
-`npm run sanitize-check` 另有一条：扫描仓库源码里的硬编码路径与隐私残留。
-私人名字清单**不写死在代码里**（否则检查脚本自己就成了泄漏源），改为读
-`$SANITIZE_NAMES` 或仓库根目录下已被 gitignore 的 `.sanitize-names`。
+`npm run sanitize-check` adds one more: it scans the repository source for hard-coded paths and privacy residue.
+The list of private names is **not hard-coded in the code** (otherwise the check script itself would become a leak source); it is read from
+`$SANITIZE_NAMES` or from `.sanitize-names` in the repository root, which is already gitignored.
 
-## 6. 网络出口：为什么代理不能是全局开关
+## 6. Network egress: why the proxy cannot be a global switch
 
-实测两个方向都会翻车：
+Measured: both directions come apart:
 
-- **不过代理**：本机直连被阻断的站点（Reddit、Fandom…）全部 ECONNRESET / 超时；
-- **过代理**：B 站反而稳定 412 / -352 风控。
+- **without the proxy**: every site where direct connections are blocked (Reddit, Fandom ...) gives ECONNRESET / timeouts;
+- **through the proxy**: Bilibili instead returns a steady 412 / -352 risk-control block.
 
-所以 `net.js` 提供三档出口，来源与监视对象都能单独覆盖：
+So `net.js` offers three egress settings, and sources and watch targets can each override them:
 
-| 取值 | 行为 |
+| Value | Behaviour |
 | --- | --- |
-| （省略） | 跟随全局 `proxy.enabled` |
-| `'proxy'` | 强制走代理 |
-| `'direct'` | 强制直连 |
+| (omitted) | follow the global `proxy.enabled` |
+| `'proxy'` | force the proxy |
+| `'direct'` | force a direct connection |
 
-外加一条硬规则：**回环地址永远直连**。本地 Ollama（`127.0.0.1:11434`）与遍历用的
-mock LLM 都在本机，丢给代理只会失败。
+Plus one hard rule: **loopback addresses always connect directly**. Local Ollama (`127.0.0.1:11434`) and the
+mock LLM used by traversal both live on this machine, so handing them to a proxy only fails.
 
-## 7. 监视系统 / watch
+## 7. Watch system / watch
 
-数据模型：
+Data model:
 
 ```
 config.watch = { enabled, targets: [...], rules: {...} }
-<app>/watch/history/<id>.baseline.json   每个对象一份基线
-<app>/watch/history/<id>.jsonl           每次有变更就追加一行历史
+<app>/watch/history/<id>.baseline.json   one baseline per target
+<app>/watch/history/<id>.jsonl           one history line appended per change
 ```
 
-基线是「上次看到的样子」，不是「上次抓到的时间」—— 首次检查只建立基线并明确
-标注 `first: true`，绝不计为变更，避免第一次跑就刷一屏假告警。
+The baseline is "what it looked like last time", not "when it was last fetched" - the first check only
+establishes the baseline and explicitly marks it `first: true`, never counting it as a change, so the very
+first run does not flood the screen with false alerts.
 
-`diff.js` 是自写的行级 LCS diff，先做公共前后缀裁剪把 DP 规模压下去，超限就退化成
-整块替换；`diffHunks()` 只留有变化的片段并带上下文行，供网页直接渲染。
+`diff.js` is a hand-written line-level LCS diff: it first trims the common prefix and suffix to push the
+DP size down, and degrades to whole-block replacement once over the limit; `diffHunks()` keeps only the
+hunks that changed, with context lines, ready for the web page to render directly.
 
-告警判定集中在 `applyRules()`：
+Alert decisions are centralised in `applyRules()`:
 
-| 规则 | 触发条件 |
+| Rule | Trigger condition |
 | --- | --- |
-| 大编辑 / 大删除 | 字节增减超过阈值 |
-| 新建页面 | MediaWiki `new` 标记 |
-| 匿名编辑 | `anon` 标记 |
-| 未巡查编辑 | `unpatrolled` 标记 |
-| 日志类型 | 命中配置的 logtype 列表 |
-| 可疑关键词 | 标题/摘要/正文命中词表 |
+| large edit / large deletion | byte delta exceeds the threshold |
+| new page | MediaWiki `new` flag |
+| anonymous edit | `anon` flag |
+| unpatrolled edit | `unpatrolled` flag |
+| log type | matches the configured logtype list |
+| suspicious keyword | title/summary/body matches the word list |
 
-URL 型的关键词判定用的是「新增行 + 新内容前 1500 字」，只看新增行会漏掉
-「改词不增行」的情况。
+Keyword matching for URL-type targets uses the added lines plus the first 1500 characters of the new
+content; looking at added lines alone misses the case where a word is changed without adding a line.
 
-## 8. B 站动态
+## 8. Bilibili dynamics
 
-见 README 的「B 站动态」一节。代码在 `server/src/fetchers/bilibili.js`，三条路按优先级：
+See the "Bilibili dynamics" section of the README. The code is in `server/src/fetchers/bilibili.js`, with three paths in priority order:
 
-1. **登录态 + JSON 接口**（首选）：从配置的 profile **只读提取** cookie（`cookies.js`），
-   调 `feed/space`。数据最干净 —— 正文、配图、发布时间、点赞数都有，而且**不需要关掉浏览器**。
-2. **浏览器渲染**：拿不到登录态时用 Playwright 渲染 `space.bilibili.com/<uid>/dynamic` 抓 DOM。
-   要求目标浏览器已关闭；被锁时会把 Playwright 的报错翻译成人话再抛出。
-3. **免登录 opus 接口**：`bili-opus` 来源专用，只有正文与点赞数，没有配图。
+1. **Logged-in state + JSON API** (preferred): extract cookies **read-only** from the configured profile
+   (`cookies.js`), then call `feed/space`. The data is the cleanest - body text, attached images, publish
+   time and like count are all there, and **the browser does not have to be closed**.
+2. **Browser rendering**: when the logged-in state is unavailable, render `space.bilibili.com/<uid>/dynamic`
+   with Playwright and scrape the DOM. It requires the target browser to be closed; when the profile is
+   locked, Playwright's error is translated into plain language before being thrown.
+3. **Login-free opus API**: used only by the `bili-opus` source; it returns body text and like count, with no attached images.
 
-`cookies.js` 的实测要点：
+Measured points about `cookies.js`:
 
-- cookie 库在 `<userData>/<Profile>/Network/Cookies`（老版本可能少一层 `Network`）；
-- 密钥在 `<userData>/Local State` 的 `os_crypt.encrypted_key`：base64 → 去掉 5 字节
-  `DPAPI` 前缀 → DPAPI 解出 32 字节 AES 密钥；
-- 值前缀 `v10` = AES-256-GCM（nonce 12B / tag 16B）；**明文前 32 字节是 Chromium 130+
-  加的域名绑定哈希，必须剥掉**；
-- 前缀 `v20` 或 `Local State` 里存在 `app_bound_encrypted_key` = App-Bound Encryption
-  （Chrome 127+ 默认），外部解不了 —— 这时要明确报错，不能假装成功；
-- 复制时连 `-wal`/`-shm` 一起复制，否则 SQLite 视图可能不一致；
-- 全程**不改动原 profile**，所以浏览器开着也能跑。
+- the cookie database is at `<userData>/<Profile>/Network/Cookies` (older versions may lack the `Network` level);
+- the key is in `os_crypt.encrypted_key` in `<userData>/Local State`: base64 -> strip the 5-byte
+  `DPAPI` prefix -> DPAPI-decrypt to a 32-byte AES key;
+- the value prefix `v10` = AES-256-GCM (nonce 12B / tag 16B); **the first 32 bytes of the plaintext are
+  the domain-binding hash added by Chromium 130+, and must be stripped**;
+- the prefix `v20`, or an `app_bound_encrypted_key` present in `Local State`, means App-Bound Encryption
+  (the default since Chrome 127), which cannot be decrypted externally - this has to raise an explicit
+  error rather than pretend to succeed;
+- copy `-wal`/`-shm` along with the database, otherwise the SQLite view may be inconsistent;
+- the original profile is **never modified** throughout, so this runs even with the browser open.
 
-`feed/space` 的解析要点（都踩过）：
+Parsing points for `feed/space` (all of them learned the hard way):
 
-- 必须带 `features=itemOpusStyle`。不带的话新版图文动态的 `major` 是 `MAJOR_TYPE_DRAW`
-  且 `items` 为空、`desc` 为 null（正文全丢）；带上之后变成 `MAJOR_TYPE_OPUS`，
-  正文在 `major.opus.summary.text`，而**配图的数量与 URL 完全不变**（已对比验证：
-  正文覆盖 3→11 / 0→7，配图 5 条 14 图两种模式一致）。
-- 判别字段是 `major.type`，不是 `it.type`。
-- 转发动态的正文在被转发的 `it.orig` 里，要拼成 `//@原作者: …`。
+- `features=itemOpusStyle` is required. Without it, `major` on the newer image-and-text posts is
+  `MAJOR_TYPE_DRAW` with an empty `items` and a null `desc` (the body text is lost entirely); with it,
+  the type becomes `MAJOR_TYPE_OPUS`, the body sits in `major.opus.summary.text`, and **the number and
+  URLs of the attached images are completely unchanged** (verified by comparison: body coverage
+  3->11 / 0->7, and for 5 posts with 14 images both modes agree).
+- the discriminating field is `major.type`, not `it.type`.
+- the body of a repost lives in the reposted `it.orig` and has to be assembled as `//@原作者: …`
+  (`//@` + the original author + `: …`).
 
-## 9. LLM 档位
+## 9. LLM tiers
 
-`llm.js` 只依赖 OpenAI 兼容的 `/chat/completions` 与 `/models`：
+`llm.js` depends only on the OpenAI-compatible `/chat/completions` and `/models`:
 
-- `PRESETS` 是预设目录；`newProvider()` 由预设派生一个档位；
-- `activeProvider(cfg)` 取当前档位，**并把 v1.0.0 的扁平写法（`llm.apiKey` 等）
-  即时降级成单档位**，老配置不用手改；
-- `chatRequest()` 统一拼请求体，`analyze.js` / `preflight()` 都走它。
+- `PRESETS` is the preset catalogue; `newProvider()` derives one tier from a preset;
+- `activeProvider(cfg)` returns the active tier and **downgrades the flat v1.0.0 shape (`llm.apiKey` etc.)
+  to a single tier on the fly**, so old configs need no manual editing;
+- `chatRequest()` assembles the request body in one place, and both `analyze.js` and `preflight()` go through it.
 
-## 10. 情报条目
+## 10. Intelligence items
 
-`items.js` 把各来源的抓取结果统一成一种结构：
+`items.js` unifies the fetch results of every source into one structure:
 
 ```
 { id, kind, sourceId, sourceName, title, text, url, time, images[], stats{}, keywords[] }
 ```
 
-网页卡片流、报告来源清单、关键词高亮、关注量增长全都吃这一份，落盘在
-`<app>/feeds/<date>/_items.json`。这样「呈现层」不必再理解每种抓取方式的差异。
+The web card stream, the report's source list, keyword highlighting and follower growth all consume this
+one structure, persisted at `<app>/feeds/<date>/_items.json`. That way the presentation layer no longer
+has to understand the differences between fetch methods.
 
-## 11. 多语言 / i18n
+## 11. Localisation / i18n
 
-界面的每一句话都来自源码里的两本底本（`web/src/i18n.jsx` 的 `STRINGS.zh` / `STRINGS.en`），
-其余 23 个地区按**回落链**继承（`zh-TW → zh-Hant → zh-Hans`、`pt-BR → pt-PT` …），
-跨语言不继承、一律落到英文。层次优先级：**机器译文 → 人工通用词条 → 该地区自己的词条**
-（人工永远压过机器；`locales/overlays.js` 是人工层，`locales/machine.json` 是机器层）。
+Every string in the UI comes from the two source books in the source tree (`STRINGS.zh` / `STRINGS.en`
+in `web/src/i18n.jsx`); the other 23 locales inherit through a **fallback chain**
+(`zh-TW -> zh-Hant -> zh-Hans`, `pt-BR -> pt-PT` ...), which never crosses languages and always lands on
+English. Precedence: **machine translation -> hand-written generic keys -> the locale's own keys**
+(hand-written always beats machine; `locales/overlays.js` is the hand-written layer, `locales/machine.json`
+is the machine layer).
 
-工具链（全部离线可跑，`npm run verify:fast` 里卡着）：
+Toolchain (all of it runs offline, wired into `npm run verify:fast`):
 
-| 工具 | 回答什么问题 |
+| Tool | What question it answers |
 | --- | --- |
-| `tools/locale-coverage.mjs` | **有没有值** —— 覆盖率与基线棘轮（只算该语言自己提供的键） |
-| `tools/i18n-proofread.mjs` | **能不能用** —— 逐条比对显示值与源串：占位符、加粗标记、换行、首尾空格、残留哨兵（结构性 → 直接失败），以及全角标点、术语没生效、跨语言长度离群（可疑项 → 记账不许变多） |
-| `tools/i18n-translate.mjs` | **怎么补上** —— 机翻管线：术语与占位符哨兵保护、源串+语言两级缓存、`--bust terms/suspicious/all` 失效策略、`--keys` 定点重译 |
-| `tools/i18n-hant.mjs` | 繁体三变体（OpenCC 词典，构建期整份生成，含台/港用词） |
-| `tools/i18n-plural-test.mjs` | **数词词形** —— 按 `Intl.PluralRules` 检 `locales/plurals.js` 的完整性（某语言用到的每个类别都必须有词形） |
-| `tools/hint-md-test.mjs` | **记号渲染** —— 值里带 `**`/反引号/链接的键，每个调用点都必须走 `<Inline>` |
-| `tools/english-logic.mjs` | **工程层语言** —— 注释与输出串不许有中文（界面词条 / API 错误串 / docs 除外，见 `docs/ENGLISH-LOGIC.md`） |
+| `tools/locale-coverage.mjs` | **is there a value** - coverage and the baseline ratchet (counting only the keys that locale itself provides) |
+| `tools/i18n-proofread.mjs` | **is it usable** - compares displayed values against source strings one by one: placeholders, bold markers, newlines, leading/trailing spaces, residual sentinels (structural -> fails immediately), plus full-width punctuation, terms that did not take effect, cross-language length outliers (suspicious -> the tally must not grow) |
+| `tools/i18n-translate.mjs` | **how to fill it in** - the machine-translation pipeline: term and placeholder-sentinel protection, a two-level cache keyed by source string + locale, the `--bust terms/suspicious/all` invalidation policy, and `--keys` for targeted retranslation |
+| `tools/i18n-hant.mjs` | the three Traditional variants (OpenCC dictionaries, generated in full at build time, including Taiwan/Hong Kong wording) |
+| `tools/i18n-plural-test.mjs` | **numeral forms** - checks the completeness of `locales/plurals.js` against `Intl.PluralRules` (every category a locale uses must have a form) |
+| `tools/hint-md-test.mjs` | **markup rendering** - for keys whose value contains `**`/backticks/links, every call site must go through `<Inline>` |
+| `tools/english-logic.mjs` | **engineering-layer language** - comments and output strings must not contain Chinese (except UI keys / API error strings / docs, see `docs/ENGLISH-LOGIC.md`) |
 
-几条被真实事故教出来的规矩（细节见 `docs/BUGS.md` 41~52、54、64~66）：
+A few rules taught by real incidents (details in `docs/BUGS.md` 41-52, 54, 64-66):
 
-- **译坏的不如不写**：补译之后仍含原文、或残留哨兵 → 不写进机器层，
-  界面回落英文（英文没翻译至少不冒犯任何人）；旧值同样是坏的则一并删掉。
-  「残留哨兵」的判定必须认**任意** `⟦…⟧` 形状：只认数字的那版让 `⟦n⟧` 一路显示给了阿拉伯语使用者（BUGS #64）。
-- **源串有歧义就是全语言出错**：「天后」被当成「歌后」（Diva / Королева），
-  所以带数字的成分要写成带占位符的整句（`{n} 天后`），位置交给各语言自己决定。
-- **术语保护会切断复合词**：「监测」会把「开播监测」切成两半，模型于是把「开播」当动词翻。
-  复合词要作为**整条术语**进术语表。
-- **数词词形**（原 BUGS #54，已修）：`21 элементов` 应为 `21 элемент`。做法是
-  `tn(key, n)`（`web/src/plural.js`）+ `<key>_<类别>` 词形表（`web/src/locales/plurals.js`）：
-  值里带 `{n}` 的语言把数字写进短语，不带的照旧前置 —— **老语言逐字不变**，
-  而 ru/uk/pl/sr/ar 与 en/es/pt/fr/de/it 拿到正确的单复数。zh/ja/ko 不词形变化，因此不需要词形表。
-  这两类键是动态查表，不会出现在字面量调用里，所以覆盖度 / 校对的统计口径不受影响
-  （`usedKeys()` 与 `locale-coverage` 也认 `tn(...)`）。
-- **产品文案与工程输出是两回事**：日报正文、推送正文、界面 tooltip/toast 里的硬编码串
-  **保持中文**（哪怕它没有 `t()` 词条）；只有日志、诊断文件、自检输出改英文。
-  边界与例子写在 `docs/ENGLISH-LOGIC.md`。
-- **界面文案一律走词条**：这一条是被「25 个地区全都显示中文」教出来的 —— 曾有 30 处硬编码中文
-  （`直播中`、`来源 ↗`、placeholder、`上次运行失败`…）没有 `t()` 键，中文环境下永远看不出来。
-  现在 `.jsx` 里硬编码的中文是 **0 处**，`browserFromSettings` 这类「服务端只回标记、文案由界面给」
-  的写法是标准做法（服务端回中文会被所有地区原样显示）。
+- **A bad translation is worse than none**: if a filled-in translation still contains the source text, or
+  a residual sentinel -> it is not written into the machine layer and the UI falls back to English (an
+  untranslated English string at least offends nobody); if the old value is equally bad, drop it as well.
+  The residual sentinel test must accept **any** `⟦…⟧` shape: the version that only recognised digits let
+  `⟦n⟧` through all the way to Arabic users (BUGS #64).
+- **An ambiguous source string is a bug in every language**: `天后` (days later) was taken as `歌后`
+  (diva; Diva / Королева), so a component carrying a number has to be written as a whole sentence with a
+  placeholder (`{n} 天后`, i.e. "{n} days later"), leaving the position to each locale.
+- **Term protection cuts compounds in half**: `监测` (monitoring) splits `开播监测` (stream-start
+  monitoring) down the middle, so the model translates `开播` (go live) as a verb.
+  A compound has to enter the glossary as **one whole term**.
+- **Numeral forms** (originally BUGS #54, fixed): `21 элементов` should be `21 элемент`. The approach is
+  `tn(key, n)` (`web/src/plural.js`) + a `<key>_<类别>` form table (`web/src/locales/plurals.js`, the suffix being the plural category):
+  locales whose values contain `{n}` write the number into the phrase, the rest keep it in front as before - **existing locales are unchanged word for word**,
+  while ru/uk/pl/sr/ar and en/es/pt/fr/de/it get the correct singular/plural. zh/ja/ko do not inflect, so they need no form table.
+  These two key classes are looked up dynamically and never appear in literal calls, so the counting rules
+  for coverage / proofread are unaffected (`usedKeys()` and `locale-coverage` also recognise `tn(...)`).
+- **Product copy and engineering output are two different things**: hard-coded strings in the daily report
+  body, the push body and UI tooltips/toasts **stay Chinese** (even when they have no `t()` key);
+  only logs, diagnostic files and self-check output switch to English.
+  The boundary and the examples are in `docs/ENGLISH-LOGIC.md`.
+- **Every UI string goes through a key**: this one was taught by "all 25 locales showed Chinese" - there
+  used to be 30 hard-coded Chinese strings (`直播中` "live now", `来源 ↗` "source ↗", placeholders,
+  `上次运行失败` "last run failed" ...) with no `t()` key, and a Chinese-language environment could never
+  reveal them. Today the number of hard-coded Chinese strings in `.jsx` is **0**, and the pattern used by
+  `browserFromSettings`, where the server returns only a marker and the UI supplies the wording, is the
+  standard approach (Chinese returned by the server would be displayed verbatim in every locale).
 
-## 12. 观测模式 / observation mode
+## 12. Observe mode / observation mode
 
-想判断一个箱的真实状态，就得同时看箱内多人；但「同一时刻把整箱扫一遍」这件事本身就是痕迹，
-而且**与你是从哪个 IP 来的无关**。所以这一块的取舍是：**Tor 只解决「谁在看」，
-取样与抖动才解决「在看什么、什么时候看」**。完整威胁模型、实测数据（B 站经 Tor 慢约 8 倍、
-箱自托管站点 anycolor 被 Cloudflare 403、换出口的实测 IP）与配置说明都在 `docs/OBSERVE.md`；
-纯逻辑在 `server/src/observe.js`，自检 `tools/observe-test.mjs`（固定随机源钉住行为）。
+To judge the real state of an agency you have to look at several of its members at the same time; but
+sweeping a whole agency at one instant is itself a trace, and that is **independent of which IP you come
+from**. So the trade-off in this area is: **Tor only solves "who is looking"; sampling and jitter are what
+solve "what is being looked at, and when"**. The full threat model, the measured data (Bilibili is about
+8x slower through Tor, the agency's self-hosted site anycolor returns Cloudflare 403, the measured IPs of
+rotated exits) and the configuration notes are all in `docs/OBSERVE.md`; the pure logic is in
+`server/src/observe.js`, with the self-check in `tools/observe-test.mjs` (a fixed random source pins the behaviour).
 
-一句话版本：
+The one-line version:
 
-- **取样**：每轮随机取一部分（默认 50%）。按「最久没看过」排候选池、再从池里随机取、取完打乱顺序
-  —— 纯随机会补得慢，纯 LRU 又变得可预测。本地增量归档保证几天下来画像仍然完整。
-- **抖动**：间隔随机（默认 3–12 秒）；`base = 0` 时不抖（显式的「不要等」优先）。
-- **按日志归属分出口**：只有箱自托管站点（`AGENCY_HOSTS` 白名单）走 Tor；平台源不动它
-  —— 箱看不到那些日志，而经 Tor 更慢、个别接口还会被限流。
-- **不发身份**：需要登录态的来源在这一模式下不跑（比 IP 严重得多的一条关联）。
-- **换出口**：靠 Tor 的 SOCKS 用户名隔离，不同来源落到不同出口；同一来源同一轮保持一条链路。
-- **诚实显示**：运行页与报告都写明「本轮是取样」，并强调「本轮没出现 ≠ 没有动静」。
+- **Sampling**: each round takes a random subset (50% by default). Candidates are ordered by "longest
+  since last looked at", then drawn at random from that pool, and the order is shuffled after drawing.
+  Pure random catches up too slowly, while pure LRU becomes predictable. The local incremental archive
+  keeps the picture complete over several days.
+- **Jitter**: random intervals (3-12 seconds by default); no jitter when `base = 0` (an explicit "do not wait" wins).
+- **Egress split by log attribution**: only agency self-hosted sites (the `AGENCY_HOSTS` allowlist) go
+  through Tor; platform sources are left alone - the agency cannot see those logs, while Tor is slower and
+  rate-limits some endpoints.
+- **No identity is sent**: sources that need a logged-in state do not run in this mode (a far stronger link than an IP).
+- **Exit rotation**: separate exits come from isolating by Tor's SOCKS username, so different sources land
+  on different exits; one source keeps a single circuit within one round.
+- **Honest display**: both the run page and the report state that this round is a sample, and stress that
+  not appearing in this round does not mean nothing happened.
 
-## 13. 看一个「箱」/ looking at a whole group
+## 13. Looking at a whole agency
 
-「今天有什么新东西」和「这个箱现在怎么样」是两个问题，逐条情报流只回答前一个。
-围绕后者有四块（都是纯逻辑 + 离线自检）：
+"What is new today" and "how is this agency doing right now" are two different questions, and a per-item
+intelligence stream only answers the first. Four blocks address the second (all pure logic + offline self-check):
 
-| 模块 | 回答什么 | 自检 |
+| Module | What it answers | Self-check |
 | --- | --- | --- |
-| `silence.js` | 谁停了、停了多久、是不是整箱一起停（判据相对**各人自己的节奏**，不用固定天数） | `silence-test.mjs` 16 项 |
-| `groups.js` | 按 agency 的活动热力图、同刻出现（企划联动的形状）、共同沉默、个人异常；`/api/groups` + 关注页的箱视角区块 | `groups-test.mjs` 11 项 |
-| `dormant.js` | 停止活动 ≥6 个月的人：日报**最后**统一列他们的最新内容；其中最近又动的单独标「可能复出」 | `dormant-test.mjs` 10 项 |
-| `fetchplan.js` | 抓取调度：按出口分组并行（队内串行）、连续失败隔离、抓取方式降级阶梯 | `fetchplan-test.mjs` 15 项 |
+| `silence.js` | who stopped, for how long, and whether the whole agency stopped together (the criterion is relative to **each member's own rhythm**, not a fixed number of days) | `silence-test.mjs` 16 checks |
+| `groups.js` | activity heat map by agency, co-occurrence (the shape of a collaboration across the unit), shared silence, individual anomalies; `/api/groups` + the agency-view block on the following page | `groups-test.mjs` 11 checks |
+| `dormant.js` | people inactive for >=6 months: the daily report lists their latest content **last**, as one block; those who moved again recently are flagged separately as `可能复出` (possibly returning) | `dormant-test.mjs` 10 checks |
+| `fetchplan.js` | fetch scheduling: parallel groups by egress (serial inside a group), isolation of consecutive failures, a degradation ladder for fetch methods | `fetchplan-test.mjs` 15 checks |
 
-两条踩过的坑值得留在代码注释里：基线的窗口**不能锚在「最后一次活跃那天」**（月更的人会被
-算成日更，容忍区间塌到 3 天，于是停 5 天就误报）；「复出」**不能只看最后活跃日**
-（复出的人最后活跃日就是今天，看上去很健康 —— 要看「在那之前安静了多久」）。
+Two pitfalls we hit are worth keeping in code comments: the baseline window **must not be anchored on the
+last active day** (someone who posts monthly would be treated as a daily poster, the tolerance window
+collapses to 3 days, and a 5-day gap then raises a false alert); and "returning" **must not look only at
+the last active day** (for someone returning, that day is today, which looks perfectly healthy - what
+matters is how long they were quiet before that).
 
-成本方面：`cost.js` 按运行记账（`logs/cost.jsonl`），`/api/cost` 汇总，LLM 页有看板；
-预算默认只警告，`llm.budget.onExceed = 'stop'` 才真拦。拿不到用量的调用单独计数，不猜数字。
+On cost: `cost.js` records per run (`logs/cost.jsonl`), `/api/cost` aggregates it, and the LLM page has a
+dashboard; the budget only warns by default, and only `llm.budget.onExceed = 'stop'` actually blocks.
+Calls whose usage is unavailable are counted separately, without guessing numbers.
 
-## 14. 花名册 / roster（VDB）
+## 14. Roster (VDB)
 
-箱视角与「按人关注」共同缺的那一维是**社团**：手填 30 人就要填 30 次，而「这个人的其他平台账号」
-靠抓新闻也凑不齐。所以接了一份公开花名册 `dd-center/vdb`（vtbs.moe 的上游），**一文件一人**：
-多语言名字 + `accounts`（平台 → id）+ `group`。
+The dimension that both the agency view and per-person following lack is the **circle**: entering 30 people
+by hand means doing it 30 times, and "this person's accounts on other platforms" cannot be assembled from
+scraped news either. So the project consumes a public roster, `dd-center/vdb` (the upstream of vtbs.moe),
+**one file per person**: multilingual names + `accounts` (platform -> id) + `group`.
 
-三条设计取舍：
+Three design trade-offs:
 
-1. **一条请求拿全库**，不做增量、不逐个调 API。整库 tarball 0.54 MB / 10035 条 / 215 个社团，
-   一次 `codeload` 请求一两秒；逐个调 GitHub API 要几千次请求、吃配额、日志噪声大。
-   花名册变化极慢，TTL 7 天。
-2. **平台无关是硬要求**，不是「顺便支持 B 站以外」。`accounts` 里有什么平台就收什么平台
-   （`PLATFORM_URLS` 27 个：bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico /
+1. **One request fetches the whole database**, with no incremental updates and no per-record API calls.
+   The full tarball is 0.54 MB / 10035 records / 215 circles, and one `codeload` request takes a second or
+   two; calling the GitHub API record by record would take thousands of requests, burn through quota and
+   produce noisy logs. The roster changes very slowly, so the TTL is 7 days.
+2. **Platform independence is a hard requirement**, not "supporting platforms beyond Bilibili as a bonus".
+   Whatever platform appears in `accounts` is accepted (`PLATFORM_URLS` has 27: bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico /
    showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon /
-   line / github …）。别名生成、搜索、导入全都按「平台 → id」的通用形状走，代码里没有
-   「if (platform === 'bilibili')」这种分支。搜索时输入**任何平台**的 id 或链接形态都能命中。
-3. **许可是数据的一部分**。VDB 数据是 **CC BY-NC-SA 4.0**、代码 GPL，而本项目是 MIT：
-   于是**只运行时获取**，缓存在 `app/vdb/`，**绝不进仓库、绝不进发行包**（`.gitignore` +
-   `make-zip` 排除清单 + `verify-release` 的运行期状态清单，三处都盯着），界面与文档都署名来源。
+   line / github ...). Alias generation, search and import all follow the generic "platform -> id" shape,
+   and there is no `if (platform === 'bilibili')` branch anywhere in the code. A search matches the id or
+   the link form of **any platform**.
+3. **The licence is part of the data**. The VDB data is **CC BY-NC-SA 4.0** and its code is GPL, while
+   this project is MIT: so it is **fetched at runtime only**, cached in `app/vdb/`, and **never enters the
+   repository or the release package** (`.gitignore` + the `make-zip` exclusion list + the
+   `verify-release` runtime-state list all guard it), and the UI and the docs both credit the source.
 
-导入不是后门：选中的记录先转成标准关注对象形状，再过**和手工新增同一个** `sanitizePerson()`
-（id 冲突、别名、链接合法性都在那里挡），被挡的逐条回报原因。
+Import is not a back door: a selected record is first converted into the standard follow-target shape and
+then passed through **the same** `sanitizePerson()` as manual entry (which is where id conflicts, aliases
+and link validity are rejected), and anything rejected reports its reason one by one.
 
-上游标准里有两条和我们独立设计的规则**撞上了**：它的删档条件是「删除历史信息…且 **6 个月无活动**」，
-与我们「停止活动」判定的 6 个月一致；它的社团收录要求 **≥2 位成员**佐证，我们的箱级信号要求
-**≥3 位成员**才下结论 —— 同一种谨慎，算一次交叉验证。有社团的只占 17.6%（1770/10035），
-这不是数据缺陷而是现实，所以界面不把「没有社团」当异常。
+Two rules in the upstream standard **collide with** rules we designed independently: its deletion condition
+is "the history information is removed ... and **6 months with no activity**", which matches our 6-month
+"inactive" criterion; its circle-inclusion requirement asks for at least **2 members** as corroboration,
+while our agency-level signal needs at least **3 members** before drawing a conclusion - the same kind of
+caution, which counts as one cross-validation. Only 17.6% have a circle (1770/10035); that is reality
+rather than a data defect, so the UI does not treat "no circle" as an anomaly.
 
-细节（数据形状、许可边界、接口、自检、没做的事）在 `docs/VDB.md`；纯逻辑在 `server/src/vdb.js`
-与 `server/src/tar.js`（零依赖 tar 读取），自检 `tools/vdb-test.mjs` 25 项。
-
+Details (data shape, licence boundary, API, self-check, what was left undone) are in `docs/VDB.md`; the
+pure logic is in `server/src/vdb.js` and `server/src/tar.js` (zero-dependency tar reading), with the
+self-check in `tools/vdb-test.mjs`, 25 checks.

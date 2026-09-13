@@ -597,7 +597,9 @@ async function main() {
     fs.mkdirSync(path.dirname(legacy), { recursive: true });
     fs.writeFileSync(
       legacy,
-      '# 旧报告契约\n\n## 小节\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- 列表项\n\n[链接](https://example.com)\n',
+      // A deliberately Chinese legacy report: the renderer must survive the markdown a real user has
+      // on disk, and a CJK body also proves the encoding path. This string is a fixture, not output.
+      '# 旧报告契约\n\n## 小节\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n- 列表项\n\n[链接](https://example.com)\n', // english-logic:allow
       'utf8',
     );
     await tab('报告').click();

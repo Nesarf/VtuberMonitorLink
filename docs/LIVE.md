@@ -1,158 +1,159 @@
-# 开播监测与多屏观看 / Live status & multi-screen
+# Live status & multi-screen / 开播监测与多屏观看
 
-## 功能来源（署名与许可）
+## Feature provenance (attribution and licence)
 
-本功能参考 **dd-center/bilibili-dd-monitor**（作者 wdpm，**MIT License**, Copyright (c) 2020 wdpm），
-以及它派生自的 dd-center/bili-dd-monitor。上游是「专为 DD 设计的多屏直播观看工具」，
-核心是两件事：**开播/下播实时检测** 与 **多播放器自动网格布局**。
+This feature draws on **dd-center/bilibili-dd-monitor** (author wdpm, **MIT License**, Copyright (c) 2020 wdpm),
+and on the dd-center/bili-dd-monitor it derives from. Upstream is "a multi-screen live viewing tool designed for DDs",
+built around two things: **real-time stream start/stop detection** and **automatic grid layout for multiple players**.
 
-本项目按其自己的技术栈（Express + React）**重新实现**了这两件事：
-**没有复制上游的代码、图片、banner、样式或配置**，只借鉴了功能构思。
-MIT 允许衍生，这里选择重写而非搬运；上游许可以上句署名形式记录。
+This project **reimplemented** both on its own stack (Express + React):
+**no upstream code, images, banner, styles or configuration were copied**, only the functional idea was borrowed.
+MIT permits derivatives, but here we chose a rewrite rather than a port; the upstream licence is recorded as attribution in the sentence above.
 
-## 上游数据源已失效
+## The upstream data source is dead
 
-上游依赖 vtbs.moe 的 `/v1/live` 取开播列表。实测（2026-09-11）：
+Upstream relies on vtbs.moe's `/v1/live` for the list of live streams. Measured (2026-09-11):
 
-| 端点 | 结果 |
+| Endpoint | Result |
 | --- | --- |
-| `https://api.vtbs.moe/v1/live` | **404**（已下线；上游本身也停更了） |
+| `https://api.vtbs.moe/v1/live` | **404** (taken down; upstream itself has stopped updating too) |
 | `https://api.vtbs.moe/v1/info/<uid>` | 404 |
-| `https://api.vtbs.moe/v1/short` | 200，约 9762 条 `{mid, uname, roomid}` 花名册，**仍可用** |
+| `https://api.vtbs.moe/v1/short` | 200, about 9762 `{mid, uname, roomid}` roster entries, **still usable** |
 
-所以本实现改用实测可用的 B 站批量接口；花名册只留作「按名字找 uid」的辅助：
+So this implementation switched to the measured-usable bilibili batch endpoint; the roster is kept only as an aid for "find a uid by name":
 
 ```
 GET https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids?uids[]=<uid>&uids[]=...
-  -> code=0，data 以 uid 为键: { room_id, live_status, title, uname, cover, online, area_name }
+  -> code=0, data keyed by uid: { room_id, live_status, title, uname, cover, online, area_name }
 ```
 
-## 必须区分的三种状态
+## Three states that must be distinguished
 
-`live_status`：`0` 未开播、`1` 直播中、**`2` 轮播**。
+`live_status`: `0` not live, `1` live, **`2` 轮播** (transient: "looping a recording").
 
-**轮播不是真开播。** 把它当开播会稳定误报 —— 实测时嘉然、泠鸢、hanser 三个都处于 `2`（轮播），
-若按「非 0 即开播」处理，一上来就会推三条假警报。因此界面分三档显示，
-`live.notifyOnLive` 也只在状态变成 `1` 时才推送。
+**Loops are not real streams.** Treating them as streams produces a steady stream of false alerts -- in the measured run 嘉然, 泠鸢 and hanser
+were all at `2` (looping), so handling it as "anything non-zero is live" would have pushed three false alarms immediately. The UI therefore shows
+three levels, and `live.notifyOnLive` only notifies when the state becomes `1`.
 
-## 多屏观看
+## Multi-screen viewing
 
-用 B 站官方的内嵌播放器 `https://live.bilibili.com/blanc/<roomId>?hidePanel=1`。
+Uses bilibili's official embedded player, `https://live.bilibili.com/blanc/<roomId>?hidePanel=1`.
 
-实测该页**没有 `X-Frame-Options` / `frame-ancestors`**，可以直接 iframe 嵌入，
-因此**不需要任何转发、代理或本地播放服务**，也就不涉及任何登录态、cookie 或用户数据。
-iframe 上加 `referrerPolicy="no-referrer"`，不向 B 站回传本页地址。
+Measured: that page has **no `X-Frame-Options` / `frame-ancestors`**, so it can be embedded in an iframe directly,
+and therefore **no forwarding, proxy or local playback service is needed**, which also means no login state, cookie or user data is involved.
+The iframe carries `referrerPolicy="no-referrer"`, so this page's address is not sent back to bilibili.
 
-网格是纯前端的：列数可选（自适应 / 1–4 列），选择存在 localStorage（不污染配置文件）。
+The grid is pure frontend: the column count is selectable (adaptive / 1-4 columns), and the choice is stored in localStorage (it does not pollute the configuration file).
 
-## 多平台与「码率 / 帧数」——实测边界（2026-09-11）
+## Multi-platform and "bitrate / frame count" -- measured boundaries (2026-09-11)
 
-需求里提到「YouTube、Twitch 等平台的直播源 + 实时评论流，并在每个源下方显示延迟、丢包、码率、帧数」。
-先把**能做的**和**做不到的**分开，避免做出一个显示假数字的功能。
+The requirement mentions "live sources from YouTube, Twitch and similar platforms plus real-time comment streams, showing latency, packet loss, bitrate and frame count below each source".
+So let us separate **what can be done** from **what cannot**, rather than build a feature that shows fake numbers.
 
-### 1. 码率 / 帧数 / 丢帧：跨域嵌入播放器**测不到**
+### 1. Bitrate / frame count / dropped frames: **not measurable** across an embedded cross-origin player
 
-YouTube / Twitch / B 站的官方嵌入播放器都跑在**跨域 iframe** 里。同源策略下父页面拿不到它的
-`<video>` 元素，因此 `getVideoPlaybackQuality()`（总帧数 / 丢帧数）、`buffered`（缓冲与直播沿）、
-协商码率（MSE/ABR）**全都读不到**。这不是实现没做，是浏览器安全边界。
+The official embedded players of YouTube / Twitch / bilibili all run inside a **cross-origin iframe**. Under the same-origin policy the parent page cannot reach its
+`<video>` element, so `getVideoPlaybackQuality()` (total frames / dropped frames), `buffered` (buffer and live edge) and the
+negotiated bitrate (MSE/ABR) **are all unreadable**. This is not something left unimplemented; it is a browser security boundary.
 
-界面上如实写「码率 / 帧数：跨域嵌入播放器测不到」，不给假数字。
+The UI states it plainly: "bitrate / frame count: not measurable across an embedded cross-origin player" (UI string: `码率 / 帧数：跨域嵌入播放器测不到`), with no fake numbers.
 
-**要真测只有一条路：把流地址拿过来自己播。**
-- bilibili：`getRoomPlayInfo` 可用（实测 `code=0`），但**只有真正在播的房间才有流地址** ——
-  实测时嘉然/泠鸢/hanser 都在**轮播**（`live_status=2`），返回的 stream 列表是空的。
-  拿 `<video>`/mse 自己播之后，帧数、丢帧、码率、直播沿延迟都能真测。
-- YouTube / Twitch：需要 yt-dlp / streamlink 一类工具取流，有 ToS 与稳定性代价，且要额外依赖。
-  本项目是便携 exe，不打算为它引入这种依赖。
+**There is only one way to really measure it: take the stream URL and play it ourselves.**
+- bilibili: `getRoomPlayInfo` works (measured `code=0`), but **only rooms actually streaming have a stream URL** --
+  in the measured run 嘉然/泠鸢/hanser were all **looping** (`live_status=2`) and the returned stream list was empty.
+  Once played ourselves in `<video>`/MSE, frame count, dropped frames, bitrate and live-edge latency can all be measured for real.
+- YouTube / Twitch: this needs a tool such as yt-dlp / streamlink to fetch the stream, which carries ToS and stability costs and adds a dependency.
+  This project is a portable exe and does not intend to introduce such a dependency.
 
-### 2. 实时评论流：bilibili 弹幕**当前被风控挡住**
+### 2. Real-time comment streams: bilibili danmaku **is currently blocked by risk control**
 
-| 尝试 | 结果 |
+| Attempt | Result |
 | --- | --- |
-| `getDanmuInfo`（仅 buvid3/buvid4 + referer） | **-352** |
-| `getDanmuInfo`（用 Opera profile 的 **SESSDATA** 登录态） | **-352** |
-| WebSocket `wss://<host>/sub`（protover=3，brotli） | 拿不到 token，无法建连 |
+| `getDanmuInfo` (only buvid3/buvid4 + referer) | **-352** |
+| `getDanmuInfo` (using the Opera profile's **SESSDATA** login state) | **-352** |
+| WebSocket `wss://<host>/sub` (protover=3, brotli) | No token obtainable, connection cannot be established |
 
-即**带登录态也进不去**，判断是这批接口又加了 WBI 签名要求（本项目在 B 站动态接口上已经踩过同类风控）。
-`getDanmuInfo` 拿不到 token，后面的 brotli 解包（Node 内置 `zlib.brotliDecompressSync`）也就无从验证。
-**所以这一轮没有把弹幕塞进来** —— 半残的实时流比没有更糟。下一步是给该接口补 WBI 签名（`w_rid`/`wts`）。
+That is, **even with login state it does not get in**, and the judgement is that this batch of endpoints has gained a WBI signature requirement (this project has already hit
+the same kind of risk control on bilibili's dynamics endpoints). Without a token from `getDanmuInfo`, the brotli unpacking that follows
+(Node's built-in `zlib.brotliDecompressSync`) cannot be verified either.
+**So danmaku was not wired in this round** -- a half-broken real-time stream is worse than none. The next step is to add WBI signing (`w_rid`/`wts`) for that endpoint.
 
-Twitch 的匿名 IRC（`wss://irc-ws.chat.twitch.tv` + `justinfan`）思路可行且不需要鉴权，
-但 Node 内置的 `WebSocket` **不支持走 HTTP 代理**，而本机访问 Twitch 必须走代理 ——
-所以要做得先自己实现「CONNECT → TLS 升级 → WebSocket 握手」，属于独立的一块工作。
+Twitch's anonymous IRC (`wss://irc-ws.chat.twitch.tv` + `justinfan`) is a workable approach that needs no authentication,
+but Node's built-in `WebSocket` **does not support going through an HTTP proxy**, and reaching Twitch from this machine requires a proxy --
+so doing it means first implementing "CONNECT -> TLS upgrade -> WebSocket handshake" ourselves, which is a separate piece of work.
 
-### 3. 真的做了：每个直播源的**网络层**延迟与失败率
+### 3. What was actually done: **network-layer** latency and failure rate per live source
 
-这一层是第三方页面**能够诚实测量**的，已经接上：
+This layer is what a third-party page **can honestly measure**, and it is wired up:
 
-- 每张直播卡下方有「测网络」，走本项目已有的探测器；
-- 直连测 **TCP 握手 RTT**，代理测**经代理请求的首字节时间**；「失败率」= 失败次数 ÷ 尝试次数；
-- 给出结论（哪个出口更快 / 哪个不通），正在直播的房间打开页面时会自动测前 6 个。
+- Each live card has a "Measure network" button below it (UI string: `测网络`), using the project's existing prober;
+- A direct measurement takes the **TCP handshake RTT**, a proxied one takes the **time to first byte through the proxy**; "failure rate" = failures ÷ attempts;
+- It gives a conclusion (which exit is faster / which one does not connect), and for rooms that are live, opening the page automatically measures the first 6.
 
-实测样例（bilibili 直播间）：直连 **19ms / 0%**，代理 **316ms / 0%** → 「直连更快（19ms vs 316ms）」。
+Measured sample (bilibili live room): direct **19ms / 0%**, proxy **316ms / 0%** -> "direct is faster (19ms vs 316ms)" (UI string: `直连更快（19ms vs 316ms）`).
 
-### 4. Tor 出口（实测 2026-09-12）
+### 4. Tor exits (measured 2026-09-12)
 
-**Tor 本身**：这台机器上装的是 Tor Browser 的 `tor.exe` 0.4.9.11，配置走 **snowflake 网桥**
-（`ClientTransportPlugin snowflake exec ...\lyrebird.exe`）。按下面的参数唤起后，
-引导日志走到 `Bootstrapped 100% (done)`，全程约 55 秒 —— 不需要额外做端口转发之类的事。
+**Tor itself**: this machine has Tor Browser's `tor.exe` 0.4.9.11 installed, configured to use the **snowflake bridge**
+(`ClientTransportPlugin snowflake exec ...\lyrebird.exe`). Launched with the parameters below, the
+bootstrap log reaches `Bootstrapped 100% (done)` in about 55 seconds overall -- no extra port forwarding or similar is needed.
 
 ```
-cd "<Tor Browser>\Browser"           # cwd 必须是这里：可插拔传输用的是相对路径
+cd "<Tor Browser>\Browser"           # cwd must be here: pluggable transports use relative paths
 tor.exe --defaults-torrc "TorBrowser\Data\Tor\torrc-defaults" ^
         -f "TorBrowser\Data\Tor\torrc" ^
         --SocksPort 9150 --DisableNetwork 0
 ```
 
-（`<Tor Browser>` 指你装 Tor Browser 的那个目录。页面上那个「唤起 Tor」按钮会自动按这个布局
-拼参数，不需要手敲 —— 这里写出来是为了说明它到底在做什么。）
+(`<Tor Browser>` is the directory where you installed Tor Browser. The "Launch Tor" button on the page (UI string: `唤起 Tor`) assembles these
+parameters from that layout automatically, with no typing needed -- it is written out here to explain what it actually does.)
 
-三个坑（都写进了 `torLaunchPlan()` 与 BUGS #56）：
+Three traps (all three are recorded in `torLaunchPlan()` and BUGS #56):
 
-1. `torrc-defaults` 要用 **`--defaults-torrc`** 传：命令行只允许一个 `-f`，传两个会被拒
-   （`Duplicate -f options`），于是 snowflake 的传输插件全丢，报
-   `there is no configured transport called "snowflake"`；
-2. Tor Browser 退出时会在 torrc 里留 `DisableNetwork 1`，必须显式覆盖，否则永远停在 0%；
-3. 裸 spawn 会用默认值（SocksPort **9050**、无网桥、数据目录落在 C 盘）—— 页面上那个
-   「唤起 Tor」按钮原先就是裸 spawn，所以按下去了却等于没起。
+1. `torrc-defaults` must be passed with **`--defaults-torrc`**: the command line allows only one `-f`, and two are rejected
+   (`Duplicate -f options`), whereupon all snowflake transport plugins are lost and it reports
+   `there is no configured transport called "snowflake"`;
+2. When Tor Browser exits it leaves `DisableNetwork 1` in the torrc, which must be overridden explicitly, otherwise it stays at 0% forever;
+3. A bare spawn uses the defaults (SocksPort **9050**, no bridge, data directory landing on the C drive) -- the
+   "Launch Tor" button on the page originally was a bare spawn, so pressing it was as good as not starting Tor at all.
 
-**app 侧实测**（`POST /api/proxy/tor`）：`{"ok":true,"socks":"127.0.0.1:9150","isTor":true,"ip":"185.220.101.23"}`。
+**Measured on the app side** (`POST /api/proxy/tor`): `{"ok":true,"socks":"127.0.0.1:9150","isTor":true,"ip":"185.220.101.23"}`.
 
-**三出口对比**（`POST /api/probe`，samples=1）：
+**Three-exit comparison** (`POST /api/probe`, samples=1):
 
-| 目标 | 直连 | 经 Tor |
+| Target | Direct | Via Tor |
 | --- | --- | --- |
-| `https://example.com/` | 186ms（TCP 握手） | 1800ms（首字节） |
+| `https://example.com/` | 186ms (TCP handshake) | 1800ms (first byte) |
 | `https://api.bilibili.com/x/web-interface/nav` | 24ms | 1764ms |
 
-也就是说 **B 站经 Tor 也抓得到**，只是慢一个量级（snowflake 本身带宽就小）。
-所以合理用法是「个别来源单独走 Tor」（来源页那个下拉就能设），而不是全局切 Tor。
+That is, **bilibili can be reached via Tor too**, just an order of magnitude slower (snowflake's own bandwidth is small).
+So the sensible usage is "send individual sources via Tor" (the dropdown on the source page sets this), not switching Tor on globally.
 
-**隐私提醒**：Tor 出口下不要带登录态（B 站登录、萌百 BotPassword 等）——
-把实名账号的身份和 Tor 出口绑在一起，等于自己把两者连起来。出口 IP 每次也会变。
+**Privacy reminder**: do not carry login state under a Tor exit (bilibili login, Moegirl BotPassword, etc.) --
+binding a real-name account's identity to a Tor exit is connecting the two yourself. The exit IP also changes every time.
 
 
-## 无痕化处理
+## No-traces handling
 
-按本项目一贯的隐私约束，这一批功能做到：
+Following the project's standing privacy constraints, this batch of features achieves:
 
-- **不引入上游任何资源**（图片、字体、样式、配置），因此不存在来源不明的二进制或元数据；
-- 播放器直连 B 站官方页，**不经过任何第三方中转**，且不回传本机地址（`no-referrer`）；
-- 开播查询走直连（与本项目其它 bilibili 来源一致），**不使用、不保存任何 cookie**；
-- 发弹幕那一段要看登录态，但**打开页面不会去读** —— 它读的是浏览器的 cookie 库，读取过程
-  要同步解 DPAPI（实测 3~4 秒，期间整个服务是停的），所以只有点了「检查登录态」才读，
-  且服务端读一次缓存 60 秒（BUGS #47）；
-- 代码里不写死 uid：监测对象全部来自配置或已有来源；出现的 uid 只在**测试脚本**里，
-  且都是可公开的官方账号；
-- `docs/` 与发行包都不含任何机器路径、账号、密钥（由 `npm run verify` 与 `npm run sanitize-check` 强制）。
+- **No upstream resource is pulled in** (images, fonts, styles, configuration), so there are no binaries or metadata of unknown origin;
+- The player connects directly to bilibili's official page, **with no third-party relay in between**, and does not send back the local address (`no-referrer`);
+- Stream-start queries go direct (consistent with this project's other bilibili sources), **using and storing no cookie at all**;
+- The danmaku-sending part needs login state, but **opening the page does not read it** -- it reads the browser's cookie store, and the read
+  synchronously decrypts DPAPI (measured 3-4 seconds, during which the whole service is stopped), so it only reads when "Check login state" is clicked (UI string: `检查登录态`),
+  and the server caches a read for 60 seconds (BUGS #47);
+- No uid is hardcoded in the code: monitored objects all come from configuration or existing sources; the uids that appear are only in **test scripts**,
+  and all of them are public official accounts;
+- Neither `docs/` nor the release package contains any machine path, account or key (enforced by `npm run verify` and `npm run sanitize-check`).
 
-## 与上游的功能对照
+## Feature comparison with upstream
 
-| 上游功能 | 本项目 |
+| Upstream feature | This project |
 | --- | --- |
-| 正在直播的 vtber 列表 | 「直播」页，并区分直播中 / 轮播 / 未开播 |
-| 分组关注 | 复用「来源」的分类与「监视对象」标签 |
-| vtuber 信息库列表 | vtbs.moe 花名册按名字查 uid（辅助功能） |
-| 本地设置 | 网页设置（config.json） |
-| 播放器 / 多播放器自动网格 | 多屏网格（列数可选，选择本地保存） |
-| Electron 桌面应用 | 收进本项目已有的本地网页控制台，不需要第二个程序 |
+| List of currently live vtbers | The "Live" page, distinguishing live / looping / not live |
+| Grouped follows | Reuses source categories and watch-target tags |
+| Vtuber information database listing | Look up a uid by name in the vtbs.moe roster (an auxiliary feature) |
+| Local settings | Web settings (config.json) |
+| Player / automatic multi-player grid | Multi-screen grid (selectable column count, choice saved locally) |
+| Electron desktop app | Folded into this project's existing local web console; no second program needed |

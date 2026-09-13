@@ -1,115 +1,141 @@
-# 工程逻辑英文化 / English in the engineering layer
+# English in the engineering layer
 
-> 这份文档（以及 `docs/` 下的其它文档）**保持中文**。它规定的是**代码里**哪些中文该改成英文、
-> 哪些必须原样留着 —— 以及那条规则由哪个脚本守着。
+> This document is **English**, as is every other document under `docs/`. It defines which Chinese
+> strings **in code** must become English and which must stay exactly as they are -- and which
+> script guards that rule.
 
-## 1. 三类中文，三种处理
+## 1. Three kinds of Chinese, three treatments
 
-| 类别 | 例子 | 处理 |
+| Category | Example | Treatment |
 | --- | --- | --- |
-| **工程逻辑**：注释（`//`、`/* */`、JSDoc） | `// 基线的窗口不能锚在最后一次活跃那天` | **改英文** |
-| **工程输出**：服务器日志、`console.*`、`process.stdout/stderr.write`、测试与巡检的检查名与详情 | `log.info('抓取完成：12 条')`、`check('箱视角接口可用', …)` | **改英文** |
-| **界面与文档**：界面词条、API 返回给前端的错误串、`docs/*.md` | `web/src/i18n.jsx` 的 `zh:` 字典、`res.json({ error: '还没有花名册…' })` | **保持中文，不许动** |
+| **Engineering logic**: comments (`//`, `/* */`, JSDoc) | `// 基线的窗口不能锚在最后一次活跃那天` ("the baseline window must not anchor on the last active day") | **Change to English** |
+| **Engineering output**: server logs, `console.*`, `process.stdout/stderr.write`, check names and details of tests and inspections | `log.info('抓取完成：12 条')` ("scrape done: 12 items"), `check('箱视角接口可用', …)` ("the agency-view endpoint is available") | **Change to English** |
+| **UI and docs**: UI strings, error strings the API returns to the frontend, `docs/*.md` | the `zh:` dictionary in `web/src/i18n.jsx`, `res.json({ error: '还没有花名册…' })` ("no roster yet") | **Docs: change to English. UI strings: keep Chinese, do not touch.** |
 
-判据一句话：**「给人看的界面文案」保持中文，「给维护者看的逻辑说明」改成英文。**
+The criterion in one sentence: **"UI copy meant for people" stays Chinese; "logic explanations meant for maintainers" becomes English.**
 
-## 2. 一条最容易改错的地方
+## 2. The easiest place to change the wrong thing
 
-界面的中文会出现在**比较与断言**里，那是**数据**，不是输出：
+Chinese UI strings show up inside **comparisons and assertions**, where they are **data**, not output:
 
 ```js
-// ✅ 保留：这是在断言界面文本
+// ✅ Keep: this asserts UI text
 check('the group view block is rendered', main.indexOf('箱视角') !== -1);
 assert.match(indexSummary(null), /尚未获取/);
 
-// ✅ 改成英文：这是给读日志的人看的
+// ✅ Change to English: this is read by whoever reads the logs
 check('the group view block is rendered', ok, 'block present');
 ```
 
-同理，`web/src/i18n.jsx` 里的 `zh:` 字典、`t('...')` 的键名、`docs/` 里的正文，
-**一个字符都不要动**（改了会让 25 个地区的界面全乱）。
+Likewise, the `zh:` dictionary in `web/src/i18n.jsx` and the key names passed to `t('...')` are UI
+data: they are what the UI displays and what it is compared against, not engineering output, so they
+stay Chinese. The same is true of `docs/` prose, except that it is reader-facing text rather than UI
+data.
+`README.zh-CN.md` is the only document in the repository that stays Chinese; every other document,
+`docs/*.md` included, is English, because these files are read by people who do not read Chinese. The
+only Chinese fragment that may still appear inside a doc is a quoted string kept as evidence. Inside
+the UI, however, **do not change a single character** (changing it would scramble the UI in all 25
+regions).
 
-## 3. 守卫脚本
+## 3. The guard script
 
 ```bash
-node tools/english-logic.mjs          # 有中文注释/输出串 → 退出 1（进 verify:fast）
-node tools/english-logic.mjs --list   # 按文件列出全部命中（做工单用）
-node tools/english-logic.mjs --json   # 机器可读
+node tools/english-logic.mjs          # Chinese comment/output strings -> exit 1 (runs in verify:fast)
+node tools/english-logic.mjs --list   # list every hit per file (use as a worklist)
+node tools/english-logic.mjs --json   # machine-readable
 ```
 
-它扫描 `server/src`、`server/scripts`、`web/src`（跳过词条本体 `i18n.jsx` 与 `locales/`）、
-`tools/`、`launcher/`，判定两件事：
+It scans `server/src`, `server/scripts`, `web/src` (skipping the string table itself, `i18n.jsx`, and
+`locales/`), `tools/`, and `launcher/`, and decides two things:
 
-1. **注释文本**里不许有汉字（全角标点 `「」——·` 也算，一并换成 ASCII）；
-2. **输出串**里不许有汉字 —— `log.*` / `console.*` / `process.std*.write` 的所有实参，
-   以及 `check()/t()/ta()/note()/banner()` 的**检查名**（第一个实参）。
+1. **Comment text** must not contain Han characters (full-width punctuation `「」——·` counts too, and
+   is converted to ASCII along with them);
+2. **Output strings** must not contain Han characters -- every argument of `log.*` / `console.*` /
+   `process.std*.write`, plus the **check name** (the first argument) of `check()/t()/ta()/note()/banner()`.
 
-参与比较的实参整段跳过（`===` / `indexOf` / `matches` / `includes` / `assert` …），
-所以上面第 2 节那种「拿中文当数据」的写法不会误报。
+Arguments that take part in a comparison are skipped whole (`===` / `indexOf` / `matches` /
+`includes` / `assert` …), so the "Chinese as data" pattern from section 2 above is not reported as a
+false positive.
 
-## 4. 灰区：**没有词条的硬编码产品文案**保持中文
+## 4. Grey area: **hard-coded product copy without a UI string** stays Chinese
 
-有些中文串既不是 `t('key')` 词条，也不是日志 —— 它们硬编码在服务端，但**最终会被渲染给使用者**：
+Some Chinese strings are neither a `t('key')` UI string nor a log line -- they are hard-coded in the
+server, but **end up rendered to the user**:
 
-| 例子 | 去处 |
+| Example | Destination |
 | --- | --- |
-| `silence.js` 的 `reason`（「X 已 N 天没有新条目…」） | **日报 markdown** + 推送正文 |
-| `notify.js` 的 `reason`（`静默时段 22:00–08:00`） | 设置页「🔕 正在静默 · …」 |
-| `probe.js` 的 `hint`（「direct 最快（…）」） | 来源页的 toast 与出口提示 |
-| `egress.js` 的 `why`/`note`/`reason` | 来源页自动出口的 tooltip |
-| `groups.js` 的 `groupSignal.reason`、`dormant.js` 的报告块、`watch.js` 的 `summary`/`reasons` | 日报 / 监视历史 |
-| `scheduler.js` 的默认任务名「任务 N」、`live.js` 的 `note` | 界面直接显示 / 随接口返回 |
+| `reason` in `silence.js` ("X has had no new items for N days…") | **daily report markdown** + push body |
+| `reason` in `notify.js` (`静默时段 22:00-08:00`) | settings page `🔕 正在静默 · …` |
+| `hint` in `probe.js` ("direct is fastest (…)") | source-page toast and egress hint |
+| `why`/`note`/`reason` in `egress.js` | tooltip of the automatic egress on the source page |
+| `groupSignal.reason` in `groups.js`, the report block in `dormant.js`, `summary`/`reasons` in `watch.js` | daily report / watch history |
+| the default task name `任务 N` ("task N") in `scheduler.js`, the `note` field in `live.js` | shown directly in the UI / returned with the API |
 
-判据：**会被使用者看到的字符串就是产品文案 → 中文**（哪怕它没有走 `t()`）。
-反过来，只有日志 / 诊断报告 / 自检输出会读到的串 → 英文：
-`silenceSummary()` 的摘要行（只有 `log.*` 与 `/api/silence` 读，界面不渲染）、
-`observe.js` 的跳过理由、`diagnose.js` 生成的诊断 markdown 等。
+Criterion: **a string a user will see is product copy -> Chinese** (even when it does not go through
+`t()`). Conversely, a string only logs / diagnostic reports / self-check output read -> English:
+the summary line of `silenceSummary()` (read only by `log.*` and `/api/silence`, not rendered by the
+UI), the skip reasons in `observe.js`, the diagnostic markdown `diagnose.js` generates, and so on.
 
-守则的边界之外还有一条：**守卫只认 `log/console/stdout` 与 `check()/t()`**，
-所以「塞进对象里再被日志打印」的串（例如 `skipped.push({ error: … })`）它看不见。
-这类地方靠这条规则判断，不要指望脚本兜住。
+One more thing lies outside the guard's boundary: **the guard only recognises `log/console/stdout` and
+`check()/t()`**, so a string that is "put into an object and then printed by a log" (for example
+`skipped.push({ error: … })`) is invisible to it. Decide those by this rule; do not count on the
+script to catch them.
 
-## 5. 界面文案一律走词条（这一条是补出来的）
+## 5. UI copy always goes through a UI string (this rule was added later)
 
-界面里**任何**给使用者看的字都要有 `t()` 键，哪怕它只出现一次。反例是曾经的 30 处硬编码中文
-（`直播中` / `来源 ↗` / `placeholder="要发的内容"` / `上次运行失败` …）：它们没有词条，
-于是 25 个地区**全都显示中文** —— 而这在中文环境下永远看不出来。
+**Any** text a user sees in the UI must have a `t()` key, even when it appears only once. The
+counter-example is the 30 hard-coded Chinese strings that used to exist
+(`直播中` / `来源 ↗` / `placeholder="要发的内容"` / `上次运行失败` …): they had no UI string, so all 25
+regions **displayed Chinese** -- and in a Chinese environment that is impossible to notice.
 
-判据：在 `.jsx` 里写下一个中文字符之前，先问「这个词条存在吗」。
+Criterion: before you write a single Chinese character into a `.jsx` file, ask "does this UI string
+exist".
 
-## 6. 数字 + 量词：用 `tn()`，不要 `{n} ${t('word')}`
+## 6. Numbers + counters: use `tn()`, not `{n} ${t('word')}`
 
-数量标签走 `tn('items', n)`（`web/src/plural.js` + `locales/plurals.js`），
-它会按 `Intl.PluralRules` 选词形 —— `21 элемент` 而不是 `21 элементов`。
-`t('key')` 只用于固定文案；`tn` 也一样会被覆盖度 / 校对统计（见 BUGS #54）。
+Quantity labels go through `tn('items', n)` (`web/src/plural.js` + `locales/plurals.js`), which picks
+the word form via `Intl.PluralRules` -- `21 элемент` rather than `21 элементов`.
+`t('key')` is for fixed copy only; `tn` is also counted by coverage / proofread stats (see BUGS #54).
 
-## 7. 翻译时的纪律
+## 7. Discipline while translating
 
-- **保留全部「为什么」**：这里的注释解释的是取舍与踩过的坑（BUGS #NN、实测数字、上游行为），
-  英文化是换语言，不是缩写。信息密度不许下降。
-- **专有名词原样保留**：路径、标识符、`BUGS #52`、`docs/OBSERVE.md`、接口名、平台名、
-  实测数字（`10035 条` / `0.54 MB` / `Bootstrapped 100%`）都不翻。
-- **不改变行为**：只动注释与输出文本，不改逻辑、不改比较字面量、不改键名、不重排代码。
-- 改完至少跑 `node --check <file>`（`.jsx` 跳过，靠最终构建校验）。
-- **标点**：用 ASCII 的 ` -- ` 作破折号，不要用 CJK 的双破折号；也不要留下带圈数字（`①②`）——
-  两者都进守卫的字符类了。单个 em dash（`—`）是合法英文，不报。
-- **注释也允许被读错**：这一轮抽读时读出好几处**事实错误**（声称界面没有的功能、把关注对象写成监视目标、
-  把 pax 的记录总长写成路径长度…）。改措辞时若发现注释与代码不符，**先标记再说**，不要顺手把注释改成
-  迁就代码的说法 —— 那会把一个真问题变成一句顺口的谎。
+- **Keep every "why"**: the comments here explain trade-offs and the pits that were stepped in
+  (BUGS #NN, measured numbers, upstream behaviour). Translating is changing the language, not
+  abbreviating. Information density must not drop.
+- **Keep proper nouns as they are**: paths, identifiers, `BUGS #52`, `docs/OBSERVE.md`, endpoint
+  names, platform names, measured numbers (`10035 条` / `0.54 MB` / `Bootstrapped 100%`) are not
+  translated.
+- **Do not change behaviour**: touch only comments and output text, not logic, not comparison
+  literals, not key names, and do not reorder code.
+- Once done, at least run `node --check <file>` (skip `.jsx`, which the final build validates).
+- **Punctuation**: use the ASCII ` -- ` as the dash, not the CJK double dash; and do not leave
+  circled digits (`①②`) behind -- both are in the guard's character class. A single em dash (`—`) is
+  valid English and is not reported.
+- **Comments are allowed to be wrong**: proofreading this round turned up several **factual errors**
+  (claiming a UI feature that does not exist, calling a follow target a watch target, giving pax's
+  record total length as a path length…). When you rewrite the wording and find the comment does not
+  match the code, **flag it first**, and do not casually rewrite the comment to accommodate the code
+  -- that turns a real problem into a smooth-sounding lie.
 
-## 8. 提交信息（commit）也是英文（2026-09-14 补）
+## 8. Commit messages are English too (added 2026-09-14)
 
-**为什么**：历史是任何人打开仓库先看到的东西。正文只写中文，对**本来会来贡献的人**就是读不懂 ——
-搜不到、引用不了、review 时无从判断。所以这条按「全球可读」定，不按「我读得懂」定。
+**Why**: history is the first thing anyone sees when they open the repository. A body written only in
+Chinese is unreadable to **the very people who would otherwise contribute** -- it cannot be searched,
+cannot be cited, and gives a reviewer nothing to judge by. So this rule is set by "globally readable",
+not by "I can read it".
 
-- **范围**：所有分支、所有 tag 上的每一条提交信息（subject 与 body 都算）。
-- **判据**（比工程层更宽，写在 `tools/lib/cjk-text.mjs`）：汉字 / 假名 / 谚文 / CJK 标点 /
-  全角形式 / 带圈数字 / 翻译管线的 `⟦…⟧` 哨兵 / CJK 双破折号。单个 em dash 仍是合法英文。
-- **允许保留**：作为**证据**引用的其他语种原串（俄语复数 `Через {n} дн.`、阿拉伯语 `بعد {n} يوم`、
-  法语语序）—— 那是「翻译对不对」的数据，删掉等于把证据一起删掉。要的是可读英文，不是纯 ASCII。
-- **怎么守**：`npm run commit-msg`（`tools/commit-msg-check.mjs`）；`.githooks/commit-msg` 在本地
-  提交时挡一次；`ci.yml` 的 `check` job 用 `fetch-depth: 0` 把整段历史扫一遍。
-  本地启用钩子一次即可：`git config core.hooksPath .githooks`。
-- **改写历史**：这一轮的 14 条中文正文已重写为英文（`git filter-branch --msg-filter`，只换信息、
-  树 / 作者 / 日期 / 父子结构 / 签名状态逐条比对不变），并 force-push。记录与步骤见
-  `docs/PUBLISH.md`。
+- **Scope**: every commit message on every branch and every tag (both subject and body).
+- **Criterion** (wider than the engineering layer; implemented in `tools/lib/cjk-text.mjs`): Han
+  characters / kana / Hangul / CJK punctuation / full-width forms / circled digits / the translation
+  pipeline's `⟦…⟧` sentinel / the CJK double dash. A single em dash is still valid English.
+- **Allowed to remain**: original strings in other languages quoted as **evidence** (the Russian
+  plural `Через {n} дн.`, the Arabic `بعد {n} يوم`, French word order) -- that is the data for "is the
+  translation right", and deleting it deletes the evidence along with it. What is wanted is readable
+  English, not pure ASCII.
+- **How it is guarded**: `npm run commit-msg` (`tools/commit-msg-check.mjs`); `.githooks/commit-msg`
+  blocks it once at local commit time; the `check` job of `ci.yml` scans the whole history with
+  `fetch-depth: 0`. Enable the hook locally once: `git config core.hooksPath .githooks`.
+- **Rewriting history**: this round's 14 Chinese bodies have been rewritten into English
+  (`git filter-branch --msg-filter`, only the messages were replaced; tree / author / date /
+  parent-child structure / signature status were compared commit by commit and left unchanged), then
+  force-pushed. The record and the steps are in `docs/PUBLISH.md`.

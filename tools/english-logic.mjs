@@ -4,8 +4,10 @@
 // into three classes, and mixing them up is exactly how this refactor goes wrong:
 //   * comments (they explain why the code is written this way)  -> English, for maintainers
 //   * server logs / test + traversal output                     -> English, it is engineering output
-//   * UI strings (web/src/i18n.jsx), API error strings returned to the client, docs/*.md
-//                                                               -> KEEP Chinese, do not touch
+//   * UI strings (web/src/i18n.jsx), API error strings returned to the client, and the Chinese
+//     product copy the app renders for its users            -> KEEP Chinese, do not touch
+//   * docs/*.md                                              -> English, like the code
+//     (README.zh-CN.md is the single document that stays Chinese, on purpose)
 // So this script checks only the first two: comment text, and the strings handed to
 // log/console/output helpers and to the traversal `check()` name. A Chinese literal that is
 // *compared* against UI text is data, not output (`main.indexOf(<a Chinese UI label>) !== -1`)
@@ -54,18 +56,72 @@ function targets() {
   // web/src is included in full: its UI dictionary values are data (never flagged), but the
   // comments around them are engineering comments and must be English. Only the *generated*
   // regional dictionary is skipped (build output, rewritten by tools/i18n-hant.mjs).
-  add('web/src', ['.js', '.jsx'], (rel) => rel.endsWith('locales/generated.js'));
+  add('web/src', ['.js', '.jsx', '.css'], (rel) => rel.endsWith('locales/generated.js'));
+  add('web', ['.html']);
+  // Only the files directly under web/ (vite.config.js and friends): web/src is already scanned
+  // above, and including it twice would double-count every comment in the coverage figure.
+  add('web', ['.js', '.css'], (rel) => rel.split('/').length > 2);
   add('tools', ['.mjs', '.cjs'], (rel) => rel.includes('/locales/'));
   add('launcher', ['.cjs']);
-  return out.sort();
+  // Workflow YAML, the stylesheet and the HTML shell were a long-standing blind spot: the guard
+  // only looked at .js/.jsx/.mjs/.cjs, so Chinese comments in those files survived every scan.
+  // A comment is a comment whatever the file extension is, so they are scanned now, each with the
+  // comment syntax of its own language (see scanSource).
+  add('.github/workflows', ['.yml', '.yaml']);
+  // Dot-files use `#` comments and have no extension at all, which is why they were invisible too.
+  for (const f of ['.gitignore', '.gitattributes', '.editorconfig']) {
+    if (fs.existsSync(path.join(ROOT, f))) out.push(f);
+  }
+  return [...new Set(out)].sort();
 }
 
 /** Split a source file into comment text and output-string text. */
-function scanSource(src) {
+function scanSource(src, style = 'js') {
   const comments = []; // { text, line }
   const outputStrings = []; // { text, line, call }
 
   const lineOf = (idx) => src.slice(0, idx).split(/\r?\n/).length;
+
+  if (style === 'html') {
+    // HTML: `<!-- -->` comments plus the inline <script> blocks, which are JavaScript and carry
+    // JavaScript comments. Running the JS walker over the whole HTML file would be wrong: a
+    // closing tag like `</div>` looks like the start of a regex literal and would desynchronise it.
+    for (const m of src.matchAll(/<!--([\s\S]*?)-->/g)) {
+      comments.push({ text: m[1], line: lineOf(m.index), kind: 'html' });
+    }
+    for (const m of src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+      const base = lineOf(m.index + m[0].indexOf('>'));
+      for (const c of scanSource(m[1], 'js').comments) {
+        comments.push({ ...c, line: base + c.line - 1 });
+      }
+    }
+    return { comments, outputStrings };
+  }
+
+  if (style === 'hash') {
+    // YAML (and shell): `#` starts a comment. A `#` inside quotes is data, and a `#` not preceded
+    // by whitespace is part of a word (`#1`), so both are left alone.
+    src.split(/\r?\n/).forEach((line, idx) => {
+      let q = null;
+      for (let k = 0; k < line.length; k++) {
+        const ch = line[k];
+        if (q) {
+          if (ch === '\\') k++;
+          else if (ch === q) q = null;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          q = ch;
+          continue;
+        }
+        if (ch === '#' && (k === 0 || /\s/.test(line[k - 1]))) {
+          comments.push({ text: line.slice(k + 1), line: idx + 1, kind: 'hash' });
+          break;
+        }
+      }
+    });
+    return { comments, outputStrings };
+  }
 
   // -- 1. Comments: walk the file char by char, skipping string contents so that a `//`
   //       inside a URL is not mistaken for a comment.
@@ -153,6 +209,10 @@ function scanSource(src) {
     /\b[\w$.]*log\s*(?:\?\.|\.)\s*(?:info|warn|error|debug)\s*\(/g,
     /\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(/g,
     /\bprocess\s*\.\s*std(?:out|err)\s*\.\s*write\s*\(/g,
+    // Anything written to a file is read by a person: the text of a generated document is output
+    // exactly like a log line is. This was a blind spot of its own - the release script generated
+    // Chinese documents and the guard never looked at the writer call, so the Chinese shipped.
+    /\b(?:fs\s*\.\s*)?(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream)\s*\(/g,
   ];
   const FIRST_ARG = [/\b(?:check|t|ta|note|banner)\s*\(/g];
   const COMPARISON = /===|!==|==|!=|indexOf|includes|startsWith|endsWith|\.match\(|\.test\(|assert|expect|deepEqual|>|</;
@@ -230,9 +290,19 @@ function stringLiterals(span) {
   return out;
 }
 
+/** Which comment syntax a file uses. Everything not listed is JavaScript/JSX-like. */
+const STYLE_BY_EXT = { '.css': 'js', '.html': 'html', '.yml': 'hash', '.yaml': 'hash' };
+const styleOf = (rel) => {
+  const base = path.basename(rel);
+  // A dot-file (`.gitignore`, `.gitattributes`) has no extension and comments with `#`.
+  if (base.startsWith('.') && path.extname(base) === '') return 'hash';
+  return STYLE_BY_EXT[path.extname(rel)] ?? 'js';
+};
+
 export function checkFile(rel) {
   const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-  const { comments, outputStrings } = scanSource(src);
+  const { comments, outputStrings } = scanSource(src, styleOf(rel));
+  const lines = src.split(/\r?\n/);
   const bad = [];
   for (const c of comments) {
     // Escape hatch, on purpose and by name: a comment that has to *quote* a CJK character
@@ -242,7 +312,15 @@ export function checkFile(rel) {
     if (/english-logic:allow/.test(c.text)) continue;
     if (CJK.test(c.text)) bad.push({ kind: 'comment', line: c.line, text: c.text.trim().slice(0, 100) });
   }
-  for (const s of outputStrings) if (CJK.test(s.text)) bad.push({ kind: 'output', line: s.line, text: s.text.trim().slice(0, 100), call: s.call });
+  for (const s of outputStrings) {
+    // The same escape hatch applies to an output string: a test that writes a Chinese fixture to a
+    // temporary file on purpose is data, and says so on the line. The marker is looked for in a
+    // small window around the call rather than on one exact line, because in a multi-line call the
+    // arguments sit *below* the parenthesis while the scan reports the parenthesis's line.
+    const near = lines.slice(Math.max(0, s.line - 3), s.line + 2).join('\n');
+    if (/english-logic:allow/.test(near)) continue;
+    if (CJK.test(s.text)) bad.push({ kind: 'output', line: s.line, text: s.text.trim().slice(0, 100), call: s.call });
+  }
   return bad;
 }
 
@@ -254,7 +332,7 @@ export function checkTree() {
   let outputs = 0;
   for (const f of files) {
     const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
-    const scanned = scanSource(src);
+    const scanned = scanSource(src, styleOf(f));
     comments += scanned.comments.length;
     outputs += scanned.outputStrings.length;
     const bad = checkFile(f);
@@ -268,9 +346,9 @@ export function checkTree() {
 
 /**
  * English coverage: the share of the engineering layer that is actually English, plus the share of
- * UI strings that are localised — the two numbers that decide whether this is maintainable by
- * someone who does not read Chinese. The Chinese docs and the Chinese product copy are deliberate
- * exemptions, and are named as such rather than silently counted.
+ * UI strings that is localised — the two numbers that decide whether this is maintainable by
+ * someone who does not read Chinese. What stays Chinese is named here rather than silently
+ * counted: the Chinese product data and product copy, and the strings quoted as evidence.
  */
 export function coverage() {
   const res = checkTree();
@@ -305,9 +383,10 @@ export function coverage() {
     },
     ui: locales,
     exemptions: [
-      'docs/*.md — written in Chinese on purpose (they explain decisions to the maintainer)',
-      'web/src/i18n.jsx zh dictionary + locales/*.json — UI source strings',
-      'API error strings and report/push/export copy — product text, see docs/ENGLISH-LOGIC.md §4',
+      'README.zh-CN.md — the one document kept in Chinese, on purpose (the other README and every doc under docs/ are English)',
+      'web/src/i18n.jsx zh dictionary + locales/*.json — UI source strings and translations (product data)',
+      'API error strings, report/push/export copy, LLM prompts — product text, see docs/ENGLISH-LOGIC.md §4',
+      'strings quoted as evidence in docs and tests (a UI label under discussion, a broken translation, a fixture) — data, not prose',
     ],
   };
 }

@@ -53,6 +53,9 @@ const LATE_KEYS = {
   'ja-JP': { tab_people: 'ピープル', tab_calendar: 'カレンダー' },
   'ko-KR': { tab_people: '관심', tab_calendar: '달력' },
   'id-ID': { tab_people: 'Orang', tab_calendar: 'Kalender' },
+  // Thai: `คน` (people) rather than a transliteration of "people", and `ปฏิทิน` (calendar). Both are
+  // the words the rest of the Thai copy uses (`คนที่ติดตาม` / the calendar hint below).
+  'th-TH': { tab_people: 'คน', tab_calendar: 'ปฏิทิน' },
   'es-ES': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'es-419': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'pt-PT': { tab_people: 'Pessoas', tab_calendar: 'Calendário' },
@@ -455,6 +458,220 @@ export const HAND_COMMON = {
     // followersCount is the one count key whose zh source puts the numeral *after* the noun, so the
     // Filipino value does the same and the tested `{n}` rule for this key is unaffected.
     followersCount: 'tagasubaybay {n}',
+  },
+  'th-TH': {
+    // Thai joined one release after Filipino, and its hand layer is written first for the same
+    // reason: the machine layer may not override a hand entry (see humanKeys() in
+    // tools/i18n-translate.mjs), so the copy a user meets first is decided here rather than by the
+    // model. The tag is `th-TH`, not `th` (see locales/index.js).
+    saveStateIdle: 'ยังไม่มีการเปลี่ยนแปลง',
+    saveStateDirty: 'มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก',
+    cancel: 'ยกเลิก',
+    refresh: 'รีเฟรช',
+    loading: 'กำลังโหลด…',
+    error: 'ข้อผิดพลาด',
+    yes: 'ใช่',
+    no: 'ไม่ใช่',
+    enabled: 'เปิด',
+    disabled: 'ปิด',
+    date: 'วันที่',
+    source: 'แหล่งข้อมูล',
+    sources: 'แหล่งข้อมูล',
+    searchTitle: 'ค้นหาข้อมูล',
+    reportsTitle: 'รายงาน',
+    eventsTitle: 'เหตุการณ์ที่รวมแล้ว',
+    chartsTitle: 'กราฟแนวโน้ม',
+    shareTitle: 'แชร์',
+    shareDownload: 'สร้างแล้วดาวน์โหลด',
+    shareCopy: 'คัดลอกข้อความ',
+    intelTitle: 'การ์ดข้อมูล',
+    runTitle: 'เรียกเก็บข้อมูล',
+    done: 'เสร็จสิ้น',
+    failed: 'ล้มเหลว',
+    alerts: 'การแจ้งเตือน',
+    noItems: 'ยังไม่มีข้อมูล',
+    onlyAlerts: 'เฉพาะการแจ้งเตือน',
+    onlyStarred: 'เฉพาะที่ติดดาว',
+    onlyUnread: 'เฉพาะที่ยังไม่ได้อ่าน',
+    mergeEvents: 'รวมเหตุการณ์ที่ซ้ำกัน',
+    packetLoss: 'แพ็กเก็ตสูญหาย',
+    save: 'บันทึก',
+    saving: 'กำลังบันทึก…',
+    saved: 'บันทึกแล้ว',
+    add: 'เพิ่ม',
+    delete: 'ลบ',
+    name: 'ชื่อ',
+    time: 'เวลา',
+    language: 'ภาษา',
+    latency: 'ความหน่วง',
+    // The same reasoning the Korean, Indonesian and Filipino levels recorded for this one: it is a
+    // long prompt sentence, and a long sentence is exactly where a machine pass leaves the source
+    // language behind - it is also the first thing a user reads on the Live page. A hand entry
+    // always wins, so this sentence never depends on the model.
+    //
+    // Thai has no spaces between words; the spaces that do appear here separate clauses (and follow
+    // the Thai convention of a space before the closing parenthesis of an aside), not words. That is
+    // deliberate and is also why the fingerprinter cannot use them as word boundaries - see the
+    // measurement recorded on the `th-TH` plural table in locales/plurals.js.
+    liveHint:
+      'การเริ่มไลฟ์สดเป็นข้อมูลที่อ่อนไหวต่อเวลามากที่สุด — ควรรู้ก่อนคำค้นใด ๆ ' +
+      'หน้านี้แสดงสถานะการไลฟ์ของเป้าหมายที่เฝ้าติดตาม และจัดห้องไลฟ์หลายห้องเป็นตารางเพื่อดูพร้อมกันได้ ' +
+      '(ใช้เครื่องเล่นฝังตัวทางการของ bilibili ไม่ผ่านตัวกลางและไม่แตะข้อมูลการเข้าสู่ระบบ) ' +
+      'โปรดทราบว่า "เล่นซ้ำ" ไม่ใช่การเริ่มไลฟ์จริง จึงแสดงแยกไว้ต่างหาก',
+    // ── The count labels, and why they are handled by a plural table rather than by the base values.
+    //
+    // docs/DESIGN.md section 11 describes the rule as three-tiered, with Filipino as the worked
+    // example of the third tier. Thai is the same tier for a different reason, and the measurement
+    // is again the reason rather than the category count:
+    //
+    //   `Intl.PluralRules('th').resolvedOptions().pluralCategories` is `["other"]` -- a single
+    //   category, measured over 0..2000 as `other` for all 2001 integers, and for decimals too
+    //   (1.5 / 2.5 / 100.5 all select `other`). So nothing inflects and the two-tier reading says
+    //   "this locale is like zh / ja / ko / id: prepend the number to a bare noun".
+    //
+    //   That reading is wrong here. Thai counts with a numeral plus a **classifier** (`3 รายการ`,
+    //   `2 วัน`, `5 ครั้ง`, `10 คน`); a numeral in front of a bare noun is not how a Thai count label
+    //   is written, so "prepend the number" would produce something that reads like a database
+    //   field. The classifier is a word that has to be *in* the phrase, which is precisely what a
+    //   value without `{n}` cannot express -- and the category count cannot express the need either.
+    //
+    //   So the table below (PLURALS['th-TH'] in locales/plurals.js) carries each count key as a full
+    //   Thai noun phrase, and the base values here stay the standalone noun the panel title uses.
+    //   Where the classifier is already inside the noun (`การแจ้งเตือน`, `คุกกี้`), the table repeats
+    //   it with `{n}` -- the point is that the count label is written out in full and phrased, and
+    //   that nobody can "simplify" the key back into the bare-numeral tier without deleting a form.
+    //
+    // Cost of not doing this: count labels that read as broken Thai to a native speaker while every
+    // offline gate stays green. tools/i18n-plural-test.mjs pins the measurement and the wording.
+    items: 'รายการ',
+    groupDays: 'วัน',
+    // The English value for this one is the abbreviation "p"; Thai gets the word, like Filipino.
+    groupPeopleUnit: 'คน',
+    vdbGroups: 'กลุ่ม',
+    outsideRange: 'รายการที่ถูกตัดออกตามเงื่อนไขเวลา',
+    groupMembers: 'สมาชิก',
+    groupPeopleCount: 'คนที่ติดตาม',
+    costCalls: 'ครั้ง',
+    matches: 'รายการ',
+    // `alerts` is a count key as well as the copy for its row (zh "告警"), so the base has to work as english-logic:allow
+    // a standalone panel label; here the noun already contains the notion of "notification", which
+    // is why the table's entry only has to add the numeral.
+    alerts: 'การแจ้งเตือน',
+    // ── Corrections to the machine pass itself, all kept here rather than in machine.json, which the
+    //    pipeline regenerates and would happily overwrite. A hand entry wins over the machine layer
+    //    (see humanKeys() in tools/i18n-translate.mjs), so these are the values a user actually sees.
+    //    Every note below either quotes the machine's own `th-TH` output verbatim (and names the
+    //    defect a Thai user would notice) or says plainly that the row is a consistency decision in
+    //    this file. No style preferences are encoded here.
+    //
+    // The Chinese source strings are quoted inside `english-logic:allow` markers: the guard reads one
+    // `//` line at a time, so every line that carries a Chinese character needs its own marker (see
+    // docs/ENGLISH-LOGIC.md section 3).
+    //
+    // 1. Two glossary terms substituted into the sentence and left glued to their neighbours, so the
+    //    UI renders tokens that are not Thai words. The pinned term 来源 (sources) came back as english-logic:allow
+    //    "แหล่งข้อมูล" joined straight onto the platform name ("เปิดใช้งาน bilibiliแหล่งข้อมูล ใดก็ได้"),
+    //    and 监视 (watch) came back as "การเฝ้าติดตาม" wrapped in spaces as a standalone fragment english-logic:allow
+    //    ("ยังไม่มีวัตถุที่สามารถ การเฝ้าติดตาม ได้"). This is the "term protection cuts compounds in
+    //    half" pitfall of docs/DESIGN.md section 11 seen from the other side: the substitution is
+    //    right, the sentence around it is not. Thai has no word spaces, so a glued term cannot be
+    //    read as two words - it is one nonsense token.
+    liveNoTargets: 'ยังไม่มีเป้าหมายให้เฝ้าติดตาม —— เปิดใช้แหล่งข้อมูล bilibili แหล่งใดก็ได้ หรือเพิ่ม uid ด้วยตนเอง',
+    // The same glued term in a shorter label: zh "监视列表需要账号名与 BotPassword" came back as english-logic:allow
+    // "รายการ การเฝ้าติดตาม ต้องใช้ชื่อบัญชีและ BotPassword" -- the fragment "การเฝ้าติดตาม" sits between
+    // spaces where the noun phrase belongs.
+    needBotPassword: 'รายการเฝ้าติดตามต้องใช้ชื่อผู้ใช้และ BotPassword',
+    // 2. A copy-paste collision: two different source strings came back word for word identical, so
+    //    two different empty states read the same. zh "尚无运行记录" (no run records yet) and english-logic:allow
+    //    the scheduled-task history zh "还没有执行记录" (no execution history yet) were both english-logic:allow
+    //    translated as "ยังไม่มีบันทึกการทำงาน". The second row is about a *schedule*, which the
+    //    shared wording does not say, and the two rows sit on two different pages.
+    noResult: 'ยังไม่มีบันทึกการรัน',
+    noScheduleHistory: 'ยังไม่มีประวัติการเรียกเก็บข้อมูล',
+    // 3. A model failure the pipeline itself rejected. The run reported "obsHint: retranslation still
+    //    the source text, not written" and "obsRotationHint: ... not written" -- the second pass came
+    //    back with Han characters again, so by the layering rule nothing was written and both rows
+    //    would have fallen back to **English** inside the Thai observation-mode block, whose switch
+    //    and sibling hints are Thai. Hand-written here for that reason, not because the wording was
+    //    wrong: there was no wording.
+    obsHint:
+      'เมื่อเฝ้าดูทั้งค่าย ร่องรอยการเข้าชมก็เป็นข้อมูลเช่นกัน: การไล่เก็บสมาชิกทุกคนพร้อมกัน ' +
+      'ในเวลาเดิมของทุกวัน ด้วยช่วงห่างที่เท่ากันเป๊ะ — รูปแบบเหล่านี้ไม่เกี่ยวกับว่าคุณมาจาก IP ใด ' +
+      'เมื่อเปิดใช้ โปรแกรมจะสุ่มเก็บเพียงบางส่วนในแต่ละรอบ (หมุนเวียนให้ครบ) เว้นช่วงแบบสุ่ม ' +
+      'และให้เฉพาะแหล่งข้อมูลที่บันทึกของอีกฝ่ายอยู่บนเซิร์ฟเวอร์ของเขาเองผ่าน Tor',
+    obsRotationHint:
+      'ต้องเปลี่ยนทางออกของ Tor ทุกครั้งจึงจะไม่ถูกมองว่าเป็นผู้เข้าชมรายเดิม ' +
+      'การแยกทางออกใช้ชื่อผู้ใช้ SOCKS ของ Tor และให้เฉพาะแหล่งข้อมูลที่อีกฝ่ายเก็บบันทึกเองผ่าน Tor ' +
+      '(bilibili / Reddit / Fandom วิ่งตรง เพราะอีกฝ่ายไม่เห็นบันทึกเหล่านั้น และทาง Tor ช้ากว่าประมาณ 8 เท่า)',
+    // 4. A half-translated label: zh "标识（英文/数字/短横线）" says which *characters* an id may contain, and english-logic:allow
+    //    the machine returned "ตัวระบุ (อังกฤษ/ตัวเลข/ขีดกลาง)" -- it kept "ตัวระบุ" in Latin (fine, that
+    //    is the field's name) but translated 英文 as อังกฤษ, the name of the English *language* and the english-logic:allow
+    //    country adjective. The row accepts Latin letters, not the English language; Filipino hit the
+    //    identical defect.
+    sourceId: 'ตัวระบุ (อักษรละติน/ตัวเลข/ขีดกลาง)',
+    // 5. A leading space in a field label: zh "忽略行正则" came back as " regex ข้ามบรรทัด", so the input english-logic:allow
+    //    rendered with a stray space in front of it. (Structural, and the proofreader's
+    //    leading/trailing-whitespace rule is what caught it.)
+    ignorePatterns: 'regex ข้ามบรรทัด',
+    // 6. A glossary term that the machine transliterated while the hand layer used the Thai word:
+    //    zh "在播的全部加入多屏" came back using "มัลติวิว" (a transliteration of "multi-view") for 多屏 english-logic:allow
+    //    where the row that turns the grid off says "หน้าจอหลายจอ". One concept, one wording -- and the
+    //    two buttons sit next to each other in the same toolbar, so a user reads both in one glance.
+    addAllLive: 'เพิ่มห้องไลฟ์ทั้งหมดลงหน้าจอหลายจอ',
+    // 7. Consistency rows rather than machine failures - the machine never produced an entry for these
+    //    keys (they are the hand-written titles below), so what follows is a decision recorded here:
+    //    the same concept must have one Thai value in the file. `watchTitle` / `watchDigest` /
+    //    `runWatchOnly` / `taskMode_watch` are the four places the watch *target* appears; three of
+    //    them render as เป้าหมาย that the Thai reader cannot tie back to the watch feature, so all four
+    //    use เป้าหมายที่เฝ้าติดตาม, which is also what the glossary override for 关注对象 says in every english-logic:allow
+    //    hint around them.
+    watchTitle: 'เป้าหมายที่เฝ้าติดตาม',
+    watchDigest: 'สรุปการเปลี่ยนแปลงของเป้าหมายที่เฝ้าติดตาม',
+    runWatchOnly: 'ตรวจสอบเฉพาะเป้าหมายที่เฝ้าติดตาม',
+    taskMode_watch: 'เฉพาะเป้าหมายที่เฝ้าติดตาม',
+    // The same decision for the other repeated concepts: 来源 (sources) is แหล่งข้อมูล everywhere (the english-logic:allow
+    // glossary override agrees), 桌面通知 (desktop notification) is การแจ้งเตือนบนเดสก์ท็อป as the machine english-logic:allow
+    // translated the sibling key `desktopNotify`, 静默时段 (quiet hours) is the glossary's ช่วงเวลาสงบ, english-logic:allow
+    // and 通道 (channel) is ช่องทาง as in every channel row on the notification panel. english-logic:allow
+    sourcesTitle: 'แหล่งข้อมูล',
+    notify: 'การแจ้งเตือนบนเดสก์ท็อป',
+    notifyQuiet: 'ช่วงเวลาสงบ',
+    notifyKind: 'ประเภทช่องทาง',
+    // 8. A result label rendered as an instruction, the class Filipino also recorded: zh "扫描条目" is the english-logic:allow
+    //    count of entries a VDB scan examined, shown after the scan, and a bare "รายการ" leaves it
+    //    reading as a menu item rather than a result.
+    peopleScanned: 'รายการที่สแกนแล้ว',
+    // 9. The short labels for the multi-screen grid, the custom-source editor and the privacy rows.
+    //    These are hand-written for the same reason as everything above: the machine never produced a
+    //    value for them, because at the time of the run they were already in the hand layer (the
+    //    pipeline skips keys the hand layer owns), so leaving them out here drops the row to the
+    //    English fallback -- which the proofreader then reports as "this row is really an English
+    //    fallback", and a Thai user reads "Multi-screen" in the middle of a Thai toolbar.
+    //
+    //    Every one of them uses the wording already established by the row it sits next to:
+    //    หน้าจอหลายจอ for 多屏 (the same phrase `addAllLive` above and the liveHint sentence use), english-logic:allow
+    //    แหล่งข้อมูล for 来源 (the glossary override), plain Thai words for the privacy / network rows english-logic:allow
+    //    because none of them is a product name.
+    multiScreen: 'หน้าจอหลายจอ', // zh 多屏 english-logic:allow
+    addToGrid: 'เพิ่มลงหน้าจอหลายจอ', // zh 加入多屏 english-logic:allow
+    clearGrid: 'ล้างหน้าจอหลายจอ', // zh 清空多屏 english-logic:allow
+    customSources: 'แหล่งข้อมูลที่กำหนดเอง', // zh 自定义来源 english-logic:allow
+    addCustomSource: 'เพิ่มแหล่งข้อมูลที่กำหนดเอง', // zh 新增自定义来源 english-logic:allow
+    browserTitle: 'เบราว์เซอร์ที่ใช้', // zh 浏览器 english-logic:allow
+    proxyTitle: 'พร็อกซีเครือข่าย', // zh 网络代理 english-logic:allow
+    headless: 'โหมดไม่มีหน้าต่าง', // zh 无头模式 english-logic:allow
+    anonymousMode: 'โหมดไม่ระบุตัวตน', // zh 匿名模式 english-logic:allow
+    privacyTitle: 'ความเป็นส่วนตัว / ไม่ระบุตัวตน', // zh 隐私 / 无痕 english-logic:allow
+    vdbTitle: 'นำเข้าคนที่ติดตามจาก VDB', // zh 从 VDB 导入关注对象 english-logic:allow
+    // The three keys whose zh source already embeds the numeral ("{n} 个" and "粉丝 {n}") keep a english-logic:allow
+    // value with `{n}` here, because that is what the source itself carries -- the guard's
+    // placeholder comparison is against the Chinese string, so a base value without it would be the
+    // mismatch instead.
+    cookieCount: '{n} คุกกี้',
+    cookieCountWithSession: '{n} คุกกี้ (รวม SESSDATA)',
+    // followersCount is the one count key whose zh source puts the numeral *after* the noun, so the
+    // Thai value does the same and the tested `{n}` rule for this key is unaffected.
+    followersCount: 'ผู้ติดตาม {n}',
   },
   'es-ES': {
     saveStateIdle: 'Sin cambios todavía',
@@ -1415,6 +1632,29 @@ export const HAND = {
     tab_reports: 'Mga ulat',
     tab_live: 'Live',
     tab_search: 'Maghanap',
+    tab_llm: 'LLM',
+  },
+  'th-TH': {
+    // Same reasoning again: Thai is an independent language with its own chain
+    // (['th-TH','en-US']), so this level stands alone and inherits nothing from another locale.
+    //
+    // These nine labels are the tab row, the first thing the Thai UI shows, and they are the anchor
+    // the traversal check at the end of tools/traverse-ui.cjs asserts against: a locale that is
+    // registered in LOCALES but whose layers never landed still "works" -- it silently shows the
+    // English fallback -- and only reading the rendered page out reveals it.
+    //
+    // `tab_live` is the word Thai actually says for a live stream (ไลฟ์), not a transliteration of
+    // "Live"; the same word is used inside liveHint above and in the traversal's hint assertion, so
+    // a regression to English cannot pass by matching a borrowed word.
+    appSub: 'ศูนย์ข่าวกรอง VTuber ในเครื่อง',
+    tab_intel: 'ข้อมูล',
+    tab_run: 'เรียกเก็บข้อมูล',
+    tab_sources: 'แหล่งข้อมูล',
+    tab_watch: 'เฝ้าติดตาม',
+    tab_settings: 'การตั้งค่า',
+    tab_reports: 'รายงาน',
+    tab_live: 'ไลฟ์',
+    tab_search: 'ค้นหา',
     tab_llm: 'LLM',
   },
 };

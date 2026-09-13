@@ -54,6 +54,23 @@ export const LOCALES = [
   // Tagalog requires between a numeral and the noun it counts (`5 na item`), which the default
   // "prepend the number" cannot express. See locales/plurals.js and tools/i18n-plural-test.mjs.
   { code: 'fil-PH', name: 'Filipino', chain: ['fil-PH', 'en-US'], weekStart: 0 },
+  // Thai: an independent language with its own chain, so this level stands on its own (same shape
+  // as ja-JP / ko-KR / id-ID / fil-PH) and nothing here is inherited from another locale.
+  // The tag is `th-TH`, never the bare `th`: the region is what carries the formatting data this
+  // locale is judged on (`Intl.DateTimeFormat('th-TH')` resolves to the **Buddhist** calendar and
+  // `Intl.NumberFormat('th-TH')` to Thai grouping; a bare tag loses the region for both).
+  // weekStart 0 (Sunday) -- `new Intl.Locale('th-TH').weekInfo.firstDay` is 7, i.e. Sunday, the
+  // same first day as the US / Japan / Indonesia / the Philippines.
+  //
+  // Unlike Indonesian it **does** need a plural table, but for a third reason again: Thai has a
+  // single plural category (`Intl.PluralRules('th').resolvedOptions().pluralCategories` is
+  // `["other"]`, and 0..2000 selects `other` for all 2001 integers), so nothing inflects and the
+  // two-category count says "no table". What the table carries instead is the **classifier**:
+  // Thai counts with a numeral plus a classifier word (`3 รายการ`, `2 วัน`, `5 ครั้ง`) and a bare
+  // numeral in front of a noun is not idiomatic in a count label, while the default "prepend the
+  // number to a bare noun" of countLabel() cannot add one. See locales/plurals.js and
+  // tools/i18n-plural-test.mjs.
+  { code: 'th-TH', name: 'ไทย', chain: ['th-TH', 'en-US'], weekStart: 0 },
   { code: 'en-US', name: 'English (US)', chain: ['en-US', 'en'], weekStart: 0 },
   { code: 'en-GB', name: 'English (UK)', chain: ['en-GB', 'en-US'], weekStart: 1 },
   { code: 'en-AU', name: 'English (Australia)', chain: ['en-AU', 'en-GB', 'en-US'], weekStart: 1 },

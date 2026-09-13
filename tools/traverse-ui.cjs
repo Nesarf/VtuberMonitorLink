@@ -202,7 +202,7 @@ async function main() {
     const title = (await page.locator('h1').first().innerText()).trim();
     check('page mounts and shows the product title', title === "Vtuber's Monitor Link", title);
 
-    // The language control became a dropdown (26 locales cannot be switched with a two-state
+    // The language control became a dropdown (27 locales cannot be switched with a two-state
     // button); pin it to Simplified Chinese, since the assertions below are written against Chinese
     const langSel = page.locator('select.lang').first();
     check('the language picker lists the locales', (await langSel.locator('option').count()) >= 20, (await langSel.locator('option').count()) + ' locales');
@@ -406,6 +406,90 @@ async function main() {
       );
     } else {
       check('the Filipino live tab was found', false, 'no tab button matched "Live"');
+    }
+
+    // Thai: the same three failure modes as the Filipino block above, plus a negative control for the
+    // classifier predicate this locale's count labels are judged by.
+    //   1. registered in LOCALES but never rendering -- the chain is wrong or the layers did not land,
+    //      and the page silently shows English while every offline table still reports 100%;
+    //   2. a Chinese proper noun inside an otherwise Thai sentence (the glossary strips pinned terms
+    //      before looksUntranslated() tests a value, so no offline tool can see it);
+    //   3. count labels: Thai counts with a numeral plus a **classifier** (`3 รายการ`, `2 วัน`,
+    //      `5 ครั้ง`), which lives in the plural table rather than in the base values (see
+    //      locales/plurals.js). A label rendering as a numeral glued to a bare noun is a wiring
+    //      failure nothing else in the suite would see.
+    await langSel.selectOption('th-TH');
+    await page.waitForTimeout(400);
+    const thTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('html lang follows the Thai selection', (await langIsHant.getAttribute('lang')) === 'th-TH', String(await langIsHant.getAttribute('lang')));
+    check(
+      'the Thai interface is in Thai',
+      thTabs.includes('ข้อมูล') && thTabs.includes('แหล่งข้อมูล') && thTabs.includes('การตั้งค่า') && thTabs.includes('เฝ้าติดตาม'),
+      thTabs,
+    );
+    // The anchor claim: the tab row must not still be the English fallback. `LLM` is deliberately not
+    // in the pattern -- every locale keeps that abbreviation (it is the same string in zh and en, so
+    // no locale ever translates it), and flagging it would make the check lie. The other six are the
+    // English copy's own labels.
+    check('no English fallback left in the Thai tab row', !/Run|Settings|Reports|Search|Sources|Watch/.test(thTabs), thTabs);
+    const thLive = page.locator('nav.tabs button', { hasText: 'ไลฟ์' }).first();
+    if (await thLive.count()) {
+      await thLive.click();
+      await page.waitForTimeout(900);
+      // Same rule as the Korean, Indonesian and Filipino scans: only the interface's own copy
+      // (titles / hints / tabs), never the room titles that come from bilibili. Pinned proper nouns
+      // are stripped first, longest first.
+      const thChrome = [
+        ...(await page.locator('main h2').allInnerTexts()),
+        ...(await page.locator('main .hint').allInnerTexts()),
+        ...(await page.locator('nav.tabs button').allInnerTexts()),
+      ].join('\n');
+      const keepTh = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
+        .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
+        .map(([k]) => k)
+        .sort((a, b) => b.length - a.length);
+      let restTh = thChrome;
+      for (const term of keepTh) restTh = restTh.split(term).join('');
+      const thLeftover = [...new Set(restTh.match(/[\u4e00-\u9fff]/g) || [])];
+      check('no Chinese left in the Thai live page', thLeftover.length === 0, thLeftover.length ? 'leftover Han characters: ' + thLeftover.join('') : '0 leftover Han characters');
+      const thHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
+      // These two phrases come from the hand-written liveHint, so this fails when the locale falls
+      // back to English rather than merely when a tab label is missing. They are also Thai-specific
+      // words: neither is a borrowed English term, so an English fallback cannot match them.
+      check('the Thai live hint is Thai', thHints.includes('การเริ่มไลฟ์สด') && thHints.includes('พร้อมกันได้'), thHints.slice(0, 140));
+      // The counter wiring: the plural table is the only place the classifier can come from, so a
+      // count label on this page has to carry one -- a numeral glued to a bare noun would be a wiring
+      // failure nothing else can see. Which counts appear depends on the run (a follower count needs
+      // an enabled watch target, a room count needs something live), so the check is only made when a
+      // count label shape is actually on screen, and when it is not, the skip is *named* instead of
+      // silent: a quietly skipped assertion is how a check count changes without anyone noticing
+      // which one left.
+      //
+      // The gate looks for "number, space, Thai letter" (the shape a classifier has), not for any
+      // digit: a date, a uid or a Buddhist-calendar year would otherwise arm a check that can only
+      // fail. A trailing combining mark is stripped first, because a tone mark sitting between the
+      // digit and the word is exactly how a glued label looks.
+      const thBody = (await page.locator('main').innerText()).replace(/[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]/g, '');
+      const thCountish = (thBody.match(/\d+ [\u0e00-\u0e7f]/g) || []).slice(0, 3);
+      const thEnglishish = (thBody.match(/\b\d+\s+(items?|days?|members?|matches|calls|alerts|followers?|cookies?|groups?|people)\b/g) || []).slice(0, 3);
+      const thArmed = thCountish.length > 0 || thEnglishish.length > 0;
+      check(
+        thArmed ? 'Thai count labels carry a classifier after the numeral' : 'Thai count labels: nothing to assert this run (no count label on the live page)',
+        !thArmed || (thCountish.length > 0 && thEnglishish.length === 0),
+        thArmed ? thCountish.join(' | ') + (thEnglishish.length ? ' | ENGLISH: ' + thEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+      );
+      // Negative control: the predicate above has to be able to FAIL, or it is an assertion that only
+      // ever prints [ok]. Both cases below are pure string work on the same regexes, so they run even
+      // when the page had no count label to arm the real check.
+      const thaiCountRe = /\d+ [\u0e00-\u0e7f]/;
+      const thaiGluedRe = /\d+[\u0e00-\u0e7f]/;
+      check(
+        'the Thai classifier predicate can fail (negative control)',
+        thaiCountRe.test('12 รายการ') && !thaiCountRe.test('12รายการ') && thaiGluedRe.test('12รายการ'),
+        'accepts "12 รายการ"=' + thaiCountRe.test('12 รายการ') + ', rejects glued "12รายการ"=' + !thaiCountRe.test('12รายการ'),
+      );
+    } else {
+      check('the Thai live tab was found', false, 'no tab button matched "ไลฟ์"');
     }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);

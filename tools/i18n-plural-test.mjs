@@ -231,6 +231,92 @@ t('fil-PH is NOT in that list, and the measured rule is by last digit rather tha
 
 process.stdout.write('\nplural: real-language spot checks\n');
 
+t('th-TH is NOT in the non-inflecting list either: the rule is "numeral + classifier", and the measurement cannot see it', () => {
+  // Added with the Thai locale, which lands in the same third tier as Filipino for a different
+  // reason. The measurement first, because the measurement is what makes the naive reading wrong:
+  //
+  //   `Intl.PluralRules('th').resolvedOptions().pluralCategories` is `["other"]` -- one category.
+  //   Measured over 0..2000, `select(n)` is `other` for all 2001 integers, with no residue class and
+  //   no threshold anywhere, and decimals (1.5 / 2.5 / 100.5) select `other` too. So the category
+  //   count says "this locale is like zh / ja / ko / id" and the two-tier reading of DESIGN.md
+  //   section 11 would put Thai in the "prepend the number to a bare noun" tier and close the case.
+  //
+  //   What that reading cannot see is that the bare noun is not a Thai count label. Thai counts with
+  //   a numeral plus a **classifier** (`3 รายการ`, `2 วัน`, `5 ครั้ง`, `10 คน`, `4 กลุ่ม`), and the
+  //   classifier is a word that belongs *inside* the phrase -- a value with no `{n}` is prepended to
+  //   by countLabel() and cannot carry one. That is a need no plural-form *count* can express, in
+  //   either direction, exactly as the Filipino linker was.
+  //
+  //   The first probe of this locale printed the same two-category-style summary ("single category,
+  //   all integers `other`") and it would have been easy to stop there; the numbers are written out
+  //   below so the next reader does not have to re-derive them, and the classifier wording is pinned
+  //   so nobody can "simplify" the table into the bare-numeral tier without deleting a form.
+  const th = new Intl.PluralRules('th');
+  assert.equal(th.resolvedOptions().pluralCategories.join(), 'other', 'th reports more than one category now');
+  const nonOther = [];
+  for (let n = 0; n <= 2000; n++) if (th.select(n) !== 'other') nonOther.push(`${n}->${th.select(n)}`);
+  assert.equal(nonOther.length, 0, 'th no longer selects `other` for every integer: ' + nonOther.slice(0, 6).join(', '));
+  for (const n of [1.5, 2.5, 0.5, 100.5]) assert.equal(th.select(n), 'other', `th decimal ${n}`);
+  assert.equal(pluralCategory('th-TH', Number.NaN), 'other', 'other is still the non-number fallback');
+  // A single category means exactly one form per key: a `_one` companion could never be selected, and
+  // the completeness check above requires precisely the categories the language uses.
+  const table = PLURALS['th-TH'];
+  assert.ok(table, 'th-TH has no form table');
+  for (const key of Object.keys(table)) {
+    assert.ok(key.endsWith('_other'), `${key}: th has one category, so no other suffix belongs here`);
+  }
+  // Every count key is covered, and every form puts the numeral inside the phrase - that is the whole
+  // point of the table, so a base value alone must NOT be what a count label renders.
+  const COUNT_KEYS_LOCAL = [
+    'items', 'groupDays', 'groupPeopleUnit', 'vdbGroups', 'outsideRange', 'groupMembers',
+    'groupPeopleCount', 'costCalls', 'matches', 'alerts', 'cookieCount', 'cookieCountWithSession',
+    'followersCount',
+  ];
+  for (const base of COUNT_KEYS_LOCAL) {
+    const form = table[`${base}_other`];
+    assert.ok(typeof form === 'string' && form.includes('{n}'), `${base}: the numeral belongs inside the phrase`);
+    assert.equal(countLabel(pickPlural(table, base, 'th-TH', 3), 3).startsWith('3 '), true, base);
+  }
+  // The classifier is the reason the table exists, so the classifier words are pinned by name.
+  assert.equal(countLabel(pickPlural(table, 'items', 'th-TH', 12), 12), '12 รายการ');
+  assert.equal(countLabel(pickPlural(table, 'groupDays', 'th-TH', 2), 2), '2 วัน');
+  assert.equal(countLabel(pickPlural(table, 'groupPeopleUnit', 'th-TH', 4), 4), '4 คน');
+  assert.equal(countLabel(pickPlural(table, 'costCalls', 'th-TH', 5), 5), '5 ครั้ง');
+  assert.equal(countLabel(pickPlural(table, 'alerts', 'th-TH', 1), 1), '1 การแจ้งเตือน');
+  assert.equal(countLabel(pickPlural(table, 'groupMembers', 'th-TH', 21), 21), '21 สมาชิก');
+  assert.equal(countLabel(pickPlural(table, 'followersCount', 'th-TH', 1), 1), '1 ผู้ติดตาม');
+  // The same number has to be right for a `one`-ish and an `other`-ish count alike (there is only one
+  // category here, but a count label is read at 1 and at 21 both).
+  assert.equal(countLabel(pickPlural(table, 'items', 'th-TH', 1), 1), '1 รายการ');
+  // Every form is Thai script, and none of them is a bare numeral left behind.
+  for (const [key, form] of Object.entries(table)) {
+    assert.ok(/[\u0e00-\u0e7f]/.test(form), `${key}: the value must contain Thai characters: ${form}`);
+    assert.ok(form.replace('{n}', '').trim().length > 0, `${key}: a number with no noun`);
+  }
+});
+
+t('Thai count labels carry their classifier - the failure mode that must be visible to this test', () => {
+  // A negative control, so this file cannot pass on a broken table the way the class of bug it exists
+  // for would: `12 รายการ` and `12รายการ` differ by one space, and the classifier is what makes the
+  // label a phrase. The predicate below is what tools/traverse-ui.cjs asserts against the rendered
+  // page (see its Thai block); it is repeated here over table values so an offline run catches a
+  // regression before a browser has to.
+  //
+  // Combining marks are stripped before the test: a tone mark sits between a digit and the classifier
+  // in a glued string, and without this the negative control would pass for the wrong reason.
+  const marks = /[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]/g;
+  const classifierRe = /^\d+ [\u0e00-\u0e7f]/;
+  const good = '12 รายการ';
+  const glued = '12\u0e48รายการ'; // the same label with the space removed (and a tone mark)
+  assert.ok(classifierRe.test(good), `the classifier predicate rejects the correct wording: ${good}`);
+  assert.equal(classifierRe.test(glued.replace(marks, '')), false, `the classifier predicate accepts a glued label: ${glued}`);
+  // And the real table values satisfy it.
+  for (const [key, form] of Object.entries(PLURALS['th-TH'])) {
+    const rendered = countLabel(form, 12);
+    assert.ok(classifierRe.test(rendered), `${key}: the rendered label is not "number space Thai": ${rendered}`);
+  }
+});
+
 t('Russian 1 / 2 / 5 / 21 produce four distinct (and correct) forms', () => {
   const table = PLURALS['ru-RU'];
   const at = (n) => countLabel(pickPlural(table, 'items', 'ru-RU', n), n);

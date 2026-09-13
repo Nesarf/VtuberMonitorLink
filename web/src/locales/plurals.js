@@ -583,4 +583,48 @@ export const PLURALS = {
     followersCount_one: '{n} tagasubaybay',
     followersCount_other: '{n} tagasubaybay',
   },
+  // Thai, added one release after Filipino. It lands in the same tier as Filipino for a different
+  // reason, and the category count cannot express either reason -- which is why the measurement is
+  // written out here in full rather than summarised as "Thai does not inflect".
+  //
+  // `Intl.PluralRules('th').resolvedOptions().pluralCategories` is `["other"]`: a single category.
+  // Measured over 0..2000, `select(n)` returns `other` for all 2001 integers (no residue class, no
+  // last-digit rule, no threshold), and decimals (`1.5`, `2.5`, `100.5`) select `other` as well.
+  // So the two-tier reading of docs/DESIGN.md section 11 says this locale needs no table at all,
+  // in the same way zh / ja / ko / id need none: the number is prepended and nothing changes.
+  //
+  // What that reading misses is the **classifier**. Thai does not put a numeral straight in front of
+  // a noun; a count is a numeral plus a classifier word that names the kind of thing counted
+  // (`3 รายการ` three items, `2 วัน` two days, `5 ครั้ง` five times, `10 คน` ten people, `4 กลุ่ม`
+  // four groups). A value without `{n}` is prepended to by countLabel() and cannot contain that
+  // classifier, so the label would render as a numeral glued to a bare noun -- the shape a Thai
+  // reader meets in a database dump, not in an interface. The classifier has to live *inside* the
+  // phrase, so the wording lives here and the base values in overlays.js stay the standalone noun
+  // that the panel title uses.
+  //
+  // One category means one form per key, so `_one` companions (the Filipino shape) do not exist
+  // here: `Intl.PluralRules('th')` can never select `one`, and the completeness check in
+  // tools/i18n-plural-test.mjs requires exactly the categories the language uses. Where the noun
+  // already carries the classifier notion (`alerts` -> การแจ้งเตือน, `cookieCount` -> คุกกี้) the only
+  // thing the form adds over the base value is the numeral, written inside the phrase on purpose:
+  // that is what keeps the count label a phrased value which a later edit cannot quietly reduce to a
+  // bare numeral. `followersCount` keeps `{n}` for the same reason every other table does -- its zh
+  // source embeds the numeral and the plural test requires it.
+  'th-TH': {
+    items_other: '{n} รายการ',
+    groupDays_other: '{n} วัน',
+    groupPeopleUnit_other: '{n} คน',
+    vdbGroups_other: '{n} กลุ่ม',
+    // The one count key whose wording is a sentence rather than a noun phrase: the numeral goes in
+    // front of the whole statement, as it does in Arabic's and Filipino's forms of this key.
+    outsideRange_other: '{n} รายการที่ถูกตัดออกตามเงื่อนไขเวลา',
+    groupMembers_other: '{n} สมาชิก',
+    groupPeopleCount_other: '{n} คนที่ติดตาม',
+    costCalls_other: '{n} ครั้ง',
+    matches_other: '{n} รายการ',
+    alerts_other: '{n} การแจ้งเตือน',
+    cookieCount_other: '{n} คุกกี้',
+    cookieCountWithSession_other: '{n} คุกกี้ (รวม SESSDATA)',
+    followersCount_other: '{n} ผู้ติดตาม',
+  },
 };

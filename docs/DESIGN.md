@@ -290,6 +290,13 @@ A few rules taught by real incidents (details in `docs/BUGS.md` 41-52, 54, 64-66
   A locale with one or two plural categories can still need a table, and a form count can overstate the cost
   (28 forms predicted for an inflection that does not exist) exactly as it understates it; `tools/i18n-plural-test.mjs`
   asserts the measured last-digit rule so this locale cannot be "simplified" back into the second tier.
+  Thai (added one release later) is the same third tier reached from the other end: `Intl.PluralRules('th')`
+  really does have a **single** category (`other` for all of 0..2000, decimals included), so the form count says
+  "no table at all", while Thai counts with a numeral plus a **classifier** (`3 รายการ`, `2 วัน`, `5 ครั้ง`) and a
+  numeral in front of a bare noun reads like a database field. The one form each key gets therefore carries the
+  classifier inside the phrase, and the plural test pins the measurement so nobody can collapse it back into the
+  bare-numeral tier. The general lesson: the decision is made by **measuring the rule and reading the language**,
+  not by counting categories - a count can be right and still answer the wrong question.
   These two key classes are looked up dynamically and never appear in literal calls, so the counting rules
   for coverage / proofread are unaffected (`usedKeys()` and `locale-coverage` also recognise `tn(...)`).
 - **A one-locale run must not edit other locales' machine layers**: `pruneMachine()` deletes entries the hand

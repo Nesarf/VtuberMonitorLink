@@ -485,3 +485,84 @@ the project's own `server/src/search.js` semantics adapted to this shape), the *
 language, not a library: the query *is* the implementation), and then whichever of C++, Go or Python
 wants a turn. When two of them agree on a corpus with no floats and a total ordering, the agreement
 means something.
+
+## 10. Next capability, specified before it exists: `fetch.plan`
+
+The fourth capability, and the first one that is about *when* rather than *what*. It is written down
+before an implementation exists for the same reason section 9 was: a scheduler is a pile of rules that
+each look obvious alone and produce different answers in different languages.
+
+Only the **planning** is in this capability - deciding which sources to fetch now, on which egress, in
+what order, and what to defer. The fetching itself stays in the application: a capability that performs
+network I/O could not be diffed across implementations on a machine with no network, and the part worth
+comparing is the arithmetic.
+
+Input:
+
+```json
+{
+  "now": 1735689600000,
+  "sources": [
+    {"id": "s1", "egress": "direct", "due": true,  "minIntervalMs": 600000, "lastRunAt": 1735680000000},
+    {"id": "s2", "egress": "direct", "due": false, "minIntervalMs": 600000, "lastRunAt": null},
+    {"id": "s3", "egress": "tor",    "due": true,  "minIntervalMs": 0,      "lastRunAt": null}
+  ],
+  "egress": {
+    "direct": {"maxConcurrent": 4},
+    "tor": {"maxConcurrent": 1}
+  },
+  "budget": {"maxRequests": 20, "maxPerEgress": {"tor": 3}}
+}
+```
+
+- `now` and `sources` are required: `now` is epoch milliseconds and comes from the caller, never from
+  the worker's own clock. Every source needs a non-empty string `id`, and `id`s are what the output
+  refers to sources by. `due`, `minIntervalMs` (default `0`) and `lastRunAt` (default `null`, meaning
+  never run) are optional; a `lastRunAt` that is present must be a number or `null`. An `egress` entry
+  may carry `maxConcurrent` (default `1`). Anything outside those shapes is `bad-input`.
+
+Output:
+
+```json
+{
+  "batches": [{"egress": "direct", "sources": ["s2", "s1"]}, {"egress": "tor", "sources": ["s3"]}],
+  "deferred": [{"id": "s9", "reason": "budget"}],
+  "skipped": [{"id": "s7", "reason": "no-egress"}],
+  "counts": {"planned": 3, "deferred": 1, "skipped": 1}
+}
+```
+
+Rules, in the order they are applied:
+
+1. **Egress must exist.** A source whose `egress` is not a key of the input's `egress` object is
+   **skipped** with reason `no-egress`, whatever the clock says: that is a broken configuration the
+   user has to fix, not a source that is merely early. Skipped means "this source cannot be planned at
+   all"; deferred means "not this round". The distinction is what the application shows a user, so it
+   is part of the contract.
+2. **Due.** A source is due when `due` is `true`, or when `lastRunAt` is `null` (never run), or when
+   `now - lastRunAt >= minIntervalMs`. A missing `minIntervalMs` is `0`. A source that is not due is
+   **deferred** with reason `interval`. `lastRunAt: 0` is a timestamp, not "never": the epoch is a
+   legitimate value, and reading it as absent is the mistake this rule exists to prevent.
+3. **Order.** Within one egress, due sources are ordered by `lastRunAt` ascending with `null` first
+   (the ones that have waited longest go first; a source that has never run waits longest of all), then
+   by `id` ascending compared as UTF-8 bytes. An implementation that leaks a hash-map order into the
+   answer fails the harness's ordering check, and one that sorts by locale-aware collation fails the
+   corpus: `z` sorts before `é` in UTF-8 bytes and after it in most collations.
+4. **Batches.** One batch per egress, holding at most that egress's `maxConcurrent` sources; a missing
+   `maxConcurrent` is `1`, and anything below `1` is `bad-input`. Egresses are emitted in ascending
+   UTF-8 byte order of their names. An egress with no due sources gets no batch (not an empty one).
+5. **Budget.** `budget.maxRequests` caps the total number of planned sources; `budget.maxPerEgress`
+   caps per egress and is applied first. A due source that does not fit is **deferred** with reason
+   `budget`. A missing budget field means no limit; a budget of `0` means nothing is planned. Because
+   egresses are visited in name order, a shared budget is spent in that order - which is why that order
+   is part of the contract and not an implementation detail.
+6. **Counts and list order.** `counts.planned` is the number of sources across all batches, and
+   `counts.deferred` and `counts.skipped` are the lengths of those lists; all three are integers. Both
+   lists are emitted sorted by `id` ascending as UTF-8 bytes, so that two runs in two languages can be
+   compared as reports and not only as sets. Source ids are assumed unique: duplicates are neither
+   merged nor rejected.
+
+Determinism: no clock is read (`now` is an input), no randomness, no floats, and every list has a
+specified order. That is what makes a scheduler comparable across languages at all - and Go is the
+first implementation planned for it, because concurrency and scheduling are what Go is for in this
+project, with the JavaScript reference alongside it so the corpus has something to diff against.

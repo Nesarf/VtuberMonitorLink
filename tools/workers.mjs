@@ -42,10 +42,14 @@ const FIELD_ORDER = {
   'text.extract': ['title', 'text', 'links', 'images'],
   'text.fingerprint': ['simhash', 'tokens', 'shingles'],
   'search.query': ['hits', 'total', 'facets', 'excludedByTime'],
+  'fetch.plan': ['batches', 'deferred', 'skipped', 'counts'],
 };
 const NESTED_ORDER = {
   links: ['href', 'absolute', 'text'],
   hits: ['id', 'score'],
+  batches: ['egress', 'sources'],
+  deferred: ['id', 'reason'],
+  skipped: ['id', 'reason'],
 };
 /** Facet objects are specified to be emitted with their keys sorted by UTF-8 bytes. */
 const SORTED_KEY_OBJECTS = ['facets.tags', 'facets.months'];
@@ -388,15 +392,18 @@ for (const cap of capabilities) {
   // be folded into every case's verdict: with one worker timing out, "the other four disagree on
   // every case" is a lie that buries the four real answers. (It happened: an unflushed C++ worker
   // turned 58 clean cases into 58 apparent divergences.)
+  // "Usable" means the worker said something for at least one case - an output OR an error. An error is
+  // a legitimate answer (`bad-input` is part of the contract for `fetch.plan`), so a worker that reports
+  // errors is not a broken worker; only silence is.
   const usable = active.filter((id) => {
     const cells = [...perWorker.get(id).perCase.values()];
-    return cells.some((c) => c.output !== undefined);
+    return cells.some((c) => c.output !== undefined || c.error !== undefined);
   });
   const unusable = active.filter((id) => !usable.includes(id));
   for (const id of unusable) {
     const w = perWorker.get(id);
     const cells = [...w.perCase.values()];
-    const answered = cells.filter((c) => c.output !== undefined).length;
+    const answered = cells.filter((c) => c.output !== undefined || c.error !== undefined).length;
     failures++;
     console.log(`   UNUSABLE   : ${id} answered ${answered}/${cap.cases.length} cases${w.stderrTail ? ' - ' + w.stderrTail.slice(0, 160) : ''}`);
   }
@@ -427,12 +434,14 @@ for (const cap of capabilities) {
   }
   // Why a worker answered nothing: without this line a buffering bug and a crash look identical,
   // and "MISSING" sends the reader to the wrong file. The C++ worker's unflushed stdout was exactly
-  // that trap (see docs/WORKERS.md section 1).
+  // that trap (see docs/WORKERS.md section 1). Only silence counts here - an error answer is compared
+  // like any other answer, and calling it "no usable answer" would hide a corpus of error cases behind
+  // a warning that means something else.
   for (const id of active) {
     const w = perWorker.get(id);
-    const broke = [...w.perCase.values()].filter((c) => c.missing || c.error).length;
-    if (!broke || unusable.includes(id)) continue;
-    console.log(`   note       : ${id} produced no usable answer for ${broke}/${cap.cases.length} case(s)${w.stderrTail ? '; worker stderr tail: ' + w.stderrTail.slice(0, 220) : ' (and said nothing on stderr)'}`);
+    const silent = [...w.perCase.values()].filter((c) => c.missing).length;
+    if (!silent || unusable.includes(id)) continue;
+    console.log(`   note       : ${id} answered nothing for ${silent}/${cap.cases.length} case(s)${w.stderrTail ? '; worker stderr tail: ' + w.stderrTail.slice(0, 220) : ' (and said nothing on stderr)'}`);
   }
   for (const d of disagreements) {
     failures++;

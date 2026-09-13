@@ -1,0 +1,391 @@
+{
+ "capability": "fetch.plan",
+ "generatedBy": "js-fetch (workers/js/vmlfetch.js)",
+ "generatedAt": "2026-09-13T20:48:11.035Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "empty-sources": {
+   "batches": [],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 0,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "never-run-goes-first": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "fresh",
+      "recent"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 2,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "lastRunAt-zero-is-a-timestamp": {
+   "batches": [],
+   "deferred": [
+    {
+     "id": "a",
+     "reason": "interval"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 0,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "lastRunAt-zero-is-due-after-the-interval": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "a"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "unknown-egress-is-skipped-even-when-not-due": {
+   "batches": [],
+   "deferred": [],
+   "skipped": [
+    {
+     "id": "a",
+     "reason": "no-egress"
+    }
+   ],
+   "counts": {
+    "planned": 0,
+    "deferred": 0,
+    "skipped": 1
+   }
+  },
+  "due-true-overrides-the-interval": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "a"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "future-lastRunAt-is-not-due": {
+   "batches": [],
+   "deferred": [
+    {
+     "id": "a",
+     "reason": "interval"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 0,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "missing-min-interval-is-immediately-due": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "a"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "missing-max-concurrent-is-one-lane": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "a"
+     ]
+    }
+   ],
+   "deferred": [
+    {
+     "id": "b",
+     "reason": "budget"
+    },
+    {
+     "id": "c",
+     "reason": "budget"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 2,
+    "skipped": 0
+   }
+  },
+  "single-lane-egress-keeps-one": {
+   "batches": [
+    {
+     "egress": "tor",
+     "sources": [
+      "t1"
+     ]
+    }
+   ],
+   "deferred": [
+    {
+     "id": "t2",
+     "reason": "budget"
+    },
+    {
+     "id": "t3",
+     "reason": "budget"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 2,
+    "skipped": 0
+   }
+  },
+  "batches-in-byte-order-of-egress-name": {
+   "batches": [
+    {
+     "egress": "zebra",
+     "sources": [
+      "b"
+     ]
+    },
+    {
+     "egress": "éclair",
+     "sources": [
+      "a"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 2,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "ids-of-equal-age-in-byte-order-not-utf16": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "�",
+      "😀"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 2,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "null-ties-fall-back-to-id-order": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "a",
+      "b"
+     ]
+    }
+   ],
+   "deferred": [],
+   "skipped": [],
+   "counts": {
+    "planned": 2,
+    "deferred": 0,
+    "skipped": 0
+   }
+  },
+  "shared-budget-is-spent-in-egress-name-order": {
+   "batches": [
+    {
+     "egress": "alpha",
+     "sources": [
+      "b"
+     ]
+    }
+   ],
+   "deferred": [
+    {
+     "id": "a",
+     "reason": "budget"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 1,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "max-per-egress-is-applied-before-max-concurrent": {
+   "batches": [
+    {
+     "egress": "tor",
+     "sources": [
+      "s1",
+      "s2"
+     ]
+    }
+   ],
+   "deferred": [
+    {
+     "id": "s3",
+     "reason": "budget"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 2,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "budget-zero-plans-nothing": {
+   "batches": [],
+   "deferred": [
+    {
+     "id": "a",
+     "reason": "budget"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 0,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "no-empty-batches": {
+   "batches": [],
+   "deferred": [
+    {
+     "id": "a",
+     "reason": "interval"
+    }
+   ],
+   "skipped": [],
+   "counts": {
+    "planned": 0,
+    "deferred": 1,
+    "skipped": 0
+   }
+  },
+  "skipped-deferred-and-planned-together": {
+   "batches": [
+    {
+     "egress": "direct",
+     "sources": [
+      "planned"
+     ]
+    }
+   ],
+   "deferred": [
+    {
+     "id": "too-soon",
+     "reason": "interval"
+    }
+   ],
+   "skipped": [
+    {
+     "id": "broken",
+     "reason": "no-egress"
+    }
+   ],
+   "counts": {
+    "planned": 1,
+    "deferred": 1,
+    "skipped": 1
+   }
+  },
+  "lists-sorted-by-id": {
+   "batches": [],
+   "deferred": [
+    {
+     "id": "b",
+     "reason": "interval"
+    },
+    {
+     "id": "y",
+     "reason": "interval"
+    }
+   ],
+   "skipped": [
+    {
+     "id": "a",
+     "reason": "no-egress"
+    },
+    {
+     "id": "z",
+     "reason": "no-egress"
+    }
+   ],
+   "counts": {
+    "planned": 0,
+    "deferred": 2,
+    "skipped": 2
+   }
+  },
+  "bad-input-no-sources": {
+   "__error": "bad-input"
+  },
+  "bad-input-missing-now": {
+   "__error": "bad-input"
+  },
+  "bad-input-source-without-id": {
+   "__error": "bad-input"
+  },
+  "bad-input-max-concurrent-zero": {
+   "__error": "bad-input"
+  },
+  "bad-input-negative-budget": {
+   "__error": "bad-input"
+  },
+  "bad-input-negative-interval": {
+   "__error": "bad-input"
+  }
+ }
+}

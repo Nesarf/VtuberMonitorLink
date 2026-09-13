@@ -1,0 +1,242 @@
+{
+  "capability": "fetch.plan",
+  "note": "Hand-written inputs for docs/WORKERS.md section 10, written before any implementation of it existed. Only the planning is in this capability - the fetching stays in the application, because a capability that performs network I/O could not be diffed across languages on a machine with no network. There are no floats, no clock reads, and every list has a specified order, so two languages either agree exactly or one of them is wrong. The traps pinned here are the ones each language gets wrong in its own way: `lastRunAt: 0` read as 'never run' by a falsy test, a hash map dictating batch order, a locale collation deciding between ids, and a shared budget spent in dictionary order. Error cases are included: only the error code is comparable, and `bad-input` is a contract answer rather than a language message.",
+  "cases": [
+    {
+      "id": "empty-sources",
+      "note": "an empty plan is a valid plan",
+      "input": { "now": 0, "sources": [], "egress": { "direct": {} } }
+    },
+    {
+      "id": "never-run-goes-first",
+      "note": "a source that has never run has waited longest, so it leads the batch even when its interval is longer",
+      "input": {
+        "now": 1000000,
+        "sources": [
+          { "id": "recent", "egress": "direct", "lastRunAt": 999000, "minIntervalMs": 0 },
+          { "id": "fresh", "egress": "direct", "lastRunAt": null, "minIntervalMs": 600000 }
+        ],
+        "egress": { "direct": { "maxConcurrent": 4 } }
+      }
+    },
+    {
+      "id": "lastRunAt-zero-is-a-timestamp",
+      "note": "the epoch is a value: a falsy test would treat it as never run and schedule it",
+      "input": {
+        "now": 500,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 0, "minIntervalMs": 1000 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "lastRunAt-zero-is-due-after-the-interval",
+      "note": "the same source, one millisecond later: the boundary is inclusive",
+      "input": {
+        "now": 1000,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 0, "minIntervalMs": 1000 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "unknown-egress-is-skipped-even-when-not-due",
+      "note": "rule order matters: a broken egress name is a configuration to fix, not a source that is early",
+      "input": {
+        "now": 0,
+        "sources": [{ "id": "a", "egress": "nope", "due": false, "lastRunAt": 5000 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "due-true-overrides-the-interval",
+      "note": "an explicit due is how the application asks for a manual refresh",
+      "input": {
+        "now": 1000,
+        "sources": [{ "id": "a", "egress": "direct", "due": true, "lastRunAt": 999, "minIntervalMs": 600000 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "future-lastRunAt-is-not-due",
+      "note": "clock skew in the other direction: a timestamp in the future waits",
+      "input": {
+        "now": 1000,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 5000, "minIntervalMs": 0 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "missing-min-interval-is-immediately-due",
+      "note": "the default interval is zero, so a source with no interval is due whenever it has run",
+      "input": {
+        "now": 1000,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 999 }],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "missing-max-concurrent-is-one-lane",
+      "note": "one at a time per egress unless the configuration says otherwise; the rest is a budget deferral",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "a", "egress": "direct", "lastRunAt": null },
+          { "id": "b", "egress": "direct", "lastRunAt": null },
+          { "id": "c", "egress": "direct", "lastRunAt": null }
+        ],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "single-lane-egress-keeps-one",
+      "note": "a Tor lane is the reason egresses have a concurrency of their own",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "t1", "egress": "tor", "lastRunAt": null },
+          { "id": "t2", "egress": "tor", "lastRunAt": null },
+          { "id": "t3", "egress": "tor", "lastRunAt": null }
+        ],
+        "egress": { "tor": { "maxConcurrent": 1 } }
+      }
+    },
+    {
+      "id": "batches-in-byte-order-of-egress-name",
+      "note": "z before the e-acute: UTF-8 byte order, not a locale collation",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "a", "egress": "éclair", "lastRunAt": null },
+          { "id": "b", "egress": "zebra", "lastRunAt": null }
+        ],
+        "egress": { "éclair": {}, "zebra": {} }
+      }
+    },
+    {
+      "id": "ids-of-equal-age-in-byte-order-not-utf16",
+      "note": "U+FFFD is three bytes and sorts before a four-byte astral character in UTF-8, but after its leading surrogate in UTF-16 - the order a JVM or .NET string sort gives by default",
+      "input": {
+        "now": 10,
+        "sources": [
+          { "id": "😀", "egress": "direct", "lastRunAt": 5 },
+          { "id": "�", "egress": "direct", "lastRunAt": 5 }
+        ],
+        "egress": { "direct": { "maxConcurrent": 2 } }
+      }
+    },
+    {
+      "id": "null-ties-fall-back-to-id-order",
+      "note": "two never-run sources in one egress: the id decides, by bytes",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "b", "egress": "direct", "lastRunAt": null },
+          { "id": "a", "egress": "direct", "lastRunAt": null }
+        ],
+        "egress": { "direct": { "maxConcurrent": 2 } }
+      }
+    },
+    {
+      "id": "shared-budget-is-spent-in-egress-name-order",
+      "note": "one request to spend and two egresses: alpha is visited first, and bravo's source is deferred",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "a", "egress": "bravo", "lastRunAt": null },
+          { "id": "b", "egress": "alpha", "lastRunAt": null }
+        ],
+        "egress": { "alpha": {}, "bravo": {} },
+        "budget": { "maxRequests": 1 }
+      }
+    },
+    {
+      "id": "max-per-egress-is-applied-before-max-concurrent",
+      "note": "a per-egress cap below the concurrency limit is what binds, and the source that does not fit is deferred rather than dropped",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "s1", "egress": "tor", "lastRunAt": null },
+          { "id": "s2", "egress": "tor", "lastRunAt": null },
+          { "id": "s3", "egress": "tor", "lastRunAt": null }
+        ],
+        "egress": { "tor": { "maxConcurrent": 8 } },
+        "budget": { "maxPerEgress": { "tor": 2 } }
+      }
+    },
+    {
+      "id": "budget-zero-plans-nothing",
+      "note": "zero is a limit, not a missing value",
+      "input": {
+        "now": 0,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": null }],
+        "egress": { "direct": {} },
+        "budget": { "maxRequests": 0, "maxPerEgress": { "direct": 0 } }
+      }
+    },
+    {
+      "id": "no-empty-batches",
+      "note": "an egress with nothing due contributes no batch at all",
+      "input": {
+        "now": 1000,
+        "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 900, "minIntervalMs": 60000 }],
+        "egress": { "direct": {}, "tor": {} }
+      }
+    },
+    {
+      "id": "skipped-deferred-and-planned-together",
+      "note": "the three outcomes in one answer, with counts that must add up: one planned, one deferred by its interval, one skipped for a missing egress",
+      "input": {
+        "now": 100000,
+        "sources": [
+          { "id": "planned", "egress": "direct", "lastRunAt": null },
+          { "id": "too-soon", "egress": "direct", "lastRunAt": 99000, "minIntervalMs": 60000 },
+          { "id": "broken", "egress": "ghost", "lastRunAt": null }
+        ],
+        "egress": { "direct": { "maxConcurrent": 4 } }
+      }
+    },
+    {
+      "id": "lists-sorted-by-id",
+      "note": "both report lists are sorted by id as bytes, so a plan reads the same everywhere",
+      "input": {
+        "now": 0,
+        "sources": [
+          { "id": "z", "egress": "gone", "lastRunAt": null },
+          { "id": "a", "egress": "gone", "lastRunAt": null },
+          { "id": "y", "egress": "direct", "lastRunAt": 10, "minIntervalMs": 60000 },
+          { "id": "b", "egress": "direct", "lastRunAt": 10, "minIntervalMs": 60000 }
+        ],
+        "egress": { "direct": {} }
+      }
+    },
+    {
+      "id": "bad-input-no-sources",
+      "note": "an error is an answer: only its code is compared across languages",
+      "input": { "now": 0, "egress": {} }
+    },
+    {
+      "id": "bad-input-missing-now",
+      "note": "the worker never reads its own clock, so a missing now is not a default",
+      "input": { "sources": [], "egress": {} }
+    },
+    {
+      "id": "bad-input-source-without-id",
+      "note": "the output refers to sources by id, so a source without one cannot be planned",
+      "input": { "now": 0, "sources": [{ "egress": "direct" }], "egress": { "direct": {} } }
+    },
+    {
+      "id": "bad-input-max-concurrent-zero",
+      "note": "an egress that can never run is a configuration error, not a silent deferral",
+      "input": { "now": 0, "sources": [{ "id": "a", "egress": "direct", "lastRunAt": null }], "egress": { "direct": { "maxConcurrent": 0 } } }
+    },
+    {
+      "id": "bad-input-negative-budget",
+      "note": "a negative limit is not a limit",
+      "input": { "now": 0, "sources": [], "egress": {}, "budget": { "maxRequests": -1 } }
+    },
+    {
+      "id": "bad-input-negative-interval",
+      "note": "a negative interval would make every source due before it ran",
+      "input": { "now": 0, "sources": [{ "id": "a", "egress": "direct", "lastRunAt": 0, "minIntervalMs": -1 }], "egress": { "direct": {} } }
+    }
+  ]
+}

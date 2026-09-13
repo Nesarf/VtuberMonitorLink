@@ -39,6 +39,19 @@
       "notes": "the reference implementation of search.query (docs/WORKERS.md section 9): integers only, a total ordering, and the same tokenizer as text.fingerprint. No build step."
     },
     {
+      "id": "js-fetch",
+      "language": "javascript",
+      "capabilities": [
+        "fetch.plan"
+      ],
+      "artifact": "workers/js/vmlfetch.js",
+      "launch": [
+        "node",
+        "workers/js/vmlfetch.js"
+      ],
+      "notes": "the reference implementation of fetch.plan (docs/WORKERS.md section 10): pure planning, no clock of its own, integers only. No build step."
+    },
+    {
       "id": "java-text",
       "language": "java",
       "capabilities": [

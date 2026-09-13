@@ -1,0 +1,15 @@
+#!/bin/sh
+# Guard: every commit message in this repository is English.
+#
+# The rule, what counts as Chinese, and what stays allowed are in docs/ENGLISH-LOGIC.md and
+# tools/lib/cjk-text.mjs. Enable this hook once per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# Skipping it for a single commit (only when you really mean it): git commit --no-verify
+if ! command -v node >/dev/null 2>&1; then
+  echo "commit-msg: node is not on PATH; the English check was skipped" >&2
+  exit 0
+fi
+
+node "$(git rev-parse --show-toplevel)/tools/commit-msg-check.mjs" --file "$1"

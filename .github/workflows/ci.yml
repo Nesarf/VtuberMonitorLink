@@ -1,8 +1,8 @@
 name: ci
 
 # Fast feedback on every push: does the frontend build, does the source stay
-# free of hard-coded machine paths and secrets, and does the launcher still
-# resolve a layout correctly.
+# free of hard-coded machine paths and secrets, is every commit message English,
+# and does the launcher still resolve a layout correctly.
 #
 # Two jobs on purpose:
 #   * `check` (ubuntu) — the cheap platform-independent things.
@@ -21,7 +21,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # Full history on purpose: the commit-message check reads every commit, and a shallow
+      # clone would only be able to judge the tip.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -36,6 +40,9 @@ jobs:
 
       - name: Check the sources for leaked paths and secrets
         run: npm run sanitize-check
+
+      - name: Check that every commit message is English
+        run: npm run commit-msg
 
       - name: Check syntax of the shipped scripts
         run: |

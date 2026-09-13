@@ -68,26 +68,64 @@ dist\VtuberMonitorLink-1.0.0-win-x64.zip   40 MB
 npm run sanitize-check   # 源码里有没有硬编码路径 / 密钥 / 私人名字
 npm run brand            # VML 命名一致性：对外件用全名、内部标识用 VML
 npm run english          # 英文覆盖率（工程层 / 界面两侧的百分比）
+npm run commit-msg       # 每条提交信息是不是英文（整段历史）
 npm run release          # 构建 + 校对 + 端点遍历 + UI 遍历（需要本机有浏览器）
 ```
 
 `npm run verify:fast` 已经把上面三条里的前两条（`vml-brand`、`english-logic`）连同
 25 个语言的校对一起卡住了，所以「能构建」和「命名/语言/校对没退化」是同一道闸门。
+`npm run commit-msg` 不在 `verify:fast` 里（它要读**整段 git 历史**，浅克隆里只能看到末端），
+所以它由 `ci.yml` 的 `check` job（`fetch-depth: 0`）和本地钩子 `.githooks/commit-msg` 两个地方守。
+
+**提交信息一律英文**（2026-09-14）：规则、判据与允许保留的引用见 `docs/ENGLISH-LOGIC.md` §8。
+本地启用钩子一次：
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+### 提交信息英文化：这次是怎么改的
+
+首次对外发布后，仓库里 57 条提交中有 **14 条正文是中文**（subject 早已是英文，中文只在 body）——
+对外部读者等于读不懂。已用 `git filter-branch --msg-filter` 原地重写为英文，要点：
+
+```powershell
+# 1) 先备份整段历史（仓库外）
+git bundle create <备份路径>.bundle --all
+
+# 2) 只换信息：msg-filter 查表替换，commit-filter 给原本签过名的提交重新签名，
+#    tag-name-filter cat 把两个 tag 指到重写后的提交
+$env:FILTER_BRANCH_SQUELCH_WARNING = '1'
+git filter-branch -f --msg-filter "node <过滤器>" `
+  --commit-filter 'if git cat-file -p "$GIT_COMMIT" | grep -q "^gpgsig"; then git commit-tree -S "$@"; else git commit-tree "$@"; fi' `
+  --tag-name-filter cat -- --branches --tags
+
+# 3) 逐条比对：提交数、tree、作者/日期、父子结构、签名状态都必须不变，只有信息变了
+# 4) 原子推送（带 lease，失败就整体不推）
+git push --atomic --force-with-lease=refs/heads/main:<旧值> `
+  --force-with-lease=refs/tags/v1.0.0:<旧值> --force-with-lease=refs/tags/v1.0.1:<旧值> `
+  origin refs/heads/main refs/heads/main refs/tags/v1.0.0 refs/tags/v1.0.0 refs/tags/v1.0.1 refs/tags/v1.0.1
+```
+
+三个必须知道的坑（都是实测踩出来的，记在 BUGS #72–#74）：
+
+- **`--msg-filter` 重写会丢掉签名**：本机 `%G?` 为 `G` 的提交重写后会变成无签名 ——
+  提交签名必须由 `--commit-filter` 里的 `git commit-tree -S` 补回来，否则「Verified」全掉。
+- **annotated tag 的签名会被重建成无效签名**：`filter-branch` 会重建 tag 对象（信息保留、
+  签名留着但已经对不上）。用 `git tag -f -s -F <信息文件>` 重签，并用 `GIT_COMMITTER_DATE`
+  保持 tagger 时间不变（`git tag -v` 要看到 `Good "git" signature` 才算数）。
+- **GitHub 的 Verified 与「本机 `G`」是两回事**：签名用的 SSH key 没在账号里
+  （Settings → SSH and GPG keys → New SSH signing key）注册时，API 一律回
+  `verified=false, reason=no_user` —— 与本机显示无关，也与这次重写无关。
 
 **关于 git 历史里的本机路径**：工作区里已经没有任何机器专属路径（`tools/verify-release.cjs`
 的规则会在 `npm run release` 时把残留拦下，本文件自己也被拦过一次），但**历史**里仍留着
 早期文档中「cd 到开发目录」这类命令示例 —— 只有盘符与项目名，**不含用户名与凭据**。
 
-不重写历史不影响安全；若你希望连历史也干净，在 push 之前重写即可（尚未 push，不影响任何人）：
-
-```powershell
-# 1) 先备份：把整个 .git 目录复制一份到仓库外
-# 2) 用 git filter-branch --tree-filter，或更省事的 git-filter-repo --replace-text，
-#    把历史里那串开发目录的绝对路径替换成 <clone dir>
-# 3) 重写后确认闸门仍然全过：npm run verify:fast
-```
-
-重写会改变全部提交哈希 —— 因为还没有远程分支，这不会影响任何人。
+这次重写只换了**提交信息**（`--msg-filter`），树的内容一个字节都没动，所以那 4 处示例仍在
+历史里。不重写不影响安全；若要连它们一起清掉，用 `--tree-filter` / `git-filter-repo
+--replace-text` 替换成 `<clone dir>` 再重写一次即可（重写会再次改变全部提交哈希，
+因为已经有 Release 挂在 tag 上，请按上面第 4 步的原子推送方式做）。
 
 `ci.yml` 会在每次 push / PR 上自动跑：构建前端、`sanitize-check`、
 四个工具的语法检查、`launcher --doctor` / `--paths`、启动器脚本的 ASCII 断言。

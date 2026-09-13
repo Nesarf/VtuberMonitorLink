@@ -148,6 +148,16 @@
       "input": { "raw": "{\"summary\": [\"a\", \"b\"], \"tags\": [\"debut\"]}", "vocabulary": ["debut"] }
     },
     {
+      "id": "ascii-folding-only",
+      "note": "matching folds A-Z and nothing else: the Kelvin sign is not the letter k, and the dotted capital I is not the letter i, so neither matches the vocabulary. A language whose lowercase is Unicode-aware would match both and quietly return tags the application never defined - Python folds the Kelvin sign to k, and a locale-aware lower in Java does worse. Neither is hypothetical: they are one call away in the obvious implementation",
+      "input": { "raw": "{\"tags\": [\"\u212a\", \"\u0130\"]}", "vocabulary": ["k", "i"] }
+    },
+    {
+      "id": "not-really-json",
+      "note": "JSON here means RFC 8259, so a bare NaN is not a JSON value: there is no payload, nothing is recovered, and the answer counts as repaired. Python's json.loads accepts NaN by default and so do some Java libraries, which turns a malformed answer into a tag nobody asked for",
+      "input": { "raw": "{\"tags\": [NaN]}", "vocabulary": ["debut"] }
+    },
+    {
       "id": "bad-input-no-raw",
       "note": "an error answer is comparable through its code",
       "input": { "vocabulary": ["debut"] }

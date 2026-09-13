@@ -657,8 +657,10 @@ Rules, in the order they are applied:
    is a character of that string, so the removal has to respect string state; a parser that strips one
    there is corrupting data, and precision matters more than tolerance here.
 3. **Parse.** The slice is parsed as JSON, and JSON here means RFC 8259: a control character inside a
-   string has to be escaped, and an implementation must not reach for a lenient parser that accepts one,
-   because that returns a tag nobody asked for and calls it a success. If parsing fails - and equally
+   string has to be escaped, and a value that is not JSON at all - a bare `NaN`, `Infinity` or
+   `-Infinity`, which several languages' parsers accept by default - is a parse failure rather than a
+   number. An implementation must not reach for a lenient parser, because leniency here returns a tag
+   nobody asked for and calls it a success. If parsing fails - and equally
    when no complete object is found at all - an implementation must **not** attempt partial recovery: the
    answer is `tags: []`, `summary: ""`, both counts zero and `repaired: true`, because an answer that had
    to be recovered from is by definition not the answer that was sent. A parser that half-reads a broken

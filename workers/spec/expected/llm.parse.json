@@ -1,7 +1,7 @@
 {
  "capability": "llm.parse",
  "generatedBy": "js-llm (workers/js/vmlllm.js)",
- "generatedAt": "2026-09-13T21:14:21.086Z",
+ "generatedAt": "2026-09-13T21:31:11.349Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "clean-object-needs-no-repair": {
@@ -427,6 +427,37 @@
    "repaired": false,
    "counts": {
     "tags": 1,
+    "dropped": 0,
+    "truncated": 0
+   }
+  },
+  "ascii-folding-only": {
+   "tags": [],
+   "summary": "",
+   "dropped": [
+    {
+     "value": "İ",
+     "reason": "not-in-vocabulary"
+    },
+    {
+     "value": "K",
+     "reason": "not-in-vocabulary"
+    }
+   ],
+   "repaired": false,
+   "counts": {
+    "tags": 0,
+    "dropped": 2,
+    "truncated": 0
+   }
+  },
+  "not-really-json": {
+   "tags": [],
+   "summary": "",
+   "dropped": [],
+   "repaired": true,
+   "counts": {
+    "tags": 0,
     "dropped": 0,
     "truncated": 0
    }

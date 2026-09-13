@@ -38,7 +38,7 @@ const seeded = (seed) => () => {
 
 process.stdout.write('\nobserve: log ownership and egress\n');
 
-t('agency self-hosted site vs platform: decided by domain', () => {
+t("an agency's own site vs a platform: decided by the domain", () => {
   assert.equal(logOwnerOf({ url: 'https://hololivepro.com/talents/' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://www.anycolor.co.jp/news' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://vspo.jp/' }), 'agency');
@@ -48,13 +48,13 @@ t('agency self-hosted site vs platform: decided by domain', () => {
   assert.equal(urlHost('https://HoloLivePro.com/x'), 'hololivepro.com', 'domains must be lowercased and normalized');
 });
 
-t('observation mode: agency self-hosted -> Tor; platform -> leave it alone (keep the source own setting)', () => {
+t('observation mode: agency sites go through Tor, platforms keep their own egress setting', () => {
   const cfg = { observation: { enabled: true } };
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', id: 'official-cover' }, cfg).mode, 'tor');
   assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', id: 'bili' }, cfg), null, 'a platform source must not have its egress forced');
 });
 
-t('if the source pinned its own egress, respect it (the per-source column)', () => {
+t('a source that pinned its own egress keeps it (the per-source override)', () => {
   const cfg = { observation: { enabled: true } };
   assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', proxy: 'tor' }, cfg).mode, 'tor');
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', proxy: 'direct' }, cfg).mode, 'direct');
@@ -67,7 +67,7 @@ t('observation mode does NOT run sources that need a login, and gives the reason
   // the reason string is diagnostic output (it reaches logs, not the UI), so it is English
   assert.match(r.reason, /login required/);
   assert.equal(isLoginRequired({ login: 'optional' }), false, 'optional does not count: that means it is viewable without logging in');
-  // With observation mode off, login-state sources stay as before (the source own setting decides)
+  // With observation mode off, login-state sources stay as before (the source's own setting decides)
   assert.equal(resolveEgress({ url: 'https://x.com/', login: 'required' }, { observation: { enabled: false } }), null);
 });
 
@@ -84,13 +84,13 @@ t('takes k = ratio x n, never more than the total', () => {
   assert.equal(all.skipped.length, 0);
 });
 
-t('the minimum sample count takes effect (with few objects a round does not pick just 1)', () => {
+t('the minimum sample count is respected (a small set is not cut down to a single pick)', () => {
   const items = Array.from({ length: 4 }, (_, i) => ({ id: 's' + i }));
   const r = pickSample(items, { ratio: 0.2, min: 3, rng: seeded(7) });
   assert.equal(r.k, 3);
 });
 
-t('rotation fairness: whatever has gone unseen longest comes first, everyone is seen over a few rounds', () => {
+t('rotation fairness: whatever has gone unseen longest is picked first, and everyone is seen within a few rounds', () => {
   const items = Array.from({ length: 6 }, (_, i) => ({ id: 's' + i }));
   let history = {};
   const seen = new Set();
@@ -119,7 +119,7 @@ t('the order is shuffled too (a fixed order is itself a fingerprint)', () => {
 
 process.stdout.write('\nobserve: jitter\n');
 
-t('the jitter range lands in [max(base,min), max], and an explicit 0 is 0', () => {
+t('the jitter stays within [max(base,min), max], and an explicit base of 0 stays 0', () => {
   const rng = seeded(5);
   for (let i = 0; i < 50; i++) {
     const g = gapWithJitter(2, [2, 9], rng);
@@ -152,7 +152,7 @@ t('with observation mode off everything stays as before (no sampling, no egress 
   assert.deepEqual(plan.egress, {});
 });
 
-t('with it on: samples a subset, agency sites move to Tor, login-state sources are dropped with an explanation', () => {
+t('with observation mode on: it samples a subset, agency sites move to Tor, and login-gated sources are dropped with a reason', () => {
   const cfg = {
     observation: { enabled: true, sampleRatio: 0.5, minSources: 1, minWatch: 1, torForAgency: true },
   };
@@ -187,7 +187,7 @@ t('with it on: samples a subset, agency sites move to Tor, login-state sources a
   );
 });
 
-t('when Tor is down: skip the sources that need Tor this round, and state that it does not count as a failure', () => {
+t('when Tor is down: the sources that need Tor are skipped this round, and the reason says it is not counted as a failure', () => {
   const cfg = { observation: { enabled: true, sampleRatio: 1, minSources: 1, torForAgency: true } };
   const sources = [
     { id: 'official-hololive', url: 'https://hololivepro.com/talents/' },
@@ -206,7 +206,7 @@ t('when Tor is down: skip the sources that need Tor this round, and state that i
   assert.deepEqual(up.sampling.skippedTor, []);
 });
 
-t('rotation state can be written and read back (the next round prefers what has not been seen)', () => {
+t('rotation state is recorded and read back (the next round prefers what has not been seen yet)', () => {
   const items = Array.from({ length: 4 }, (_, i) => ({ id: 's' + i }));
   const st = recordPicked({ rounds: 0, lastPicked: {} }, ['s0', 's1'], new Date('2026-01-01T00:00:00Z'));
   assert.equal(st.rounds, 1);
@@ -222,7 +222,7 @@ t('every domain in the AGENCY_HOSTS list is recognized (guards against a typo in
   }
 });
 
-t('reading rotation state: an empty state when the file is missing, no throw', () => {
+t('reading rotation state: a missing file yields an empty state instead of throwing', () => {
   const st = loadObservationState({ paths: { logsDir: 'E:\\No\\Such\\Dir\\vml-test' } });
   assert.deepEqual(st, { rounds: 0, lastPicked: {} });
 });

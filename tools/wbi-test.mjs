@@ -70,7 +70,7 @@ t('mixin key = the first 32 characters of the concatenation reordered by the tab
   assert.equal(key[1], raw[47]);
 });
 
-t('a too-short key returns empty (rather than half a heap of garbage)', () => {
+t('a too-short key returns an empty string (rather than a truncated mess)', () => {
   assert.equal(mixinKey('abc', 'def'), '');
 });
 
@@ -151,7 +151,7 @@ t('the key cache TTL is on the order of hours (the key rotates daily, but it nee
   assert.ok(KEY_TTL_MS >= 3600_000 && KEY_TTL_MS <= 24 * 3600_000);
 });
 
-t('state goes back to zero after clearing the cache', () => {
+t('clearing the cache is idempotent (calling it twice must not throw)', () => {
   clearWbiCache();
   assert.doesNotThrow(() => clearWbiCache());
 });

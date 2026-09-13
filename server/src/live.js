@@ -12,7 +12,7 @@
 //   GET https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids?uids[]=672328094
 //     -> code=0, data keyed by uid: { room_id, live_status, title, uname, cover, online }
 //   live_status: 0 = not live, 1 = live, **2 = carousel** (not a real stream, so the two must be shown
-//                apart, otherwise a pile of carousels gets reported as "went live")
+//                separately, otherwise a pile of carousels gets reported as "went live")
 //   direct works; going through the proxy may actually get risk-controlled instead (same as every other bilibili source in this project).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -71,11 +71,11 @@ function saveLiveState(cfg, state) {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, JSON.stringify(state, null, 1), 'utf8');
   } catch {
-    /* an unwritable state file must not affect the run either */
+    /* an unwritable state file must not affect the run */
   }
 }
 
-/** batch-query live status (one call takes at most 100 uids, anything past that is split into batches) */
+/** Batch-query live status. The endpoint accepts up to 100 uids per call; we chunk by 50. */
 export async function fetchLiveStatus(cfg, uids) {
   const list = [...new Set(uids.map((u) => String(u)).filter((u) => /^\d+$/.test(u)))];
   if (!list.length) return { ok: true, rooms: {}, batches: 0 };

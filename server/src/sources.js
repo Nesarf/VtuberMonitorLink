@@ -6,9 +6,9 @@
 //
 // fetch values: rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
 // login values: none | optional | required
-//   none     —— public data
-//   optional —— logging in gives more (e.g. the Twitch following list)
-//   required —— unavailable without login (e.g. the body of an X post / bilibili dynamics with images); the UI must flag it and check before a run
+//   none -- public data
+//   optional -- logging in gives more (e.g. the Twitch following list)
+//   required -- unavailable without login (e.g. the body of an X post / bilibili dynamics with images); the UI must flag it and check before a run
 // proxy values: direct | proxy | omitted (follow the global setting)
 //   bilibili is the classic case that must say direct: measured to hit a steady 412 / -352 risk control through a proxy
 

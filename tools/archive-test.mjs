@@ -1,8 +1,8 @@
-// archive-test.mjs — self-test for the incremental archive / self-test for the incremental archive
+// archive-test.mjs — self-test for the incremental archive
 //
 // The archive layer has two big "fails quietly" traps that must be pinned down:
 //   · **Not idempotent**: runs re-run and backfill, and duplicate writes make the chart numbers grow out of thin air
-//   · **Parameter concatenation**: source ids / dates come from outside, so concatenating SQL is injection
+//   · **Parameter concatenation**: source ids / dates come from outside, so building SQL by string concatenation means injection
 // It also verifies: migration can pick up an old database, gap-filling by day never breaks the line, and large volumes are not slow.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -98,7 +98,7 @@ t('re-running the same day (same batch) does not double-count', () => {
   assert.equal(Number(row.items), 10, 'the daily count must not double');
 });
 
-t('increment: 5 new items add only 5', () => {
+t('incremental run: 5 new items add exactly 5', () => {
   const more = mk(15, '2026-09-01').slice(10);
   const r = ingestItems(db, more, { day: '2026-09-01' });
   assert.equal(r.inserted, 5);
@@ -196,7 +196,7 @@ t('a malicious query string cannot inject', () => {
   assert.equal(rows.length, 0, 'it should match as a plain string, not match every row');
 });
 
-t('the per-person query with LIKE also includes correctly', () => {
+t('the per-person query (LIKE-based) matches correctly too', () => {
   const rows = queryItems(db, { personId: 'jaran', limit: 50 });
   assert.equal(rows.length, 5);
   assert.ok(rows.every((r) => r.people.includes('jaran')));

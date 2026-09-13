@@ -4,12 +4,12 @@
 //   everything else is **read-only fetching**; this module **writes content into a live room under
 //   the user's own account identity**.
 //   That is why it is deliberately built as a stack of gates that must be passed by hand:
-//     1. confirm=true must be passed explicitly (missing it is a 400, it never "sends for you by default");
-//     2. the account must be named (the convenience of "just use the first usable one" is not allowed);
+//     1. confirm=true must be passed explicitly (omitting it returns a 400; it never sends on your behalf by default);
+//     2. the account must be named (the convenience of "just use the first usable account" is deliberately not offered);
 //     3. the cookie is read once more right before sending (not cached, not written to disk, not logged);
-//     4. a conservative local rate limit (minimum gap per account), so an accidental double-fire is not judged as flooding by the platform;
+//     4. a conservative local rate limit (minimum gap per account), so that an accidental double-fire is not treated as flooding by the platform;
 //     5. every send records one audit line (only who / to where / what / result, never the cookie);
-//     6. **it is wired into no automatic flow at all** — neither the scheduler nor the collection run ever calls it.
+//     6. **it is wired into no automatic flow whatsoever** — neither the scheduler nor the collection run ever calls it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
@@ -25,7 +25,7 @@ const MIN_INTERVAL_MS = 5000; // minimum gap between two sends from the same acc
 /** last send time per account, tracked inside this process */
 const lastSent = new Map();
 
-/** turn a bilibili return code into words a human can read */
+/** turn a bilibili return code into human-readable text */
 const CODE_HINT = {
   0: '发送成功',
   '-101': '账号未登录（登录态可能已失效，重新登录该浏览器即可）',
@@ -45,7 +45,7 @@ function audit(cfg, entry) {
   try {
     const f = logPath(cfg);
     fs.mkdirSync(path.dirname(f), { recursive: true });
-    // only time / account mid / room / content / result are written — never any credential
+    // only time / account mid / room / content / result are written, never any credential
     fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
   } catch {
     /* an unwritable audit must not change the send result, but the return value has to say so */
@@ -81,7 +81,7 @@ export function readAudit(cfg, limit = 50) {
 export function validateText(text) {
   const t = String(text ?? '').replace(/[\r\n\t]+/g, ' ').trim();
   if (!t) return { ok: false, error: '内容为空' };
-  // counted in characters (bilibili limits by length, and one CJK character counts as one)
+  // counted in characters, not bytes: bilibili caps by length, and one CJK character counts as one
   if ([...t].length > MAX_LEN) return { ok: false, error: `超过 ${MAX_LEN} 字上限（当前 ${[...t].length}）` };
   return { ok: true, text: t };
 }
@@ -118,7 +118,7 @@ export async function sendDanmaku(cfg, log, req) {
   const wait = MIN_INTERVAL_MS - (Date.now() - last);
   if (wait > 0) return { ok: false, error: `本地限速：请等 ${Math.ceil(wait / 1000)} 秒后再发（同一账号 ${MIN_INTERVAL_MS / 1000} 秒一条）` };
 
-  // gate 5: read the cookie again on the spot (no caching)
+  // gate 5: read the cookie again at send time (never cached)
   const ck = await readBrowserCookies(acct.profile, ['bilibili.com']);
   if (!ck.ok) return { ok: false, error: `读不到登录态：${ck.error}` };
   const csrf = /(?:^|;\s*)bili_jct=([^;]+)/.exec(ck.cookieHeader)?.[1] ?? '';
@@ -140,7 +140,7 @@ export async function sendDanmaku(cfg, log, req) {
   try {
     // Sending needs WBI signing too: bilibili's newer risk control treats write endpoints the same as any
     // other, and an unsigned call is turned away with -352.
-    // The signature goes on the **query**, the form body stays as it is (pushing the signature into the body makes the server call it invalid).
+    // The signature goes in the **query**; the form body stays as it is (pushing the signature into the body makes the server reject it as invalid).
     const r = await wbiPost(
       cfg,
       SEND_URL,
@@ -166,7 +166,7 @@ export async function sendDanmaku(cfg, log, req) {
       message: j?.message ?? null,
       hint: code !== null ? (CODE_HINT[String(code)] ?? null) : null,
       httpStatus: r.status,
-      raw: j ? undefined : text.slice(0, 200),
+      raw: j ? undefined : String(r.text ?? '').slice(0, 200),
     };
   } catch (e) {
     result = { ok: false, error: e.message };

@@ -28,9 +28,9 @@ const LS_COLS = 'vml-live-cols';
  * on 127.0.0.1, so that is what it is.
  */
 export const PLATFORMS = [
-  { id: 'bilibili', label: 'bilibili', hint: '直播间号，如 22637261', needsProxy: false },
-  { id: 'twitch', label: 'Twitch', hint: '频道名，如 neurosama', needsProxy: true },
-  { id: 'youtube', label: 'YouTube', hint: '频道 ID(UC…，取直播) 或视频 ID', needsProxy: true },
+  { id: 'bilibili', label: 'bilibili', hintKey: 'liveHintBilibili', needsProxy: false },
+  { id: 'twitch', label: 'Twitch', hintKey: 'liveHintTwitch', needsProxy: true },
+  { id: 'youtube', label: 'YouTube', hintKey: 'liveHintYoutube', needsProxy: true },
 ];
 
 export function tileSrc(tile) {
@@ -56,9 +56,9 @@ export function tileUrl(tile) {
 }
 
 function statusOf(s) {
-  if (s === 1) return { key: 'live', label: '直播中', cls: 'badge required' };
-  if (s === 2) return { key: 'round', label: '轮播', cls: 'badge optional' };
-  return { key: 'off', label: '未开播', cls: 'badge' };
+  if (s === 1) return { key: 'live', labelKey: 'liveNow', cls: 'badge required' };
+  if (s === 2) return { key: 'round', labelKey: 'liveRound', cls: 'badge optional' };
+  return { key: 'off', labelKey: 'liveOff', cls: 'badge' };
 }
 
 export default function Live() {
@@ -333,7 +333,7 @@ export default function Live() {
           return (
             <article className={`card${st.key === 'live' ? ' starred' : ''}`} key={r.uid}>
               <header>
-                <span className={st.cls}>{st.label}</span>
+                <span className={st.cls}>{t(st.labelKey)}</span>
                 <span className="muted small">{r.uname || r.name}</span>
                 {r.online ? <span className="muted small">👁 {r.online}</span> : null}
                 <span className="spacer" style={{ flex: 1 }} />
@@ -405,12 +405,12 @@ export default function Live() {
               value={manualId}
               onChange={(e) => setManualId(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addManual()}
-              placeholder={PLATFORMS.find((p) => p.id === manualPlatform)?.hint ?? ''}
+              placeholder={t(PLATFORMS.find((p) => p.id === manualPlatform)?.hintKey ?? 'liveHintBilibili')}
             />
           </div>
           <div className="field" style={{ flex: '0 0 200px' }}>
             <label>{t('label')}</label>
-            <input value={manualLabel} onChange={(e) => setManualLabel(e.target.value)} placeholder="显示用的名字" />
+            <input value={manualLabel} onChange={(e) => setManualLabel(e.target.value)} placeholder={t('liveManualLabelPh')} />
           </div>
           <div className="field" style={{ flex: '0 0 auto' }}>
             <button className="primary" onClick={addManual} disabled={!manualId.trim()}>
@@ -463,7 +463,7 @@ export default function Live() {
               style={{ marginTop: 4 }}
               value={sendRoomManual}
               onChange={(e) => setSendRoomManual(e.target.value.replace(/\D/g, ''))}
-              placeholder="也可手填"
+              placeholder={t('liveRoomManualPh')}
             />
           </div>
           <div className="field">
@@ -475,7 +475,7 @@ export default function Live() {
               onChange={(e) => setSendText(e.target.value)}
               maxLength={maxLen}
               onKeyDown={(e) => e.key === 'Enter' && confirmed && doSend()}
-              placeholder="要发的内容"
+              placeholder={t('danmakuTextPh')}
             />
           </div>
         </div>
@@ -504,7 +504,7 @@ export default function Live() {
             <ul className="muted small" style={{ paddingLeft: 18 }}>
               {audit.slice(0, 10).map((a, i) => (
                 <li key={i}>
-                  {new Date(a.at).toLocaleString()} · {a.uname ?? a.mid} → 房间 {a.roomId} · 「{a.text}」 ·{' '}
+                  {new Date(a.at).toLocaleString()} · {a.uname ?? a.mid} → {t('auditRoom')} {a.roomId} · 「{a.text}」 ·{' '}
                   {a.ok ? '✅' : `❌ ${a.code ?? ''} ${a.error ?? ''}`}
                 </li>
               ))}

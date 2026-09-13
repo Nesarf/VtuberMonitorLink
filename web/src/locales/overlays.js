@@ -62,8 +62,17 @@ const LATE_KEYS = {
   'ru-RU': { tab_people: 'Персоны', tab_calendar: 'Календарь' },
   'uk-UA': { tab_people: 'Персони', tab_calendar: 'Календар' },
   'pl-PL': { tab_people: 'Osoby', tab_calendar: 'Kalendarz' },
-  'sr-RS': { tab_people: 'Особе', tab_calendar: 'Календар' },
-  'ar-SA': { tab_people: 'الأشخاص', tab_calendar: 'التقويم' },
+  // customNamePh is hand-written for Serbian: the machine pass kept inventing a sentinel for it
+  // (13 other locales translated it fine, this one failed twice), and a hand entry always wins.
+  'sr-RS': { tab_people: 'Особе', tab_calendar: 'Календар', customNamePh: 'Нечији блог' },
+  'ar-SA': {
+    tab_people: 'الأشخاص',
+    tab_calendar: 'التقويم',
+    // Hand-written because the machine pass kept a sentinel in this one (see BUGS #64): the
+    // pipeline replayed it from its cache and overwrote a hand-edit of machine.json, so the fix
+    // has to live in the hand layer, which always wins.
+    outsideRange: 'عناصر مستبعدة بسبب شرط الوقت',
+  },
 };
 
 /**

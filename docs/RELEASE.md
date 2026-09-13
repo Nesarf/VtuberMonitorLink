@@ -68,6 +68,38 @@
 4. 数词词形（原 BUGS #54，已修）：`21 элементов` → `21 запись/записи/записей`，
    同时修掉英语的 `1 items`。做法见 `docs/DESIGN.md` §11。
 
+### 追加：界面词条补齐 + 抽读英文注释 / missing UI entries + English comment review
+
+> 英文化那一轮**只动工程层**，于是界面里 30 处硬编码中文被留在原地 —— 它们没有 `t()` 键，
+> 25 个地区都显示中文。这一轮把它们全部补成词条（zh 文案逐字不变，所以中文界面与巡检断言都不受影响）。
+> 同时抽读了 68 个文件的英文注释，修掉翻译腔与事实错误。
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 界面硬编码中文 | 脚本扫描 `web/src/**/*.jsx`（排除词条本体） | **0 处**（此前 30 处） |
+| 语言覆盖度 | `node tools/locale-coverage.mjs` | 25 个地区 **633/633**（新增 20 个词条、机器层已补齐；分母从 635 降到 633 是因为 `peopleItems` / `chartsDays` 这两个键被复数感知的共用键接管，不再是「界面用到的键」—— 每个地区仍是 100%） |
+| 数词词形 | `node tools/i18n-plural-test.mjs` | **31/31** —— 词形表从 5 个键扩到 13 个键（新增 `groupMembers`/`groupPeopleCount`/`costCalls`/`matches`/`alerts`/`cookieCount`/`cookieCountWithSession`/`followersCount`），11 个会词形变化的地区共 296 条新词形，完整性棘轮自动覆盖新键 |
+| 逐条校对 | `node tools/i18n-proofread.mjs` | 结构性破坏 **0**，可疑 18 条（记账；新增的那条是韩语译文比中文源短，属启发式误报） |
+| 工程层语言守卫 | `node tools/english-logic.mjs` | clean（字符类已扩到 CJK 双破折号与带圈数字，见 BUGS #65） |
+| 快速自检 | `npm run verify:fast` | 全过 |
+| 发行链 | `npm run release` | build-portable ✓ · verify-release **clean** · traverse **80/80** · traverse:ui **202/202** |
+
+这一轮的真问题（细节见 `docs/BUGS.md` 68~70）：
+
+1. **`danmaku.js` 的非 JSON 分支引用了不存在的变量**（BUGS #68）：`text.slice(0,200)` 里的 `text`
+   在该作用域根本不存在，ReferenceError 被 catch 吞掉 —— 使用者看到的是 `text is not defined`
+   而不是 B 站真正的回复。这是「逐个文件通读注释」时读出来的，`node --check` 看不见。
+2. **账号 id 泄露 profile 路径前缀**（BUGS #69）：注释写「短哈希」，代码是截断的 base64url 编码
+   （可逆），而它随接口回给前端。已改成真正的 sha256 摘要；顺带修掉服务端「（设置里指定的）」
+   被界面再套一层括号的双重括号。
+3. **三条永远为真的断言**（BUGS #70）：自己跟自己比、`|| true`、以及「两个元素只可能是 1 或 2 个簇」
+   的恒真式；另有一条把 `async` 回调交给同步运行器，失败会变成未处理的 Promise 拒绝。
+   绿的报告在说谎 —— 全部改成真断言。
+4. 抽读修掉的事实错误：`cost.js` 声称「此前界面完全没有用量」（实际有 `/api/cost`）、
+   `runner.js` 把「关注对象」写成「监视目标」、`config.js` 声称停止活动的人「不会出现」
+   （他们出现在日报末尾，正是那一块的意义）、`tar.js` 把 pax 的「记录总长」写成「路径长度」、
+   `live.js` 注释写 100 而代码按 50 分批、`probe.js` 的 JSDoc 漏了 `tor` 档。
+
 ### 校对期间发现并修掉的问题
 
 1. **提示语里的 `**粗体**` 会以字面星号显示**（BUGS #61）：文案里写了 markdown 记号、渲染处却是纯文本。

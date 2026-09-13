@@ -3,36 +3,38 @@
 // Background (why this module is needed rather than just "add a Tor switch"):
 // To judge the real state of an agency (team) you have to look at what several of its members are
 // doing at the same time; but "sweeping the whole agency at one instant" is itself the most
-// conspicuous trace —— and it does not depend on which IP you come from.
+// conspicuous trace -- and it does not depend on which IP you come from.
 // Tor only swaps the network identity of "who is watching"; it cannot swap "what is being watched,
 // when it is watched, how much is watched at once".
 //
 // So the four things below, the first two unrelated to Tor:
-//   1. **Sampling**: each round takes only a random subset, and rotation fills the coverage in slowly
+//   1. **Sampling**: each round takes only a random subset, and rotation fills in the coverage slowly
 //      (locally it is an incremental archive, so the profile ends up complete after a few days, yet no
-//      single observation points to "someone is watching the whole agency");
-//   2. **Jitter**: the interval and the start instant are random, avoiding the machine signature of a fixed rhythm;
+//      single observation reveals that "someone is watching the whole agency");
+//   2. **Jitter**: the interval and the start instant are random, so the timing does not carry the
+//      machine-like signature of a fixed rhythm;
 //   3. **Egress by log ownership**: an agency self-hosted site (official-*) is **the only class where the logs are on their side**,
 //      so it goes over Tor; for platform sources (bilibili / Reddit / Fandom) the agency cannot see your IP,
 //      so it goes direct or through a self-built proxy
-//      —— and bilibili measured 8x slower over Tor, with some endpoints rate-limiting straight to -799;
+// -- and bilibili measured 8x slower over Tor, with some endpoints rate-limiting straight to -799;
 //   4. **No identity sent**: sources that need a login session do not run in this mode (binding a real
 //      identity to observation behaviour is the strongest correlation signal, far worse than an IP).
 //
 // Measurement basis (2026-09-12, see docs/LIVE.md):
-//   · bilibili dynamics: direct 321ms / tor 2521ms, 20 items each (measured with this project's signed fetcher);
-//   · swapping egress: a different SOCKS user name → a different exit IP (Tor's IsolateSOCKSAuth);
-//   · agency self-hosted sites over Tor: hololivepro 200 / vspo 200 / cover-corp 200,
+//   - bilibili dynamics: direct 321ms / tor 2521ms, 20 items each (measured with this project's signed fetcher);
+//   - swapping egress: a different SOCKS user name -> a different exit IP (Tor's IsolateSOCKSAuth);
+//   - agency self-hosted sites over Tor: hololivepro 200 / vspo 200 / cover-corp 200,
 //     anycolor **403 (Cloudflare blocks Tor)**, brave-group timeout.
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 
 /**
- * Domains where "the logs are on their side" —— that is, entry points **the agency hosts itself**.
+ * Domains where "the logs are on their side" — that is, entry points **the agency hosts itself**.
  * Only for this class does Tor really make sense: when you scrape a platform (bilibili/Reddit/Fandom)
  * the agency cannot obtain that log; when you scrape its own site the log is sitting on its server.
- * This list is a whitelist: anything not listed is treated as a platform (better to use Tor too little than to apply it wrongly).
+ * This list is a whitelist: anything not listed is treated as a platform, which errs on the side of
+ * using Tor too little rather than using it where it does not belong.
  */
 export const AGENCY_HOSTS = [
   'hololivepro.com',
@@ -61,14 +63,14 @@ export function logOwnerOf(source) {
   return AGENCY_HOSTS.some((h) => host === h || host.endsWith('.' + h)) ? 'agency' : 'platform';
 }
 
-/** Does it need a login session (login: required) —— this class does not run under observation mode */
+/** Does it need a login session (login: required)? This class does not run under observation mode */
 export function isLoginRequired(source) {
   return String(source?.login ?? '').toLowerCase() === 'required';
 }
 
 /**
  * Which egress this source uses this round.
- * Returning null means "leave it alone" —— follow the source's own setting (source.proxy) and the global proxy.
+ * Returning null means "leave it alone" — follow the source's own setting (source.proxy) and the global proxy.
  */
 export function resolveEgress(source, cfg, { observation } = {}) {
   const obs = observation ?? cfg?.observation ?? {};
@@ -81,7 +83,7 @@ export function resolveEgress(source, cfg, { observation } = {}) {
     return { mode: source.proxy, why: 'egress pinned by the source itself' };
   }
   if (obs.torForAgency !== false && logOwnerOf(source) === 'agency') {
-    return { mode: 'tor', why: 'the logs are on the other side (the agency) -> go over Tor' };
+    return { mode: 'tor', why: 'the logs are on their side (the agency hosts the site) -> go over Tor' };
   }
   return null;
 }
@@ -94,7 +96,7 @@ export function resolveEgress(source, cfg, { observation } = {}) {
  * Purely random will not do: it lets some object go several rounds unseen (coverage fills in very slowly).
  * Purely LRU will not do either: the least recently seen batch is always the same batch, so the pattern
  * becomes predictable again.
- * So: **first rank a candidate pool by "least recently seen", then pick randomly from the pool** —— this
+ * So: **first rank a candidate pool by "least recently seen", then pick randomly from the pool** — this
  * keeps the rotation fair while making "who exactly was picked this round" unpredictable; the result is
  * shuffled again afterwards.
  */
@@ -109,7 +111,7 @@ export function pickSample(items, { ratio = 0.5, min = 2, history = {}, rng = Ma
   const ranked = list
     .map((x) => ({ x, at: Date.parse(history[keyOf(x)] ?? '') || 0 }))
     .sort((a, b) => a.at - b.at);
-  // The candidate pool has to be a little larger than k for there to be real random room inside it
+  // The candidate pool has to be a little larger than k, so that there is real randomness inside it
   const poolSize = Math.min(n, Math.max(k, Math.ceil(n * 0.6) + 1));
   const pool = ranked.slice(0, poolSize).map((r) => r.x);
   const picked = shuffle(pool, rng).slice(0, k);
@@ -129,7 +131,7 @@ function shuffle(arr, rng) {
 /**
  * Interval jitter.
  *
- * When `base <= 0` it **returns 0 directly**: an explicit "do not wait" outranks jitter ——
+ * When `base <= 0` it **returns 0 directly**: an explicit "do not wait" outranks jitter —
  * the diagnostic path (`diagnose.js`) skips the rate-limit wait precisely via `rateLimit.gapSeconds = 0`,
  * and jitter must not sneak that wait back in.
  */
@@ -148,7 +150,7 @@ export function gapWithJitter(baseSeconds, jitter, rng = Math.random) {
   return base;
 }
 
-// ───────────────────────────────────────────── rotation state (remember "when it was last seen")
+// ───────────────────────────────────────────── rotation state (remembers "when it was last seen")
 
 function statePath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), 'observation.json');
@@ -177,7 +179,7 @@ export function saveObservationState(cfg, state) {
 // ───────────────────────────────────────────── the plan for one round
 
 /**
- * Work out "whom to fetch this round, over which egress, with what interval" in one go.
+ * Work out "whom to fetch this round, over which egress, and with what interval" in one go.
  * Pure function (apart from the fallback when the state cannot be read): rng and history are the two
  * injection points left for tests.
  *
@@ -201,10 +203,10 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   };
   if (!plan.enabled) return plan;
 
-  // 0) Speak up first when Tor is down: sources that would not go over Tor this round are skipped
-  //    outright rather than being left to fail one by one.
-  //    A failure would be recorded as "this source is broken" and trigger the self-check —— that would
-  //    be a false fault (snowflake drops connections momentarily).
+  // 0) Report the Tor outage first: sources that would not go through Tor this round are skipped
+  //    outright rather than being left to fail individually.
+  //    Such a failure would be recorded as "this source is broken" and trigger the self-check — a false
+  //    fault, because the snowflake bridge drops connections momentarily.
   const torDown = torReachable === false && obs.torForAgency !== false;
 
   // 1) Decide the egress by log ownership + skip outright whatever needs a login session
@@ -238,7 +240,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   plan.watchTargets = wSample.picked;
   plan.sampling.sources = { picked: sSample.picked.map((x) => x.id), skipped: sSample.skipped.map((x) => x.id), k: sSample.k, n: sSample.n };
   plan.sampling.watch = { picked: wSample.picked.map((x) => x.id ?? x.url), skipped: wSample.skipped.map((x) => x.id ?? x.url), k: wSample.k, n: wSample.n };
-  // Report only **the ones that really go over Tor this round** (anything in egress that the sampling
+  // Report only **the ones that really go through Tor this round** (anything in egress that the sampling
   // did not pick is not requested at all this round)
   plan.sampling.tor = sSample.picked.filter((s) => s.proxy === 'tor').map((s) => s.id);
   plan.sampling.skippedLogin = plan.skippedLogin.map((x) => x.id);
@@ -247,7 +249,7 @@ export function observationPlan({ cfg, sources = [], watchTargets = [], history 
   return plan;
 }
 
-/** Timestamp the objects drawn this round so the next round prefers "least recently seen" */
+/** Timestamp the objects picked this round so that the next round prefers "least recently seen" */
 export function recordPicked(state, ids, at = new Date()) {
   const next = { rounds: (state?.rounds ?? 0) + 1, lastPicked: { ...(state?.lastPicked ?? {}) } };
   for (const id of ids) next.lastPicked[id] = at.toISOString();

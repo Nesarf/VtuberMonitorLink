@@ -9,7 +9,7 @@ import Collapsible from '../Collapsible.jsx';
 import { Inline } from '../markdown.jsx';
 
 export default function Settings({ onLayout }) {
-  const { t, lang, weekdaysSunFirst: WEEKDAYS } = useI18n();
+  const { t, tn, lang, weekdaysSunFirst: WEEKDAYS } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [browsers, setBrowsers] = useState([]);
   const [presets, setPresets] = useState([]);
@@ -161,8 +161,10 @@ export default function Settings({ onLayout }) {
     try {
       const r = await api.checkCookies({ profileDir: cfg.browser.profileDir, domains: [domain.trim() || 'bilibili.com'] });
       setLoginOk(!!(r.ok && r.hasSession));
-      if (r.ok && r.hasSession) setLoginMsg(`✅ ${t('loginOk')}: ${r.cookieCount} 个（含 SESSDATA）· ${r.profile ?? ''}`);
-      else if (r.ok) setLoginMsg(`⚠️ ${t('loginNoSession')}: ${r.cookieCount} 个 · ${(r.names ?? []).slice(0, 8).join(', ')}`);
+      if (r.ok && r.hasSession)
+        setLoginMsg(`✅ ${t('loginOk')}: ${tn('cookieCountWithSession', r.cookieCount)} · ${r.profile ?? ''}`);
+      else if (r.ok)
+        setLoginMsg(`⚠️ ${t('loginNoSession')}: ${tn('cookieCount', r.cookieCount)} · ${(r.names ?? []).slice(0, 8).join(', ')}`);
       else setLoginMsg(`❌ ${t('loginNone')}: ${r.error ?? ''}`);
       if (r.warning) setLoginMsg((m) => `${m} ｜ ${r.warning}`);
     } catch (e) {
@@ -846,9 +848,9 @@ export default function Settings({ onLayout }) {
           <ul className="muted small" style={{ paddingLeft: 18 }}>
             {sched.history.slice(0, 10).map((h, i) => (
               <li key={i}>
-                {new Date(h.at).toLocaleString()} · {h.name ?? h.taskId} · {h.mode ?? ''} {h.catchUp ? '（补跑）' : ''}{' '}
+                {new Date(h.at).toLocaleString()} · {h.name ?? h.taskId} · {h.mode ?? ''} {h.catchUp ? t('catchUpTag') : ''}{' '}
                 {h.ok ? '✅' : `❌ ${h.error ?? ''}`}
-                {h.items != null ? ` · ${h.items} 条` : ''}
+                {h.items != null ? ` · ${tn('items', h.items)}` : ''}
               </li>
             ))}
           </ul>

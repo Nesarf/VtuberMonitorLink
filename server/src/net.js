@@ -46,7 +46,7 @@ export function torSocksUrl(cfg) {
  * meaningful.
  *
  * Note: rotating the exit does not change the more important signal, the request content; it
- * only stops a single observation round from hanging entirely on one exit (together with
+ * only stops a single observation round from riding entirely on one exit (together with
  * sampling, a single observation no longer points at "someone watching the whole box").
  */
 export function torEgressUrl(cfg, { rotate = null, tag = null } = {}) {

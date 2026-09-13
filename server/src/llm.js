@@ -2,7 +2,7 @@
 //
 // Design goal: the web UI can "pick a provider -> fill in the key -> pick a model -> test
 // connectivity", and can also store several profiles to switch between at any time
-// (for example a cheap one day to day and an expensive one when writing reports).
+// (for example a cheap one for everyday use and an expensive one when writing reports).
 // Depends only on the OpenAI-compatible /chat/completions and /models, with no vendor SDK.
 import { netFetch } from './net.js';
 

@@ -1,7 +1,7 @@
 // fetchers/browser.js — browser-rendered fetching (Playwright)
 // The key points (all of them learned the hard way):
 //  1) the browser engine is configurable: bundled (the Chromium shipped with the package) / system (already installed) / custom (a user-given path)
-//  2) reusing a login needs profileDir; at that point **that browser must be closed**, otherwise the profile stays locked
+//  2) reusing a login needs profileDir; at which point **the browser must be closed**, otherwise the profile stays locked
 //  3) SPA pages make close() hang — a bounded teardown + a hard watchdog, so the process is guaranteed to exit
 import fs from 'node:fs';
 import os from 'node:os';
@@ -12,7 +12,7 @@ import { playwrightProxy } from '../net.js';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
-/** candidate install paths of common system browsers */
+/** candidate install paths for common system browsers */
 function candidates() {
   const home = os.homedir();
   const pf = process.env['ProgramFiles'] ?? 'C:\\Program Files';
@@ -82,7 +82,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
   const bcfg = cfg?.browser ?? {};
   const hardMs = bcfg.hardTimeoutMs ?? 90000;
   const watchdog = setTimeout(() => {
-    log?.error(`hard timeout ${hardMs}ms — force exit`);
+    log?.error(`hard timeout after ${hardMs}ms, forcing exit`);
     process.exitCode = 3;
   }, hardMs);
 
@@ -93,7 +93,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
     // the browser needs the proxy as well (measured: in an environment where direct is blocked, the browser cannot reach the target site either)
     const proxy = playwrightProxy(cfg);
     if (bcfg.profileDir) {
-      // reuse an existing login: requires that browser to be closed
+      // reuse an existing login: this requires the browser to be closed
       if (!fs.existsSync(bcfg.profileDir)) throw new Error(`profileDir 不存在 / not found: ${bcfg.profileDir}`);
       context = await chromium.launchPersistentContext(bcfg.profileDir, {
         ...launchOpts,
@@ -117,7 +117,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
         ? await page.content()
         : await page.evaluate(() => (document.body ? document.body.innerText : ''));
 
-    // site-level error detection (login wall / anti-bot block), so the layer above can tell the user explicitly
+    // site-level error detection (login wall / anti-bot block), so the layer above can report it to the user explicitly
     const blocked = /login|sign in|登录|安全验证|blocked by network security|verify you are human/i.test(
       content.slice(0, 400)
     );
@@ -127,7 +127,7 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
     log?.error(`render failed — ${url} :: ${err.message}`);
     return { ok: false, error: err.message, url };
   } finally {
-    // bounded teardown: SPA pages make close() hang forever, never wait without a limit
+    // bounded teardown: SPA pages make close() hang forever, so never wait without a limit
     await Promise.race([
       (async () => {
         try {

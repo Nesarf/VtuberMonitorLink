@@ -18,7 +18,7 @@
 // table, the judgement is left to a human (it may be a planned holiday, or it may be real trouble).
 import { AGENCY_HOSTS, urlHost } from './observe.js';
 
-/** How many days of silence are allowed before alerting when a day has not a single item (by default inferred from the person's own rhythm; these are the fallback floor/ceiling) */
+/** How many days of silence are tolerated before alerting when a person had not a single item that day (by default inferred from their own rhythm; these are the fallback floor/ceiling) */
 export const SILENCE_DEFAULTS = {
   enabled: true,
   sampleDays: 20, // how many recent **active days** to estimate the rhythm from
@@ -39,7 +39,7 @@ const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
  * A trap we already hit: the first version anchored the window on "the last active day", so for someone
  * who "posted three times in three months" the window held only their own single slot -> the gap came out
  * as 1 day -> they were treated as a daily poster, the tolerance range collapsed to 3 days, and a 5-day
- * break triggered a false report. The rhythm must be computed from the **spacing between consecutive
+ * break triggered a false alarm. The rhythm must be computed from the **spacing between consecutive
  * active days** for it to be comparable with "how long has it been quiet".
  *
  * @returns {{mean:number|null, gapDays:number|null, lastDay:string|null, quietDays:number|null, activeDays:number, items:number}}
@@ -73,7 +73,7 @@ export function baselineOf(byDayForPerson, { now = new Date(), sampleDays = SILE
 /** This person's tolerance range (days): baseline gap x factor, clamped between minDays and maxDays */
 export function toleranceDays(baseline, rules = SILENCE_DEFAULTS) {
   const gap = baseline?.gapDays;
-  if (!gap || !Number.isFinite(gap)) return null; // no baseline (only one day of records) -> do not judge; better to stay silent than to misreport
+  if (!gap || !Number.isFinite(gap)) return null; // no usable baseline (only one active day on record) -> do not judge: reporting nothing beats reporting a false alarm
   const raw = gap * (Number(rules.factor) || SILENCE_DEFAULTS.factor);
   return Math.min(Number(rules.maxDays) || SILENCE_DEFAULTS.maxDays, Math.max(Number(rules.minDays) || SILENCE_DEFAULTS.minDays, raw));
 }
@@ -155,7 +155,7 @@ export function detectSilence({ byDay = {}, people = [], rules = {}, now = new D
   return out;
 }
 
-/** Compress the silence detection result into a one-line summary (for logs/reports/pushes) */
+/** Compress the silence detection result into a one-line summary (read by the logs and by /api/silence only; the UI does not render it — the `reason` fields are what reach the report and the push) */
 export function silenceSummary(res) {
   const parts = [];
   if (res?.group?.length) parts.push(`agency-level quiet ${res.group.length}: ${res.group.map((g) => g.agency).join(', ')}`);
@@ -164,12 +164,12 @@ export function silenceSummary(res) {
   return parts.join('; ');
 }
 
-/** Member list of one agency; people with no agency filled in are treated as source/ungrouped */
+/** Member list of one agency; people with no agency set are treated as ungrouped */
 export function membersOfAgency(people, agency) {
   return (people ?? []).filter((p) => String(p.agency ?? '') === String(agency));
 }
 
-/** Reverse-engineer the agency name from an agency self-hosted domain (the url of the official-* sources is the agency's domain) */
+/** Recover the agency name from an agency self-hosted domain (the official-* sources point at the agency's own domain) */
 export function agencyFromSourceUrl(url) {
   const host = urlHost(url);
   const hit = AGENCY_HOSTS.find((h) => host === h || host.endsWith('.' + h));

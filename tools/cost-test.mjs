@@ -1,6 +1,6 @@
 // cost-test.mjs — self-test for the LLM usage ledger and the budget gate
-// The worst thing for a ledger is "fake bookkeeping": usage that cannot be read gets recorded as 0,
-// a bad line crashes reading the whole file, the budget goes negative.
+// The worst failure mode for a ledger is bookkeeping that only looks fine: unreadable usage gets
+// recorded as 0, one bad line breaks reading the whole file, the budget goes negative.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -77,7 +77,7 @@ const rows = [
   { at: '2026-03-30T06:00:00Z', provider: 'ollama', model: 'local', totalTokens: 0, known: false, calls: 1 },
 ];
 
-t('today / per-day / per-model: each one adds up correctly', () => {
+t('today / per-day / per-model: every bucket adds up correctly', () => {
   const s = summarizeUsage(rows, { days: 7, now: NOW });
   assert.equal(s.today.tokens, 1500, 'today should only hold the two known usage entries from 3-30');
   assert.equal(s.today.calls, 3, 'calls is "how many times we actually called", including the one whose usage was unavailable (it was still a call)');
@@ -135,7 +135,7 @@ t('over the limit does not turn the remaining amount negative (showing -500 make
   assert.equal(b.pct, 5);
 });
 
-t('the summary line is readable', () => {
+t('costSummary renders a readable line (today, budget, unknown usage)', () => {
   const s = summarizeUsage(rows, { now: NOW });
   const b = budgetStatus({ llm: { budget: { dailyTokens: 2000 } } }, s, { now: NOW });
   const line = costSummary(s, b);

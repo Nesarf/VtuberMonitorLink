@@ -1,6 +1,6 @@
-// socks-test.mjs — self-test for the hand-written SOCKS5 connector / self-test for the hand-written SOCKS5 connector
+// socks-test.mjs — self-test for the hand-written SOCKS5 connector
 //
-// Why it is needed: this path **used to stop testing the moment the port was unreachable** (with Tor down the
+// Why it is needed: this path **used to skip testing entirely as soon as the port was unreachable** (with Tor down the
 // probe returns ECONNREFUSED, which looks like "the feature works, Tor just is not running"). So the TLS part
 // was never exercised -- and that is precisely the part that was broken: once the handshake completed we handed
 // the **bare socket** to undici, so a plaintext `GET /api/ip HTTP/1.1` went to the target's port 443. The real
@@ -169,7 +169,7 @@ process.stdout.write('\nsocks: Tor launch arguments\n');
 const TB_EXE = 'E:\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe';
 const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: 'E:\\VtuberMonitorLink\\dist\\VtuberMonitorLink\\app' });
 
-await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNetwork overridden', async () => {
+await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNetwork forced to 0', async () => {
   if (!realPlan.ok) {
     // With Tor Browser not installed on this machine, verify the logic itself with a fake layout
     const fake = torLaunchPlan({ exe: 'X:\\nope\\TorBrowser\\Tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9150' });
@@ -196,7 +196,7 @@ await t('standalone tor: the data directory sits under the app directory and nev
 // ── The probe's Tor mode: point it at the fake SOCKS and verify it really goes through SOCKS
 process.stdout.write("\nsocks: the probe's Tor egress\n");
 
-await t('probeUrl(modes:[tor]) takes the first byte through SOCKS and returns a verdict', async () => {
+await t('probeUrl(modes:[tor]) reads the first byte through SOCKS and returns a verdict', async () => {
   const http = await import('node:http');
   const { probeUrl } = await import('../server/src/probe.js');
 

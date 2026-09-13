@@ -1,4 +1,4 @@
-// calendar.js — countdowns for anniversaries / birthdays / 3D reveals / anniversaries of debut
+// calendar.js — countdowns for birthdays / debuts / 3D reveals / anniversaries
 //
 // Why this is a module of its own instead of arithmetic inside the UI: there are two places in date
 // arithmetic where you are almost certain to go wrong, and the mistakes hide well:
@@ -109,7 +109,7 @@ export function nextOccurrence(entry, today) {
 export function upcoming(cfg, opts = {}) {
   // Note the || rather than ??: timeZone defaults to the **empty string** in the config,
   // and ?? only recognizes null/undefined, so the empty string travels all the way down and the time zone
-  // shown in the UI ends up blank (hit this one).
+  // shown in the UI ends up blank (we hit this one).
   const tz = opts.timeZone || cfg?.calendar?.timeZone || undefined;
   const now = opts.now ?? new Date();
   // with no time zone passed, use the system one: Intl allows timeZone to be undefined

@@ -1,13 +1,13 @@
-// share.js — one-click sharing / one-click sharing
+// share.js — one-click sharing
 //
-// "Sharing" covers two classes of target, and they differ completely in what they require around **login**,
+// "Sharing" covers two classes of target, and they differ completely in their **login** requirements,
 // so they have to be treated separately:
 //
 //   A. No login needed: export a single-file HTML / Markdown / JSON, copy as text, push to a webhook
 //      -- this is the main path. It is always available and carries no account risk whatsoever.
 //   B. Login needed: post to a bilibili dynamic / X and the like. These must **probe the login state first
-//      and only then decide whether they can run** -- we may not pretend we can post, and even less silently
-//      fail while logged out. And they are **never sent automatically by a scheduled run**: speaking in
+//      and only then decide whether they can run** -- we must not pretend we can post, and still less fail
+//      silently while logged out. And they are **never sent automatically by a scheduled run**: speaking in
 //      public is an irreversible act that requires explicit human confirmation (the same discipline as danmaku posting).
 //
 // So the core of this module is not "how to post" but three things:
@@ -31,7 +31,7 @@ import { netFetch } from './net.js';
  *   status      -- ready (usable right now) / needs-login (login missing) / needs-verification (the feature
  *                  exists but **has never been verified with a real account**, and may only be used
  *                  externally once it has been) / unsupported (cannot be done)
- * Better to write needs-verification than to pretend to be ready -- a failed or wrong public post is irreversible.
+ * Better to declare needs-verification than to pretend to be ready -- a failed or wrong public post is irreversible.
  */
 export const SHARE_TARGETS = [
   {
@@ -197,7 +197,7 @@ export function toHtml(bundle) {
 ${bundle.subtitle ? `<p class="sub">${esc(bundle.subtitle)}</p>` : ''}
 <p class="note">共 ${bundle.items.length} 条 · 生成于 ${esc(bundle.generatedAt)}${bundle.note ? ` · ${esc(bundle.note)}` : ''}</p>
 ${cards}`;
-  // Reuse the report styling shell so the look stays "the same family"; then add the two rules the share view needs
+  // Reuse the report styling shell so the look stays "the same family"; then add the extra rules the share view needs
   return htmlShell(bundle.title, '', '').replace(
     '</body>',
     `<style>
@@ -215,7 +215,7 @@ ${body}
 /**
  * Build a share bundle.
  *
- * Mind the two dates, they must not be conflated:
+ * Mind the two dates here; they must not be conflated:
  *   - contentDate -- which day the **content** belongs to (that daily report / that person's data at the time)
  *   - generatedAt -- **when it was exported**
  * The filename and the title use contentDate (only then does the recipient know what this is); with no
@@ -264,7 +264,7 @@ export function bundleFilename(bundle, ext) {
 /**
  * Build the content-disposition header.
  *
- * HTTP headers may carry **ASCII only** -- a filename with Chinese in it (share titles usually are
+ * HTTP headers may carry **ASCII only** -- a filename with Chinese in it (share titles usually contain
  * Chinese) throws `ERR_INVALID_CHAR: Invalid character in header content` outright and the endpoint
  * answers 500. The unit tests only verified "the filename is generated correctly" and never went
  * through the HTTP layer, so they missed it (the traversal's real request caught it).

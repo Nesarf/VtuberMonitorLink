@@ -19,7 +19,7 @@ import People from './pages/People.jsx';
 const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
 export default function App() {
-  const { t, localeCode, setLang } = useI18n();
+  const { t, tn, localeCode, setLang } = useI18n();
   const [tab, setTab] = useState('run');
   const [alerts, setAlerts] = useState(0);
   const [layout, setLayout] = useState(null);
@@ -110,7 +110,7 @@ export default function App() {
         <div className="spacer" />
         {alerts > 0 && (
           <span className="chip alert">
-            ⚠ {alerts} {t('alerts')}
+            ⚠ {tn('alerts', alerts)}
           </span>
         )}
         {/* 26 locales cannot be switched with a two-state "zh/en" button any more: it is a dropdown now, and each language name is written in its own script */}

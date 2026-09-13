@@ -41,7 +41,7 @@ function calendarSection(cal) {
   return `## ⏳ 纪念日倒计时（未来 ${cal.days} 天）\n\n${lines.join('\n')}\n\n> 按 ${cal.timeZone} 的「今天」（${cal.today}）计算。`;
 }
 
-/** In-memory state the UI can poll / in-memory state the UI can poll */
+/** In-memory state that the UI polls (and that the report/notification steps read back) */
 export const runState = {
   running: false,
   mode: null,
@@ -95,7 +95,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
   log.error = (m) => (push(`[ERR ] ${m}`), origErr(m));
   if (task) log.info(`scheduled task "${task.name}"${catchUp ? ' (catch-up)' : ''} starting`);
 
-  /** The single funnel for an outbound alert / one place for outbound alerts */
+  /** The single place outbound alerts go through */
   const pushNotify = async (title, body, level) => {
     try {
       const r = await notify(cfg, log, { title, body, level });
@@ -133,11 +133,11 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     const px = await applyProxy(cfg);
     log.info(`proxy: ${px.applied ?? 'direct'}`);
 
-    // 1) Preflight: LLM connectivity/balance (so a whole run is not wasted)
+    // 1) Preflight: LLM connectivity/balance (so that a whole run is not wasted)
     runState.step = 'preflight';
     log.info('preflight: LLM connectivity');
     // Budget gate: warn by default (this is a tool the user runs themselves, and blocking it without
-    // a word would be overreach); setting llm.budget.onExceed to 'stop' is what really blocks.
+    // a word would be overreach); setting llm.budget.onExceed to 'stop' is what really blocks it.
     try {
       const budget = budgetStatus(cfg, summarizeUsage(loadUsage(cfg).rows));
       runState.cost = { ...summarizeUsage(loadUsage(cfg).rows, { days: 14 }), budget };
@@ -169,10 +169,10 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     const obsState = loadObservationState(cfg);
     const allSources = mode === 'watch' ? [] : selectSources(cfg, mode);
     const allWatch = (cfg?.watch?.targets ?? []).filter((t) => t.enabled !== false);
-    // Probe the Tor port once before starting: if it is down, skip the sources that would route
-    // through Tor this round rather than letting them fail one by one (a failure gets recorded as a
-    // source fault and triggers self-check noise — but those are false faults; the snowflake bridge
-    // has been measured dropping the link instantly)
+    // Probe the Tor port once before starting: if it is down, skip the sources that would go
+    // through Tor this round instead of letting them fail individually (such a failure is recorded
+    // as a fault on the source's side and triggers the self-check — but it is a false fault; the
+    // snowflake bridge has been measured dropping the link instantly)
     const torReachable =
       cfg?.observation?.enabled === true && cfg?.proxy?.torSocks ? await torPortOpen(cfg.proxy.torSocks) : null;
     if (torReachable === false) log.warn('local Tor port is unreachable: skipping sources that would route through Tor this round (retried next time, not counted as a failure)');
@@ -181,7 +181,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       log.info(
         `observation mode: source sampling ${plan.sampling.sources.k}/${plan.sampling.sources.n}` +
           `, watch-target sampling ${plan.sampling.watch.k}/${plan.sampling.watch.n}` +
-          ` (ones not picked come up in later rounds)`,
+          ` (the ones not picked come up in a later round)`,
       );
       if (plan.sampling.tor.length) log.info(`sources routed through Tor (the log is on their side): ${plan.sampling.tor.join(', ')}`);
       const skipIds = plan.skippedLogin.map((x) => x.id);
@@ -212,7 +212,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       runState.watchDone = watchResults.length;
     }
 
-    // 3.5) Live monitoring — the most time-sensitive intel there is: a stream going live is worth knowing at once more than any keyword
+    // 3.5) Live monitoring — the most time-sensitive intel there is: a stream going live is worth knowing about at once, more than any keyword hit
     if (cfg?.live?.enabled !== false && cfg?.live?.checkWithRun !== false) {
       runState.step = 'live';
       try {
@@ -258,8 +258,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     runState.itemCount = items.length;
     runState.alerts = alerts;
 
-    // 4.5) Extract structured features with the LLM — so that "I only remember a feature" is still searchable.
-    //      Cached and capped; a failure does not affect the main flow.
+    // 4.5) Extract structured features with the LLM — so that "I only remember one feature" is still searchable.
+    //      Cached and capped, and a failure does not affect the main flow.
     let enriched = items;
     if (cfg?.run?.extractFeatures !== false && items.length) {
       runState.step = 'features';
@@ -324,7 +324,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // It sits at the very top of the report — the closer the countdown, the earlier it should be seen.
     let markdown = a.markdown;
     // In observation mode the report has to say up front that "this round was a sample" — otherwise the
-    // user reads "this round did not pick up some target" as "that person has gone quiet"
+    // user reads "some target did not show up this round" as "that person has gone quiet"
     // (two completely different things).
     if (runState.sampling) {
       const sp = runState.sampling;
@@ -350,7 +350,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     }
 
     // Silence detection: **"no activity" is intel too**. Content alerts cannot see absence —
-    // someone who posts daily going quiet, several people going quiet at once, a whole box dead for
+    // a daily poster going quiet, several people going quiet at once, a whole agency dead for
     // days on end: none of that is visible in the old logic.
     // Every criterion is relative to each person's own cadence (see silence.js), never a fixed day count.
     try {
@@ -378,12 +378,13 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
 
     // Dormant / graduated: the daily report answers "what is new today", so **anyone who stopped never
     // appears** — even if they posted just yesterday (the only post in half a year, and precisely the one
-    // that most deserves to be seen). So, as the user asked, everyone "dormant >= 6 months" is listed
-    // together at the **end of the daily report**, each with their latest content.
+    // that most deserves to be seen). So, as the user asked, everyone inactive for **more than the configured
+    // threshold (6 months by default)** is listed together at the **end of the daily report**, each with their
+    // latest content.
     try {
       if (cfg?.report?.dormant?.enabled !== false && (cfg.people ?? []).length) {
         const drows = { ...DORMANT_DEFAULTS, ...(cfg.report?.dormant ?? {}) };
-        // "People with activity today": needed for the return decision (they posted just yesterday, which is exactly the signal most worth seeing)
+        // "People with activity today": needed for the comeback decision (they posted just yesterday, which is exactly the signal most worth seeing)
         const todayPeople = [...new Set((items ?? []).flatMap((i) => i.people ?? []).map(String))];
         const db2 = openArchive(cfg);
         // It has to cover >= 6 months of history, so the window is derived from months (rather than taking only 30 days)
@@ -406,7 +407,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       log.warn(`dormant section failed (report unaffected): ${e.message}`);
     }
 
-    // Follow-by-person: items that match a watch target get their own block. What the user has in mind
+    // Follow-by-person: items that match a followed person get their own block. What the user cares about
     // is people, so "what did these 20 people do today" is far more useful than "what did 33 sources fetch".
     const followMatched = [];
     try {
@@ -452,9 +453,9 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     const file = saveReport(cfg, { markdown, mode, date });
     log.info(`report saved: ${file}`);
 
-    // Archive: incremental writes into SQLite (idempotent on item id, so a rerun/backfill never inflates
+    // Archive: incremental writes into SQLite (idempotent on item id, so a rerun or backfill never inflates
     // the chart numbers).
-    // A failure must never affect this run — the archive exists for "wanting to look at trends later",
+    // A failure must never affect this run — the archive exists for "wanting to look at trends later";
     // it is not a precondition for running.
     try {
       const ar = archiveRun(cfg, {
@@ -521,7 +522,7 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     };
 
     // 7) The self-check goes **last**: fetch everything first, produce the report first, and only then
-    //    diagnose just the sources that came back abnormal (the ones that are fine are not touched at all).
+    //    diagnose only the sources that came back abnormal (the healthy ones are not touched at all).
     //    The diagnostic links go out together with the notification.
     const adviceFiles = [];
     runState.step = 'diagnosing';

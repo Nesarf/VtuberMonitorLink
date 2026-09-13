@@ -1,15 +1,15 @@
-// people.js — follow people, not sources / follow people, not sources
+// people.js — follow people, not sources
 //
 // Why this layer is needed: a source is a **collection unit**, not what the user actually cares about --
 // what the user has in mind is "I want to watch these 20 people". Previously that could only be approximated by
-// "turning on all 20 sources", which meant missing the people you care about and flooding on the ones you do not.
+// "turning on all 20 sources", which meant missing the people you care about and getting flooded with the ones you do not.
 //
 // This layer has exactly three responsibilities:
 //   1) bind a "person" to where that person's accounts live (bilibili uid / X handle / YouTube channel / Twitch)
 //   2) attribute intel items to people **locally** (pure string matching, no network, no LLM)
 //   3) aggregate output per person (intel stream / export / notification text)
 //
-// Two key points of the matching rules (both written this way only after stepping on the pitfalls):
+// Two key points of the matching rules (both of them learnt the hard way):
 //   · **There is no word boundary in the CJK script**, so a CJK alias must use substring matching (otherwise a Chinese
 //     name would never match a title that wraps it in corner brackets, which is the usual shape of a post title)
 //   · **Latin text must require word boundaries**, otherwise `Mika` hits `Mikado` and `Rei` hits `Reimu` --
@@ -118,8 +118,9 @@ export function buildMatchers(people) {
  *
  * Why not simply String(field): `sourceName` in an item is a localized object `{ zh, en }`, and
  * `String({zh,en})` equals `"[object Object]"` -- that would make the source name, the strongest attribution
- * signal, **completely useless** on production data, without raising any error (only the absurd case of matching
- * an object-as-alias would hit). So objects have to be flattened into a list of candidate strings.
+ * signal, **completely useless** on production data, without raising any error (the only thing that would
+ * ever hit is the absurd case of matching an object as an alias). So objects have to be flattened into a list
+ * of candidate strings.
  */
 function fieldStrings(value) {
   if (!value) return [];
@@ -164,7 +165,8 @@ export function annotateItems(items, people) {
 
 /**
  * Aggregate per person: each person's item count, most recent item, and the items themselves.
- * Sorting uses "most recent appearance" rather than item count -- what the follow list needs to show first is always "who just moved".
+ * Sorting uses "most recent appearance" rather than item count -- the follow list always needs to surface
+ * "who was active most recently" at the top.
  */
 export function feedByPerson(items, people, { id = null, limit = 100 } = {}) {
   const matchers = buildMatchers(people);
@@ -210,8 +212,8 @@ export function suggestFromPeople(entities, people, { minCount = 2, limit = 30 }
  *
  * This **must** stay aligned with PLATFORM_URLS in vdb.js (rather than a hand-written short list):
  * VDB import writes the accounts from a record into links verbatim, so if this allowlist only knows
- * bilibili/twitter/youtube/twitch, then at import time the accounts of everyone outside twitch (weibo, acfun,
- * niconico, showroom, pixiv, afdian…) would be **silently dropped** --
+ * bilibili/twitter/youtube/twitch, then at import time the accounts of everyone who is not on one of those four
+ * (weibo, acfun, niconico, showroom, pixiv, afdian…) would be **silently dropped** --
  * and "the people a user follows are not necessarily on bilibili" is exactly what this layer has to support.
  */
 const LINK_KEYS = Object.keys(PLATFORM_URLS);

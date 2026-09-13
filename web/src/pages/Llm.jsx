@@ -23,7 +23,7 @@ const NEEDS = [
 ];
 
 export default function Llm() {
-  const { t } = useI18n();
+  const { t, tn } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [presets, setPresets] = useState([]);
   const [msg, setMsg] = useState('');
@@ -243,13 +243,13 @@ export default function Llm() {
           <div className="field" style={{ flex: '0 0 240px' }}>
             <label>{t('costToday')}</label>
             <div>
-              <b>{cost?.today?.tokens ?? 0}</b> tokens · {cost?.today?.calls ?? 0} {t('costCalls')}
+              <b>{cost?.today?.tokens ?? 0}</b> tokens · {tn('costCalls', cost?.today?.calls ?? 0)}
             </div>
           </div>
           <div className="field" style={{ flex: '0 0 240px' }}>
             <label>{t('costTotal')}</label>
             <div>
-              <b>{cost?.total?.tokens ?? 0}</b> tokens · {cost?.total?.calls ?? 0} {t('costCalls')}
+              <b>{cost?.total?.tokens ?? 0}</b> tokens · {tn('costCalls', cost?.total?.calls ?? 0)}
             </div>
           </div>
           <div className="field" style={{ flex: '0 0 200px' }}>
@@ -278,7 +278,7 @@ export default function Llm() {
             {cost.budget.remaining !== null ? ` ${t('costRemaining')} ${cost.budget.remaining}` : ''}
           </div>
         ) : null}
-        {cost?.unknown ? <div className="small muted">{cost.unknown} {t('costUnknown')}</div> : null}
+        {cost?.unknown ? <div className="small muted">{tn('costUnknown', cost.unknown)}</div> : null}
         {(cost?.models ?? []).length ? (
           <div className="small muted" style={{ marginTop: 6 }}>
             {cost.models.slice(0, 4).map((m) => `${m.key}: ${m.tokens}`).join(' · ')}

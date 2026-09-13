@@ -35,7 +35,13 @@ const t = (name, fn) => {
 };
 
 /** The keys the UI renders as "number + noun" (the ones migrated to tn()). */
-const COUNT_KEYS = ['items', 'groupDays', 'groupPeopleUnit', 'vdbGroups', 'outsideRange'];
+const COUNT_KEYS = [
+  'items', 'groupDays', 'groupPeopleUnit', 'vdbGroups', 'outsideRange',
+  // plain "count + noun" labels: agency members, followed people, LLM calls, search hits,
+  // run alerts, cookie counts (with and without a session) and follower counts
+  'groupMembers', 'groupPeopleCount', 'costCalls', 'matches', 'alerts',
+  'cookieCount', 'cookieCountWithSession', 'followersCount',
+];
 const VALID_CATEGORIES = new Set(['zero', 'one', 'two', 'few', 'many', 'other']);
 
 process.stdout.write('\nplural: category selection\n');
@@ -224,6 +230,78 @@ t('English 1 item / 2 items (this also fixes the old `1 items`)', () => {
   const table = PLURALS['en-US'];
   assert.equal(countLabel(pickPlural(table, 'items', 'en-US', 1), 1), '1 item');
   assert.equal(countLabel(pickPlural(table, 'items', 'en-US', 2), 2), '2 items');
+});
+
+t('Russian count labels take the right case: 1 участник / 2 участника / 5 участников', () => {
+  const table = PLURALS['ru-RU'];
+  const at = (key, n) => countLabel(pickPlural(table, key, 'ru-RU', n), n);
+  assert.equal(at('groupMembers', 1), '1 участник');
+  assert.equal(at('groupMembers', 2), '2 участника');
+  assert.equal(at('groupMembers', 5), '5 участников');
+  assert.equal(at('groupMembers', 21), '21 участник');
+  assert.equal(at('groupMembers', 22), '22 участника');
+  assert.equal(at('costCalls', 1), '1 вызов');
+  assert.equal(at('costCalls', 3), '3 вызова');
+  assert.equal(at('costCalls', 5), '5 вызовов');
+  assert.equal(at('matches', 1), '1 совпадение');
+  assert.equal(at('matches', 2), '2 совпадения');
+  assert.equal(at('matches', 5), '5 совпадений');
+  assert.equal(at('followersCount', 1), '1 фанат');
+  assert.equal(at('followersCount', 5), '5 фанатов');
+});
+
+t('Arabic uses the dual for 2 and the accusative singular from 11 up', () => {
+  const table = PLURALS['ar-SA'];
+  const at = (key, n) => countLabel(pickPlural(table, key, 'ar-SA', n), n);
+  assert.equal(at('groupMembers', 1), '1 عضو');
+  assert.equal(at('groupMembers', 2), '2 عضوان');
+  assert.equal(at('groupMembers', 3), '3 أعضاء');
+  assert.equal(at('groupMembers', 11), '11 عضوًا');
+  assert.equal(at('groupMembers', 100), '100 عضو');
+  assert.equal(at('followersCount', 2), '2 متابعان');
+  assert.equal(at('followersCount', 3), '3 متابعين');
+  assert.equal(at('followersCount', 11), '11 متابعًا');
+  assert.equal(at('cookieCountWithSession', 2), '2 عنصران (بما في ذلك SESSDATA)');
+});
+
+t('Polish masculine-personal members take the genitive plural after 2-4; Serbian followers inflect', () => {
+  const pl = PLURALS['pl-PL'];
+  const atPl = (key, n) => countLabel(pickPlural(pl, key, 'pl-PL', n), n);
+  assert.equal(atPl('groupMembers', 1), '1 członek');
+  assert.equal(atPl('groupMembers', 2), '2 członków');
+  assert.equal(atPl('groupMembers', 5), '5 członków');
+  assert.equal(atPl('groupMembers', 21), '21 członków');
+  assert.equal(atPl('costCalls', 2), '2 wywołania');
+  assert.equal(atPl('costCalls', 5), '5 wywołań');
+  assert.equal(atPl('alerts', 3), '3 alerty');
+  const sr = PLURALS['sr-RS'];
+  const atSr = (key, n) => countLabel(pickPlural(sr, key, 'sr-RS', n), n);
+  assert.equal(atSr('followersCount', 1), '1 пратилац');
+  assert.equal(atSr('followersCount', 2), '2 пратиоца');
+  assert.equal(atSr('followersCount', 5), '5 пратилаца');
+  assert.equal(atSr('matches', 2), '2 поготка');
+  assert.equal(atSr('matches', 5), '5 погодака');
+});
+
+t('the three keys whose value already embeds {n} keep the number inside the phrase in every locale', () => {
+  const keys = ['cookieCount', 'cookieCountWithSession', 'followersCount'];
+  const bad = [];
+  for (const [code, table] of Object.entries(PLURALS)) {
+    const cats = new Intl.PluralRules(code).resolvedOptions().pluralCategories;
+    for (const key of keys) {
+      for (const c of cats) {
+        const raw = table[`${key}_${c}`];
+        if (typeof raw !== 'string' || !raw.includes('{n}')) bad.push(`${code} ${key}_${c}`);
+      }
+    }
+  }
+  assert.equal(bad.length, 0, bad.slice(0, 8).join('; '));
+  const en = PLURALS['en-US'];
+  assert.equal(countLabel(pickPlural(en, 'cookieCount', 'en-US', 1), 1), '1 cookie');
+  assert.equal(countLabel(pickPlural(en, 'cookieCount', 'en-US', 3), 3), '3 cookies');
+  assert.equal(countLabel(pickPlural(en, 'cookieCountWithSession', 'en-US', 3), 3), '3 cookies (incl. SESSDATA)');
+  assert.equal(countLabel(pickPlural(en, 'followersCount', 'en-US', 1), 1), '1 follower');
+  assert.equal(countLabel(pickPlural(en, 'followersCount', 'en-US', 3), 3), '3 followers');
 });
 
 t('Chinese/Japanese unchanged: number prepended, no doubled number', () => {

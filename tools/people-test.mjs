@@ -54,7 +54,7 @@ const people = [
 ];
 
 process.stdout.write('\npeople: alias extraction\n');
-t('name / English name / aliases / accounts / uid all get collected', () => {
+t('name / English name / aliases / accounts / uid are all collected', () => {
   const a = aliasesOf(people[0]).map((x) => x.value);
   assert.ok(a.includes('嘉然'));
   assert.ok(a.includes('Diana'));
@@ -79,14 +79,14 @@ t('a CJK name matches inside a title (even with no word boundary)', () => {
   assert.equal(r.hits[0].alias, '嘉然');
 });
 
-t('a Latin name is not falsely matched when wrapped by another word', () => {
+t('a Latin name matches as a whole word, not as a substring (the standalone "Mika" hits, "Reimu" does not)', () => {
   assert.deepEqual(matchItem({ title: 'Mikado is not Mika' }, buildMatchers([{ id: 'm', name: 'Mika', enabled: true }])).ids, ['m']);
-  // "Reimu" contains "Rei", but it is a whole word, so it must not count as a hit
+  // "Reimu" contains "Rei" only as a substring, never as a whole word, so it must not count as a hit
   const r = matchItem({ title: 'Reimu Hakurei 的直播' }, M);
   assert.ok(!r.ids.includes('rei'), 'Reimu must not match Rei');
 });
 
-t('case-insensitive', () => {
+t('matching is case-insensitive', () => {
   assert.deepEqual(matchItem({ title: 'REI 新曲发布' }, M).ids, ['rei']);
   assert.deepEqual(matchItem({ title: 'diana 生日' }, M).ids, ['jaran']);
 });
@@ -95,7 +95,7 @@ t('a kana alias can match', () => {
   assert.deepEqual(matchItem({ title: 'レイの3D披露' }, M).ids, ['rei']);
 });
 
-t('a uid matches inside a URL field (the source-page kind)', () => {
+t('a uid matches inside a URL field (a source-page URL)', () => {
   const r = matchItem({ title: '某条动态', url: 'https://space.bilibili.com/672328094/dynamic' }, M);
   assert.deepEqual(r.ids, ['jaran']);
   assert.equal(r.hits[0].field, 'url');
@@ -118,7 +118,7 @@ t('two people in one item -> both count as hits, each carrying evidence', () => 
   }
 });
 
-t('the same person is recorded only once per field (no flooding)', () => {
+t('the same person is recorded only once per field (no repeated hits)', () => {
   const r = matchItem({ title: '嘉然 嘉然 嘉然' }, M);
   assert.equal(r.hits.filter((h) => h.field === 'title').length, 1);
 });
@@ -171,7 +171,9 @@ t('per-person aggregation: count, most recent time, sorted by recency', () => {
   assert.equal(rei.count, 2);
   assert.equal(jaran.lastAt, '2026-09-07T10:00:00Z');
   // jaran and rei share the same most recent time -> then by count; if both are equal the order does not matter, but both must be in the list
-  assert.ok(feed.findIndex((f) => f.person.id === 'off') >= 0 || true, 'a watch target with no hits must appear in the list too (count 0)');
+  // `... || true` made this vacuous (it could never fail); the point is that a followed person with
+  // no hits is still *in* the list, which the next two lines now actually check.
+  assert.ok(feed.some((f) => f.person.id === 'off'), 'a followed person with no hits must appear in the list too (count 0)');
   const off = feed.find((f) => f.person.id === 'off');
   assert.equal(off.count, 0, 'someone with no activity stays in the list, just with count 0');
 });
@@ -250,7 +252,7 @@ t('aliases are generated from links on **any platform** (not only bilibili)', ()
   assert.ok(vals.includes('space.bilibili.com/672328094'), 'the bilibili link (the existing behaviour must not be lost)');
 });
 
-t('the alias source records the platform (the UI has to be able to say "why is this one his")', () => {
+t('the alias source records the platform (so the UI can explain why an item belongs to this person)', () => {
   const p = { id: 'p2', name: '乙', links: { twitch: 'abc_tv' } };
   const hit = aliasesOf(p).find((a) => a.value === 'abc_tv');
   assert.equal(hit.source, 'twitch-id');

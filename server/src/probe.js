@@ -4,15 +4,16 @@
 // are computed here.
 //
 // The two egresses do not measure the same layer, and that has to be stated honestly:
-//   direct —— N **TCP handshakes** to the target host, with the handshake time taken as the RTT.
-//             This is the quantity closest to ping, and it also honestly reflects "can this site be
-//             reached on a direct connection at all".
-//   proxy  —— N **HTTP requests** through the local proxy, taking the time to first byte (TTFB).
-//             Because a TCP handshake to the proxy does not equal reaching the target site, only
-//             actually sending a request proves anything.
+//   direct: N **TCP handshakes** to the target host, taking the handshake time as the RTT.
+//           This is the quantity closest to ping, and it also honestly reflects "can this site be
+//           reached on a direct connection at all".
+//   proxy:  N **HTTP requests** through the local proxy, taking the time to first byte (TTFB).
+//           Because a TCP handshake to the proxy does not equal reaching the target site, only
+//           actually sending a request proves anything.
 //
 // The "loss rate" of both is **failures / total attempts** (timeouts, unreachable, non-2xx/3xx all
-// count as failures), not ICMP loss —— the wording and hints in the UI follow that and do not pretend to be ping.
+// count as failures), not ICMP loss, so the wording and hints in the UI follow that and do not
+// pretend to be ping.
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -119,9 +120,9 @@ function hostPortOf(url) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Probe both egresses of one URL.
+ * Probe the egresses of one URL.
  * @param {string} url
- * @param {{cfg:object, samples?:number, timeoutMs?:number|number, modes?:('direct'|'proxy')[]}} opts
+ * @param {{cfg:object, samples?:number, timeoutMs?:number, modes?:('direct'|'proxy'|'tor')[]}} opts
  */
 export async function probeUrl(url, opts = {}) {
   const { cfg } = opts;
@@ -154,7 +155,7 @@ export async function probeUrl(url, opts = {}) {
   }
 
   // Tor egress: in the UI every source can have its egress set to Tor (the dropdown on the Sources page has it),
-  // but probing previously had **no such tier** —— so for a source set to Tor the numbers measured were the
+  // but probing previously had **no such tier**, so for a source set to Tor the numbers measured were the
   // direct/proxy ones, meaning the latency of the wrong egress was used to decide which egress to use.
   // Going over SOCKS is a TCP tunnel, but the metric is still "time to first byte".
   if (modes.includes('tor')) {
@@ -172,8 +173,8 @@ export async function probeUrl(url, opts = {}) {
 
   // Produce a "which egress fits better" conclusion that the UI can turn straight into a hint.
   // There can now be 2~3 egresses (direct / proxy / Tor), so this was changed to "pick the fastest of
-  // every egress actually measured" and to name the ones that do not work —— the old two-way comparison
-  // would miss one route once Tor was added.
+  // every egress actually measured" and to name the ones that do not work, since the old two-way
+  // comparison would miss one route once Tor was added.
   const d = out.direct;
   const p = out.proxy;
   const tor = out.tor;
@@ -236,7 +237,7 @@ export function updateCache(cfg, entries) {
   const cache = loadCache(cfg);
   for (const e of entries) cache[e.id] = e;
   saveCache(cfg, cache);
-  // Probe results are fed to the "automatic egress" verdict too, so every site grows the most suitable egress on its own
+  // Probe results are fed to the "automatic egress" verdict too, so each site works out the most suitable egress for itself
   try {
     for (const e of entries) recordProbe(cfg, { subject: e.subject ?? { id: e.id, name: e.name, url: e.url }, probe: e });
   } catch {
@@ -245,7 +246,7 @@ export function updateCache(cfg, entries) {
   return cache;
 }
 
-/** Is the cached result still fresh */
+/** Whether the cached result is still fresh */
 export function isFresh(entry, ttlMinutes = 30) {
   if (!entry?.at) return false;
   return Date.now() - Date.parse(entry.at) < ttlMinutes * 60_000;

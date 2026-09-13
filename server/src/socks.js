@@ -48,7 +48,7 @@ export function socksConnector(opts) {
     // undici's built-in connector does "https target -> tls.connect"; since we replaced it,
     // we have to add that step ourselves — skip it and the handshake still succeeds, but the plaintext request
     // gets written into port 443. The real symptom is `400 The plain HTTP request was sent to HTTPS port`,
-    // while the probe endpoint only says "port is open, but the exit check failed", which looks like a Tor problem (been there).
+    // while the probe endpoint only says "port is open, but the exit check failed", which looks like a Tor problem (we have been burned by this before).
     const wantsTls = options.protocol === 'https:' || options.secureEndpoint === true;
     const servername = options.servername ?? targetHost;
 
@@ -178,7 +178,7 @@ export function socksForPlaywright(socksUrl) {
 }
 
 /**
- * What arguments "one-click launch Tor" actually needs — extracted into a pure function so it can be asserted on.
+ * What arguments "one-click launch Tor" actually needs — extracted into a pure function so that its arguments can be asserted on.
  *
  * Why the exe cannot simply be spawned bare (the original implementation spawned it bare):
  *   1. Tor Browser's tor.exe **depends on its own torrc** (bridges, pluggable transports and the data directory all live there).

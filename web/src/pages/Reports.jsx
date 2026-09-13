@@ -7,7 +7,7 @@ import Charts from './Charts.jsx';
 import Share from './Share.jsx';
 
 export default function Reports() {
-  const { t } = useI18n();
+  const { t, tn } = useI18n();
   const [list, setList] = useState(null);
   const [cur, setCur] = useState(null);
   const [content, setContent] = useState('');
@@ -124,7 +124,7 @@ export default function Reports() {
                       {h.name}
                     </button>{' '}
                     <span className="muted small">
-                      {h.count} {t('matches')}
+                      {tn('matches', h.count)}
                     </span>
                   </summary>
                   <ul className="muted small">

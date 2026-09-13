@@ -4,19 +4,19 @@
 //
 // This version fills in the three things that were genuinely missing:
 //
-//  1) **Quiet hours**. Pushing "Jaran is live today" at 3 a.m. is pointless —— but **dropping** it is
+//  1) **Quiet hours**. Pushing "Jaran is live today" at 3 a.m. is pointless -- but **dropping** it is
 //     worse, because the user never learns it happened. So notifications during quiet hours go into a
 //     **queue** and are flushed once quiet hours end.
 //     The cross-midnight window (23:00→08:00) is the most common shape and the easiest place to get
 //     it wrong: it cannot be written as `start <= t && t < end` (that window is never true for 23:00→08:00).
-//     Also "keeping time" has to be computed in the configured time zone —— when watching a JP agency
+//     Also "what time it is" has to be computed in the configured time zone -- when watching a JP agency
 //     your 23:00 is not their 23:00.
 //
 //  2) **Deduplication**. Pushing the same title again within a few hours is pure harassment (report titles are often the same).
 //
 //  3) **More channels**: DingTalk (needs an HMAC signature), WeCom, ntfy, Gotify, PushPlus, Slack.
 //     DingTalk's signature cannot be appended to the URL with plain `+` (base64 contains `+`/`/`),
-//     it must go through encodeURIComponent.
+//     so it has to go through encodeURIComponent.
 //
 // Everything still goes through netFetch, so it follows the proxy config (and can override it per target).
 import crypto from 'node:crypto';
@@ -146,7 +146,7 @@ export function sanitizeTarget(t = {}, i = 0) {
   return out;
 }
 
-/** Should this target fire for this event */
+/** Should this target fire for this event? */
 function shouldFire(target, { level }) {
   if (!target.enabled) return false;
   if (target.on === 'always') return true;
@@ -297,7 +297,7 @@ export function enqueue(cfg, log, payload, { reason, targetIds = null } = {}) {
     targetIds, // null = send to every target that should have fired at the time
   };
   q.push(item);
-  // Cap protection: a huge backlog is meaningless, so the most recent 200 are kept
+  // A cap on the backlog: keeping more than that would be meaningless, so the most recent 200 are kept
   const capped = q.slice(-200);
   writeJson(cfg, 'notify-queue.json', capped);
   log?.info(`queued: ${item.title} (${item.reason})`);
@@ -434,7 +434,7 @@ export function buildRequest(target, payload) {
   }
 }
 
-/** HTTP headers cannot contain CJK characters or newlines —— ntfy's Title goes in a header, so it must be encoded */
+/** HTTP headers cannot contain CJK characters or newlines -- ntfy's Title goes in a header, so it must be encoded */
 function encodeHeader(s) {
   const ascii = /^[\x20-\x7E]*$/.test(s);
   if (ascii) return s;
@@ -472,7 +472,7 @@ async function deliver(cfg, log, payload) {
         try {
           business = JSON.parse(text);
         } catch {
-          /* if it is not JSON, never mind */
+          /* if it is not JSON, that is fine here */
         }
         // Bark / ServerChan / DingTalk / WeCom / Feishu all express the result as 200 plus a business code
         const bad =
@@ -512,8 +512,8 @@ async function deliver(cfg, log, payload) {
 export async function notify(cfg, log, payload) {
   // Note: do **not** casually flush the queue here.
   // I originally wrote a `flushQueue(cfg, log).catch(() => {})` (without awaiting), and it ended up
-  // running only after the caller had already changed the config —— the quiet check uses the config of
-  // "the instant it runs", so a notification that had just been queued was flushed straight out again
+  // running only after the caller had already changed the config -- the quiet check uses the config as it
+  // is at the moment it runs, so a notification that had just been queued was flushed straight out again
   // (in the self-test this showed up as "delivered during quiet hours when it should not have been").
   // A flush must be awaited by the caller at a well-defined moment (at the end of every runner run, or
   // on a manual trigger).

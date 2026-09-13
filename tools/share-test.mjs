@@ -5,7 +5,7 @@
 // automation**. So this self-test focuses on:
 //   - a single-file HTML must have **zero external references** (the other side can open it offline / on an intranet)
 //   - every target that needs a login must report honestly what is missing instead of failing silently
-//   - speaking out must pass the confirmation gate + the state gate + the length gate, and leave an audit trail
+//   - posting must pass the confirmation gate + the state gate + the length gate, and leave an audit trail
 //   - an unverified feature must not be treated as available
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -103,13 +103,13 @@ t('the HTML has NO external references at all (it opens offline too)', () => {
   assert.ok(!/<link[^>]+stylesheet/i.test(html), 'it should not reference an external stylesheet');
 });
 
-t('the HTML escapes scripts inside the content (does not weaponize the reader browser)', () => {
+t('the HTML escapes scripts inside the content (so the reader\'s browser cannot run them)', () => {
   const html = toHtml(bundle);
   assert.ok(html.includes('&lt;script&gt;'), 'it should be escaped into entities');
   assert.ok(!html.includes('<script>alert(1)</script>'));
 });
 
-t('each of the three formats has the right mime and extension', () => {
+t('each of the four formats has the right mime and extension', () => {
   assert.equal(renderBundle(bundle, 'html').mime, 'text/html; charset=utf-8');
   assert.equal(renderBundle(bundle, 'md').ext, 'md');
   assert.equal(renderBundle(bundle, 'json').ext, 'json');
@@ -264,7 +264,7 @@ t('the audit file is JSONL (one record per line, easy to append to and parse aft
   for (const line of raw.trim().split('\n')) assert.doesNotThrow(() => JSON.parse(line));
 });
 
-t('a missing directory does not throw (returns false instead of crashing)', () => {
+t('a missing directory does not throw (it is created instead)', () => {
   const bad = { paths: { logsDir: path.join(tmp, 'a', 'b', 'c') } };
   assert.equal(appendAudit(bad, { action: 'x' }), true, 'it should create the directory');
   assert.equal(readAudit(bad, 5).length, 1);

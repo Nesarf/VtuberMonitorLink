@@ -60,7 +60,7 @@ function HBars({ rows, label, formatter }) {
 }
 
 export default function Charts() {
-  const { t } = useI18n();
+  const { t, tn } = useI18n();
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
   const [stat, setStat] = useState(null);
@@ -105,7 +105,7 @@ export default function Charts() {
       <h2>
         {t('chartsTitle')}
         <span className="muted small" style={{ marginLeft: 12 }}>
-          {t('chartsArchive')}: {stat?.items ?? 0} {t('peopleItems')} · {stat?.days ?? 0} {t('chartsDays')} · {stat?.sources ?? 0}{' '}
+          {t('chartsArchive')}: {tn('items', stat?.items ?? 0)} · {tn('groupDays', stat?.days ?? 0)} · {stat?.sources ?? 0}{' '}
           {t('sources')}
           {stat?.firstDay ? ` · ${stat.firstDay} → ${stat.lastDay}` : ''}
         </span>
@@ -127,7 +127,7 @@ export default function Charts() {
           >
             {[7, 30, 90, 180].map((d) => (
               <option key={d} value={d}>
-                {d} {t('chartsDays')}
+                {tn('groupDays', d)}
               </option>
             ))}
           </select>

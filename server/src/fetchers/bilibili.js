@@ -1,14 +1,14 @@
-// fetchers/bilibili.js — bilibili dynamics fetching
+// fetchers/bilibili.js — fetching bilibili dynamics
 //
-// Measured conclusions (they are why this file is written the way it is):
-//   - api.bilibili.com **works on a direct connection; going through a proxy is what gets you risk-controlled** (412 / -352).
+// Measured findings (they are why this file is written the way it is):
+//   - api.bilibili.com **works over a direct connection; going through a proxy is what triggers risk control** (412 / -352).
 //     So everything here uses net.js's direct mode, unless a source explicitly asks for a proxy.
 //   - A bare request gets blocked with 412; you first have to fetch buvid3/buvid4 (finger/spi) and send them as cookies.
-//   - x/polymer/web-dynamic/v1/feed/space (full dynamics with images) is risk-controlled extremely hard:
-//     without a login it is reliably -352; only reusing a login state gets it.
+//   - x/polymer/web-dynamic/v1/feed/space (full dynamics with images) has extremely strict risk control:
+//     without a login it reliably returns -352; only a reused login state gets it.
 //   - x/polymer/web-dynamic/v1/opus/feed/space (image + text dynamics) **needs no login and no wbi**,
 //     reliably returns 20 entries with the body / like count / opus link -- this is the main path.
-//   - Order for obtaining a login state: cookie carried by the source -> configured browser profile -> browser rendering as fallback.
+//   - Order of preference for a login state: cookie carried by the source -> configured browser profile -> browser rendering as a fallback.
 import { netFetch, resolveProxyMode } from '../net.js';
 import { wbiFetch } from '../wbi.js';
 
@@ -17,7 +17,7 @@ const UA =
 
 const API = 'https://api.bilibili.com';
 
-/** buvid bootstrap result, cached per process so that every source does not have to hit spi */
+/** buvid bootstrap result, cached per process so that individual sources do not each have to hit spi */
 let buvid = null;
 
 function baseHeaders(uid) {
@@ -105,7 +105,7 @@ export async function fetchBilibiliOpus(source, ctx) {
 
   if (!items.length && errors.length) throw new Error(`B 站风控拦截 / blocked: ${errors.join('; ')}`);
 
-  ctx.log?.info(`bilibili opus ${uid}: ${items.length} dynamics${errors.length ? ` (${errors[0]})` : ''}`);
+  ctx.log?.info(`bilibili opus ${uid}: ${items.length} entries${errors.length ? ` (${errors[0]})` : ''}`);
   return {
     ok: true,
     ext: 'json',
@@ -116,7 +116,7 @@ export async function fetchBilibiliOpus(source, ctx) {
   };
 }
 
-/** Follower count (for tracking audience growth) / follower count for growth tracking */
+/** Follower count (for tracking audience growth) */
 export async function fetchFollowers(uid, ctx, bv) {
   const b = bv ?? (await ensureBuvid(ctx));
   const r = await netFetch(
@@ -131,7 +131,7 @@ export async function fetchFollowers(uid, ctx, bv) {
 
 /**
  * Get one usable login state.
- * Order: cookie carried by the source -> read-only extraction from the configured browser profile -> give up.
+ * Order of preference: cookie carried by the source -> read-only extraction from the configured browser profile -> give up.
  * The extraction is the "copy the cookie store, then decrypt" route, so **it is fine for the browser to be open**.
  */
 export async function resolveLogin(source, ctx) {
@@ -141,7 +141,7 @@ export async function resolveLogin(source, ctx) {
   const { readBrowserCookies } = await import('../cookies.js');
   const r = await readBrowserCookies(profileDir, ['bilibili.com']);
   if (!r.ok) {
-    ctx.log?.info(`bilibili login unavailable / no login: ${r.error}`);
+    ctx.log?.info(`bilibili login unavailable: ${r.error}`);
     return { cookie: null, via: 'none', reason: r.error };
   }
   const hasSession = (r.names ?? []).includes('SESSDATA');
@@ -152,9 +152,9 @@ export async function resolveLogin(source, ctx) {
 /**
  * Normalize feed/space entries (images, relative time and video title included).
  *
- * Measured points:
+ * Measured findings:
  *   - features=itemOpusStyle is mandatory -- without it, a new-style image + text dynamic has major
- *     MAJOR_TYPE_DRAW with empty items and a null desc (the whole body is lost).
+ *     type MAJOR_TYPE_DRAW with empty items and a null desc (the whole body is lost).
  *     With it the type becomes MAJOR_TYPE_OPUS, the body sits in major.opus.summary.text,
  *     and the **image count and URLs are completely unchanged** (verified by comparison).
  *   - major.type is the field that actually discriminates (it.type is sometimes unreliable).
@@ -229,9 +229,9 @@ export async function fetchBilibiliDynamic(source, ctx) {
 
   if (login.cookie) {
     const bv = await ensureBuvid(ctx);
-    // WBI signature: this endpoint is risk-controlled extremely hard (measured: without a signature it is
-    // reliably -352), and "having a login state" is not enough -- the signature is what gets past risk
-    // control. The signature is appended to the query.
+    // WBI signature: this endpoint has extremely strict risk control (measured: without a signature it
+    // reliably returns -352), and "having a login state" is not enough -- the signature is what gets
+    // you past risk control. The signature is appended to the query.
     const url = `${API}/x/polymer/web-dynamic/v1/feed/space?host_mid=${encodeURIComponent(uid)}&timezone_offset=-480&platform=web&features=itemOpusStyle`;
     let j = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -263,7 +263,7 @@ export async function fetchBilibiliDynamic(source, ctx) {
       throw new Error(`B 站接口拒绝 / code=${j?.code} ${j?.message ?? ''}（cookie 可能已失效）`);
     }
   } else {
-    ctx.log?.warn(`bilibili has no login (${login.reason ?? 'unknown'}), going through browser rendering: ${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : 'with no profile configured this will most likely raise a slider captcha'}`);
+    ctx.log?.warn(`bilibili has no login (${login.reason ?? 'unknown'}), falling back to browser rendering${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : ': with no profile configured this will most likely raise a slider captcha'}`);
   }
 
   return fetchBilibiliDynamicRendered(source, ctx, login);
@@ -351,7 +351,7 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
       followers: await fetchFollowers(uid, ctx).catch(() => null),
     };
   } catch (err) {
-    // Reusing a profile requires that browser to be closed; translate Playwright's raw error into plain words
+    // Reusing a profile requires the browser to be closed, so translate Playwright's raw error into plain words
     const m = String(err?.message ?? '');
     if (/ProcessSingleton|is already (running|in use)|SingletonLock|profile.*lock/i.test(m)) {
       throw new Error(

@@ -48,15 +48,15 @@ t('daily poster: gap 1 day, last active is today', () => {
   assert.ok(b.activeDays >= 28, 'active days ' + b.activeDays);
 });
 
-t('monthly poster: gap about 30 days -> the tolerance range widens to their rhythm (not crushed by a small ceiling)', () => {
+t('monthly poster: a gap of about 30 days widens the tolerance to their own rhythm (the maxDays cap must not override it)', () => {
   const sparse = { '2026-01-05': 1, '2026-02-04': 1, '2026-03-06': 1 };
   const b = baselineOf(sparse, { now: NOW });
   assert.ok(b.gapDays >= 29 && b.gapDays <= 31, 'the gap should be about 30 days, actual ' + b.gapDays);
   const tol = toleranceDays(b, SILENCE_DEFAULTS);
-  assert.equal(tol, 75, '30 days x 2.5 = 75 days (maxDays=90 is only a fallback and must not crush a monthly poster to 21 days); actual ' + tol);
+  assert.equal(tol, 75, '30 days x 2.5 = 75 days (maxDays=90 is only a fallback and must not clamp a monthly poster down to 21 days); actual ' + tol);
 });
 
-t('only one day of records -> the rhythm cannot be estimated -> do not judge (rather no report than a wild one)', () => {
+t('a single day of records -> the rhythm cannot be estimated -> stay silent (better no report than a false alarm)', () => {
   const b = baselineOf({ '2026-03-29': 2 }, { now: NOW });
   assert.equal(b.gapDays, null);
   assert.equal(toleranceDays(b, SILENCE_DEFAULTS), null);
@@ -139,7 +139,7 @@ t('turning the switch off disables detection entirely', () => {
 
 process.stdout.write('\nsilence: agency-wide simultaneous quiet\n');
 
-t('3 of 4 members of one agency simultaneously quiet >= 5 days -> report an agency-level signal', () => {
+t('3 of 4 members of one agency quiet for >= 5 days at the same time -> an agency-level signal', () => {
   const res = detectSilence({
     byDay: {
       p1: daily({ until: '2026-03-24' }), // quiet for 6 days
@@ -196,14 +196,14 @@ t('people with no agency filled in do not take part in agency-level judgement (b
 
 process.stdout.write('\nsilence: misc\n');
 
-t('summary: agency level comes first when present, otherwise personal', () => {
+t('summary: the agency-level line comes first when present, otherwise the personal one', () => {
   const s = silenceSummary({ group: [{ agency: 'Box-A' }], person: [{ name: '甲' }], checked: 3 });
   assert.match(s, /agency-level quiet 1: Box-A/);
   assert.match(s, /personal silence 1: 甲/);
   assert.match(silenceSummary({ group: [], person: [], checked: 3 }), /all within the normal range/);
 });
 
-t('fetch members by agency; reverse-engineer the agency from an official source domain', () => {
+t('fetch members by agency; infer the agency domain from an official source URL', () => {
   assert.deepEqual(membersOfAgency(people, 'Box-A').map((p) => p.name), ['甲', '乙', '丙', '丁']);
   assert.equal(membersOfAgency(people, 'Box-B').length, 0);
   assert.equal(agencyFromSourceUrl('https://hololivepro.com/talents/'), 'hololivepro.com');

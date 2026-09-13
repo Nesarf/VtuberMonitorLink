@@ -1,6 +1,6 @@
 // groups-test.mjs — self-test for box-level (agency) aggregation
-// Aggregation is most afraid of "looking right": the day axis shifted by one slot, the same day
-// counted twice, people without an agency quietly dropped — any of those turns the heatmap and the
+// Aggregation is easy to break while still looking right: the day axis shifted by one slot, the same
+// day counted twice, people without an agency quietly dropped — any of those turns the heatmap and the
 // signals into fakes. Constructed timelines pin all of that down.
 import assert from 'node:assert/strict';
 import { agencyBlock, dayAxis, groupView } from '../server/src/groups.js';
@@ -44,7 +44,7 @@ t('day axis is ascending, includes today, and has the correct length', () => {
   assert.equal(dayAxis(1, '2026-03-30').length, 1);
 });
 
-process.stdout.write('\ngroups: a single box\n');
+process.stdout.write('\ngroups: a single agency\n');
 
 const byDay = {
   a1: span('2026-03-01', '2026-03-30'), // posts daily
@@ -65,7 +65,7 @@ t('each member daily count corresponds one-to-one with the day axis (one slot of
   assert.equal(a2.quietDays, 4);
 });
 
-t('levels follow each person own cadence: a daily poster quiet for 4 days is warn; someone with only one day of records is unknown', () => {
+t("levels follow each person's own cadence: a daily poster quiet for 4 days is warn; someone with only one day of records is unknown", () => {
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
   assert.equal(block.members.find((m) => m.id === 'a2').level, 'warn');
   assert.equal(block.members.find((m) => m.id === 'a1').level, 'ok');
@@ -81,19 +81,20 @@ t('a weekly poster quiet for 7 days is not anomalous (their own cadence is 7 day
   assert.equal(a3.level, 'ok', 'a weekly poster quiet for 7 days should not raise an alarm');
 });
 
-t('co-active days: only days with >= 2 active people count, and they name which people', () => {
+t('co-active days: only days with >= 2 active people count, and each one names who was active', () => {
   const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
   assert.ok(block.coActiveDays > 0);
   for (const c of block.coActive) {
     assert.ok(c.count >= 2, JSON.stringify(c));
     assert.equal(c.members.length, c.count);
   }
-  // nobody moves after 3-30: the last few days should have no co-active day
+  // a2's last post is 3-26 and nobody else is active after that, so the recent days hold only one
+  // person and cannot form a co-active day
   const last = block.coActive[0];
   assert.ok(last.day <= '2026-03-26', 'the most recent co-active day should be no later than 3-26, actual ' + last.day);
 });
 
-t('whole box quiet: the number of consecutive dead days at the tail of the axis (only a "signal" when there are enough members)', () => {
+t('whole agency quiet: the number of consecutive dead days at the tail of the axis (only a "signal" when there are enough members)', () => {
   const onlyOld = {
     a1: span('2026-03-01', '2026-03-20'),
     a2: span('2026-03-01', '2026-03-18'),
@@ -106,7 +107,7 @@ t('whole box quiet: the number of consecutive dead days at the tail of the axis 
   assert.match(block.groupSignal.reason, /整箱 3 人已经 10 天/);
 });
 
-t('most people quiet (but not everyone) -> a warn-level box signal; only one or two quiet -> no box signal', () => {
+t('most people quiet (but not everyone) -> a warn-level agency signal; only one or two quiet -> no agency signal', () => {
   const most = agencyBlock({
     agency: 'BOX',
     members: people.slice(0, 4),
@@ -126,10 +127,10 @@ t('most people quiet (but not everyone) -> a warn-level box signal; only one or 
     axis: dayAxis(30, '2026-03-30'),
     now: NOW,
   });
-  assert.equal(few.groupSignal, null, 'one person being quiet is normal; no box signal should appear');
+  assert.equal(few.groupSignal, null, 'one person being quiet is normal; no agency signal should appear');
 });
 
-t('too few members (<minMembers) -> no box signal', () => {
+t('too few members (<minMembers) -> no agency signal', () => {
   const block = agencyBlock({
     agency: 'BOX',
     members: people.slice(0, 2),
@@ -141,9 +142,9 @@ t('too few members (<minMembers) -> no box signal', () => {
   assert.equal(block.silent.length, 2, 'per-person silence is still reported');
 });
 
-process.stdout.write('\ngroups: multiple boxes\n');
+process.stdout.write('\ngroups: multiple agencies\n');
 
-t('blocked by agency, sorted by item count; people with no agency land in "ungrouped" instead of disappearing', () => {
+t('split into one block per agency, sorted by item count; people with no agency land in "ungrouped" instead of disappearing', () => {
   const view = groupView({ byDay, people, days: 30, now: NOW, endDay: '2026-03-30' });
   assert.deepEqual(view.groups.map((g) => g.agency), ['BOX', 'Other']);
   assert.ok(view.groups[0].totals.items >= view.groups[1].totals.items, 'sorted by item count descending');
@@ -161,7 +162,7 @@ t('an empty config does not blow up: 0 watch targets -> an empty view', () => {
   assert.equal(view.axis.length, 7);
 });
 
-t('the box-level per-day total equals the sum of its members for that day', () => {
+t('the agency-level per-day total equals the sum of its members for that day', () => {
   const view = groupView({ byDay, people, days: 10, now: NOW, endDay: '2026-03-30' });
   const box = view.groups.find((g) => g.agency === 'BOX');
   for (let i = 0; i < box.perDay.length; i++) {

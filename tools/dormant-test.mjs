@@ -43,7 +43,7 @@ t('either side of half a year (6 months by default): landing exactly on the thre
   assert.equal(isDormant({ lastDay: '2026-03-20', now: NOW }).dormant, true, '194 days ago is plainly dormant');
 });
 
-t('months is adjustable: set to 3 months, 100 days ago already counts', () => {
+t('the months threshold is adjustable: at 3 months, 100 days ago already counts', () => {
   assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 3 }).dormant, true);
   assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 6 }).dormant, false);
 });

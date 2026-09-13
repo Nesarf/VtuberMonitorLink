@@ -280,7 +280,7 @@ export default function People() {
         <div className="hint">{t('groupViewHint')}</div>
         {gv && gv.groups.length === 0 && (
           <p className="muted">
-            {t('groupNoAgency')} —— {gv.people} {t('groupPeopleCount')}
+            {t('groupNoAgency')} —— {tn('groupPeopleCount', gv.people)}
           </p>
         )}
         {(gv?.groups ?? []).map((g) => (
@@ -288,7 +288,7 @@ export default function People() {
             <div className="row" style={{ alignItems: 'baseline', gap: 10 }}>
               <b style={{ fontSize: 15 }}>{g.agency}</b>
               <span className="muted small">
-                {g.totals.members} {t('groupMembers')} · {t('groupActive7')} {g.activeLast7}/{g.totals.members} · {t('items')} {g.totals.items}
+                {tn('groupMembers', g.totals.members)} · {t('groupActive7')} {g.activeLast7}/{g.totals.members} · {t('items')} {g.totals.items}
               </span>
               {g.groupSignal && (
                 <span className={`chip ${g.groupSignal.level === 'high' ? 'alert' : 'optional'}`}>{g.groupSignal.reason}</span>
@@ -330,7 +330,7 @@ export default function People() {
         ))}
         {gv?.ungrouped && gv.ungrouped.totals.members > 0 && (
           <div className="muted small" style={{ marginTop: 8 }}>
-            {t('groupUngrouped')}: {gv.ungrouped.totals.members} {t('groupPeopleCount')}（{t('groupUngroupedHint')}）
+            {t('groupUngrouped')}: {tn('groupPeopleCount', gv.ungrouped.totals.members)}（{t('groupUngroupedHint')}）
           </div>
         )}
       </section>
@@ -365,7 +365,7 @@ export default function People() {
                     {linked(p) ? <div className="muted small">{linked(p)}</div> : null}
                   </td>
                   <td style={{ width: 90 }} className={p.stats?.count ? 'ok-text' : 'muted small'}>
-                    {p.stats?.count ?? 0} {t('peopleItems')}
+                    {tn('items', p.stats?.count ?? 0)}
                   </td>
                   <td style={{ width: 170 }} className="muted small">
                     {p.stats?.lastAt ? fmtDateTime(p.stats.lastAt) : '—'}

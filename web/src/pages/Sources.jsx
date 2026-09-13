@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
+import { Inline } from '../markdown.jsx';
 
 const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '' };
 
@@ -210,7 +211,7 @@ export default function Sources() {
               <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
                 {problems.map((p) => (
                   <li key={p.id}>
-                    <b>{p.label}</b> — {p.hint ?? (p.lastRunOk === false ? '上次运行失败' : t('verdict_unknown'))}
+                    <b>{p.label}</b> — {p.hint ?? (p.lastRunOk === false ? t('lastRunFailed') : t('verdict_unknown'))}
                   </li>
                 ))}
               </ul>
@@ -340,7 +341,7 @@ export default function Sources() {
                         {!s.proxy || s.proxy === 'auto' ? (
                           <div className="small muted" title={eg?.[s.id]?.reason ?? ''} style={{ maxWidth: 220, marginTop: 4 }}>
                             {eg?.[s.id]
-                              ? `${eg[s.id].mode === 'direct' ? '直连' : eg[s.id].mode === 'proxy' ? '代理' : 'Tor'} · ${eg[s.id].confidence === 'high' ? '已判定' : '试用中'}`
+                              ? `${eg[s.id].mode === 'direct' ? t('directEgress') : eg[s.id].mode === 'proxy' ? t('proxyEgress') : t('torEgress')} · ${eg[s.id].confidence === 'high' ? t('egressSettled') : t('egressTrial')}`
                               : t('egressNotYet')}
                           </div>
                         ) : (
@@ -402,7 +403,7 @@ export default function Sources() {
           </div>
           <div className="field">
             <label>{t('sourceName')}</label>
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="某某的博客" />
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('customNamePh')} />
           </div>
           <div className="field" style={{ flex: '0 0 220px' }}>
             <label>{t('fetchKind')}</label>
@@ -465,7 +466,7 @@ export default function Sources() {
           {t('addCustomSource')}
         </button>
         <div className="hint" style={{ marginTop: 8, marginBottom: 0 }}>
-          自检在**每次运行的最后**执行：先抓完、先出报告，最后只对出异常的来源做诊断（能连通就完全不打扰）。也可以随时在上面的行里手动点「自检」。
+          <Inline text={t('selfCheckHint')} />
         </div>
       </section>
     </>

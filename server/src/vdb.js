@@ -5,11 +5,11 @@
 //   { "name": { "cn": "<name in Chinese>", "en": "Diana" },
 //     "accounts": { "bilibili": "672328094", "weibo": "7595006312" },
 //     "group": "A-SOUL" }
-// i.e. exactly the dimension we were missing: **agency (box)**, plus multilingual names and
+// i.e. exactly the dimension we were missing: **agency (group)**, plus multilingual names and
 // per-platform accounts.
 //
 // Why "one request for the whole database" instead of calling the API per record:
-//   the whole database tarball is only ~0.54MB (10035 records), one codeload request, a second or two.
+//   the whole database tarball is only ~0.54MB (10035 records): one codeload request, a second or two.
 //   Calling the GitHub API record by record would take thousands of requests, eat quota, and might
 //   get rate-limited — and it is noisier for the user too.
 //
@@ -67,7 +67,7 @@ export const PLATFORM_URLS = {
 };
 
 function cacheDir(cfg) {
-  // Runtime dir: a sibling of reports/feeds, so it enters neither the repo nor a release package
+  // Runtime dir: a sibling of reports/feeds, so it never ends up in the repo or in a release package
   return path.join(resolveDir(cfg, 'feedsDir'), '..', 'vdb');
 }
 
@@ -75,7 +75,7 @@ function indexPath(cfg) {
   return path.join(cacheDir(cfg), 'index.json');
 }
 
-/** Normalise one VDB record / normalise one record */
+/** Normalise one VDB record */
 export function parseRecord(raw, file = '') {
   if (!raw || typeof raw !== 'object') return null;
   const names = [];
@@ -86,7 +86,7 @@ export function parseRecord(raw, file = '') {
     if (!s) return;
     if (!names.includes(s)) names.push(s);
   };
-  // Whichever language `default` points at becomes the primary name; otherwise cn → jp → en order
+  // Whichever language `default` points at becomes the primary name; otherwise the cn → jp → en order applies
   const pref = typeof n.default === 'string' ? n[n.default] : null;
   push(pref);
   for (const k of ['cn', 'jp', 'en', 'kr', 'tw']) push(n[k]);
@@ -186,7 +186,7 @@ export function loadCachedIndex(cfg) {
 
 /**
  * Search: names (any language, including extra aliases) and account ids/links on **any platform**
- * both match. That way "I only remember his name on twitch" still finds him.
+ * both match -- so "I only remember his name on twitch" still finds him.
  */
 export function searchIndex(index, query, { limit = 20, group = null } = {}) {
   const q = String(query ?? '').trim().toLowerCase();

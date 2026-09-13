@@ -1,9 +1,9 @@
 // cost.js — LLM usage accounting / token accounting
 //
 // Why keep books: this tool spends its money on the LLM (each analysis round + feature
-// extraction + image tagging), and before this **the UI showed no usage at all** —
-// `analyze.js` did bring back `usage`, but nobody aggregated it, so "how much did this week
-// cost" could only be guessed. The longer it runs, the more this number is needed.
+// extraction + image tagging), and before this **the UI showed no usage at all**. `analyze.js`
+// did return `usage`, but nothing aggregated it, so "how much did this week cost" could only be
+// guessed. The longer it runs, the more this number is needed.
 //
 // Two deliberate restraints in the design:
 //   1. Only record **what can be seen**: paths where usage is unavailable (the model returned
@@ -23,7 +23,7 @@ function costPath(cfg) {
   return path.join(resolveDir(cfg, 'logsDir'), FILE);
 }
 
-/** Record one usage entry (one per run). A bad line doesn't affect the others — reads are tolerant line by line. */
+/** Record one usage entry (one per run). A bad line does not affect the others, because reads are tolerant line by line. */
 export function recordUsage(cfg, entry) {
   const p = costPath(cfg);
   const row = {
@@ -86,7 +86,7 @@ const dayOf = (v) => new Date(v).toISOString().slice(0, 10);
 
 /**
  * Summary: today / per day / per model.
- * Note that known=false rows are counted separately — "usage unavailable" and "usage was 0"
+ * Note that rows with known=false are counted separately — "usage unavailable" and "usage was 0"
  * are two different things.
  */
 export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
@@ -125,8 +125,8 @@ export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
 }
 
 /**
- * Budget status. `dailyTokens` of 0 (or unset) = no limit.
- * Only **known** usage takes part in the judgement (the unknown ones can't, and that is stated
+ * Budget status. A `dailyTokens` of 0 (or unset) = no limit.
+ * Only **known** usage takes part in the judgement (unknown rows cannot, and that is stated
  * in the return value).
  */
 export function budgetStatus(cfg, summary, { now = new Date() } = {}) {
@@ -148,7 +148,7 @@ export function budgetStatus(cfg, summary, { now = new Date() } = {}) {
   };
 }
 
-/** One-line summary, for logs and the UI */
+/** One-line summary, read by the logs and passed through /api/cost to the UI */
 export function costSummary(summary, budget) {
   const parts = [`今日 ${summary.today.tokens} tokens / ${summary.today.calls} 次`];
   if (budget?.limit) parts.push(`预算 ${budget.limit}（${Math.round(budget.pct * 100)}%）`);

@@ -301,7 +301,7 @@ export default function Intel({ layout }) {
                 setBusy(true);
                 try {
                   const r = await api.extractFeatures();
-                  setErr(r.ok ? '' : `特征抽取：${r.error}`);
+                  setErr(r.ok ? '' : `${t('featuresShort')}: ${r.error}`);
                   if (r.ok) await load();
                 } catch (e) {
                   setErr(e.message);
@@ -390,8 +390,7 @@ export default function Intel({ layout }) {
                 {w.growth && (
                   <span className={w.growth.delta >= 0 ? 'delta-up' : 'delta-down'}>
                     {' '}
-                    粉丝 {w.growth.delta >= 0 ? '+' : ''}
-                    {w.growth.delta}
+                    {tn('followersCount', (w.growth.delta >= 0 ? '+' : '') + w.growth.delta)}
                   </span>
                 )}
               </li>

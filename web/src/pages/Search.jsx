@@ -210,7 +210,7 @@ export default function Search({ layout }) {
           <span className="muted small">{t('tagsInUse')}:</span>
           {tags.length === 0 ? <span className="muted small">{t('noTags')}</span> : null}
           {tags.map((tg) => (
-            <button key={tg} className="chip alert" onClick={() => toggleTag(tg)} title="点击移除">
+            <button key={tg} className="chip alert" onClick={() => toggleTag(tg)} title={t('clickToRemove')}>
               {tg} ✕
             </button>
           ))}
@@ -276,7 +276,7 @@ export default function Search({ layout }) {
                 }}
               >
                 {e.name} <b>{e.count}</b>
-                {e.indie ? ' · 个人势' : ''}
+                {e.indie ? t('indieTag') : ''}
               </button>
             ))}
           </div>

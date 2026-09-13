@@ -270,7 +270,7 @@ export default function Watch() {
               {data.kinds.map((k) => (
                 <option key={k.id} value={k.id}>
                   {k[lang] ?? k.zh}
-                  {k.login === 'required' ? ' · 需登录' : ''}
+                  {k.login === 'required' ? t('loginRequiredTag') : ''}
                 </option>
               ))}
             </select>
@@ -305,7 +305,7 @@ export default function Watch() {
             </div>
             <div className="field">
               <label>{t('ignorePatterns')}</label>
-              <input value={form.ignorePatterns} onChange={(e) => setForm({ ...form, ignorePatterns: e.target.value })} placeholder="一行一个正则，命中的行会被忽略" />
+              <input value={form.ignorePatterns} onChange={(e) => setForm({ ...form, ignorePatterns: e.target.value })} placeholder={t('ignorePatternsPh')} />
             </div>
           </div>
         )}
@@ -318,7 +318,7 @@ export default function Watch() {
             </div>
             <div className="field">
               <label>{t('pageTitle')}</label>
-              <input value={form.page} onChange={(e) => setForm({ ...form, page: e.target.value })} placeholder="条目标题" />
+              <input value={form.page} onChange={(e) => setForm({ ...form, page: e.target.value })} placeholder={t('watchPagePh')} />
             </div>
           </div>
         )}
@@ -407,8 +407,8 @@ export default function Watch() {
                       <>
                         {tg.baseline.kind}
                         {tg.baseline.revid ? ` · revid ${tg.baseline.revid}` : ''}
-                        {typeof tg.baseline.follower === 'number' ? ` · 粉丝 ${tg.baseline.follower}` : ''}
-                        {typeof tg.baseline.ids === 'number' ? ` · ${tg.baseline.ids} 条` : ''}
+                        {typeof tg.baseline.follower === 'number' ? ` · ${tn('followersCount', tg.baseline.follower)}` : ''}
+                        {typeof tg.baseline.ids === 'number' ? ` · ${tn('items', tg.baseline.ids)}` : ''}
                         <br />
                         {hsDate(tg.baseline.at)}
                       </>
@@ -453,7 +453,7 @@ export default function Watch() {
                 <details key={i} open={i === 0}>
                   <summary>
                     <span className="muted small">{hsDate(h.at)}</span> · {h.summary}
-                    {h.growth ? <span className={h.growth.delta >= 0 ? 'delta-up' : 'delta-down'}> 粉丝 {h.growth.delta >= 0 ? '+' : ''}{h.growth.delta}</span> : null}
+                    {h.growth ? <span className={h.growth.delta >= 0 ? 'delta-up' : 'delta-down'}> {tn('followersCount', (h.growth.delta >= 0 ? '+' : '') + h.growth.delta)}</span> : null}
                   </summary>
                   {(h.events ?? []).map((e, j) => (
                     <div className="event" key={j}>
@@ -463,7 +463,7 @@ export default function Watch() {
                         {typeof e.delta === 'number' && e.delta !== 0 ? <span className="muted small"> Δ {e.delta > 0 ? '+' : ''}{e.delta}</span> : null}
                         {e.url ? (
                           <a href={e.url} target="_blank" rel="noreferrer noopener" className="small" style={{ marginLeft: 8 }}>
-                            来源 ↗
+                            {t('viewSource')}
                           </a>
                         ) : null}
                       </div>

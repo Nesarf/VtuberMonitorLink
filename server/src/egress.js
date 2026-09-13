@@ -6,12 +6,12 @@
 // So the score converts loss into an equivalent latency: effective = avg × (1 + loss × LOSS_COST).
 //
 // Why hysteresis is needed: a 20~30ms wobble between two probes means nothing, and switching egress
-// over it only makes a site that "already fails every now and then" less stable. A challenger must be
+// because of it only makes a site that "already fails every now and then" less stable. A challenger must be
 // **clearly** better (20% cheaper by default) before it is allowed to take over; the current egress is
 // swapped out at once as soon as it turns unhealthy.
 //
-// There is also a **conservative fallback**: with too few samples, never probed at all, or neither
-// mode reachable, it does not guess — it falls back to the value written explicitly on the source, and
+// There is also a **conservative fallback**: with too few samples, never probed at all, or nothing
+// reachable, it does not guess — it falls back to the value written explicitly on the source, and
 // then to the global config. Automatic mode is an optimization, not a gamble.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,7 +44,7 @@ export function load(cfg) {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (raw && typeof raw === 'object' && raw.decisions) return raw;
   } catch {
-    // a missing or corrupt file is treated as an empty store; the feature must not stop because a cache broke
+    // a missing or corrupt file is treated as an empty store; the feature must not stop working because a cache file got damaged
   }
   return empty();
 }
@@ -59,7 +59,7 @@ function save(cfg, data) {
   }
 }
 
-/** in-process cache: resolveProxyMode is a synchronous hot path, it cannot read from disk every time */
+/** in-process cache: resolveProxyMode is a synchronous hot path, so it cannot read from disk every time */
 function db(cfg) {
   const now = Date.now();
   if (!memory.data || now - memory.loadedAt > 15000) {
@@ -138,7 +138,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   const usable = candidates.map((c) => c.name);
 
   if (!candidates.length) {
-    // neither of the two is reachable — do not invent a verdict, fall back and state the reason plainly
+    // none of the modes is reachable — do not invent a verdict, fall back and state the reason plainly
     return {
       mode: fallback,
       reason: `直连与代理都不通，暂用 ${fallback}（探测：直连 ${direct.why || '—'} / 代理 ${proxy.why || '—'}）`,
@@ -148,7 +148,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
     };
   }
 
-  // only one probed as usable → use it directly (this is the "the proxy is mandatory" case)
+  // only one probed as usable → use it directly (this is the "proxy is mandatory" case)
   if (candidates.length === 1) {
     const only = candidates[0];
     return {

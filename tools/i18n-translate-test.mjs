@@ -46,7 +46,7 @@ t('restoring yields the original text (lossless round-trip)', () => {
   assert.equal(back.ok, true);
 });
 
-t('a sentinel the model lost -> reported as failure (better missing than broken)', () => {
+t('a sentinel the model lost -> reported as a failure (better to fail than to emit a broken string)', () => {
   const { tokens } = protect('确认发到「{target}」？');
   const r = restore('Confirm sending to (nothing)?', tokens);
   assert.equal(r.ok, false, 'a missing sentinel must count as failure');
@@ -61,7 +61,7 @@ t('brackets the model rewrote as parentheses still restore tolerantly', () => {
 });
 
 process.stdout.write('\ni18n-translate: glossary\n');
-t('terms are locked away: the model never sees them, so it cannot alter them', () => {
+t('terms are substituted out: the model never sees them, so it cannot alter them', () => {
   const glossary = { 情报: { 'ja-JP': 'インテリジェンス' } };
   const { text, tokens } = protect('情报卡片流', glossary, 'ja-JP');
   assert.ok(!text.includes('情报'), 'terms must be substituted first: ' + text);
@@ -252,7 +252,7 @@ t('model invents a sentinel (the source has no placeholder at all) -> likewise n
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-t('--bust terms predicate: only entries with proper nouns are re-translated (pure logic, unit-tested instead of run as a CLI)', () => {  const glossary = { Telegram: { default: 'Telegram' } };
+t('--bust terms: the predicate re-translates only entries holding proper nouns (pure logic, unit-tested rather than run as a CLI)', () => {  const glossary = { Telegram: { default: 'Telegram' } };
   // none: always use the cache
   assert.equal(needsRetranslate('Telegram 推送失败', 'none', glossary), false);
   // all: re-translate everything

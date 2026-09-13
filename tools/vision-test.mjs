@@ -102,7 +102,7 @@ t('not JSON at all / an empty reply -> an explicit failure, with no exception th
   assert.equal(parseTags(null).ok, false);
 });
 
-t('allowed kinds is a fixed set (the UI picks icons from it)', () => {
+t('the allowed kinds are a fixed set (the UI picks icons from them)', () => {
   assert.ok(IMAGE_KINDS.includes('poster') && IMAGE_KINDS.includes('meme') && IMAGE_KINDS.includes('other'));
 });
 
@@ -113,7 +113,9 @@ t('the cache key ignores the query string (the same image with different signatu
 });
 
 process.stdout.write('\nvision: privacy switch\n');
-t('not a single image is sent while disabled (an explicit refusal instead of a quiet send)', async () => {
+// `ta`, not `t`: the callback is async, and the synchronous runner would drop the returned promise,
+// so a failure inside it surfaced as an unhandled rejection instead of a clean [FAIL] line.
+await ta('not a single image is sent while disabled (an explicit refusal instead of a quiet send)', async () => {
   const r = await tagItems(cfgFor(1, { enabled: false }), { items: [{ id: 'x', images: ['https://example.com/a.jpg'] }] });
   assert.equal(r.ok, false);
   assert.equal(r.tagged, 0);
@@ -128,7 +130,7 @@ t('refused when there is no API key (it never calls out with an empty key)', () 
   assert.ok(r.reason.includes('API Key'), r.reason);
 });
 
-process.stdout.write('\nvision: transport errors vs business errors (which decide whether to retry)\n');
+process.stdout.write('\nvision: transport errors vs business errors (the distinction that decides whether to retry)\n');
 t('transport errors are recognized (connection cut, dead socket, ...)', () => {
   for (const msg of [
     'fetch failed(ECONNRESET)',
@@ -178,7 +180,7 @@ await ta('tagging succeeds, and different kinds come back per image content', as
   assert.deepEqual(kinds, ['merch', 'poster', 'screenshot']);
 });
 
-await ta('the cache works: a second pass calls the model for no image at all', async () => {
+await ta('the cache works: a second pass makes no model call at all', async () => {
   const cfg = cfgFor(PORT);
   const r = await tagItems(cfg, { items });
   assert.equal(r.tagged, 0, 'nothing should be tagged twice');
@@ -257,7 +259,7 @@ await ta('flaky mode: a failure is not cached as a success', async () => {
 
 // A transport failure (connection cut) -> retry once; an HTTP 500 is a different category and is not retried.
 // This one runs on a real cut socket rather than a stub: the mock's `drop` mode destroys the first request outright.
-await ta('drop mode: a transport failure is retried once, and retried is recorded honestly', async () => {
+await ta('drop mode: a transport failure is retried once, and the retry is recorded honestly', async () => {
   const m = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-vision.cjs'), '--port', String(43295), '--mode', 'drop'], { stdio: 'ignore' });
   await sleep(900);
   try {

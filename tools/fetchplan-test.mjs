@@ -33,7 +33,7 @@ const at = (mins) => new Date(Date.UTC(2026, 0, 1, 0, 0) + mins * 60000);
 
 process.stdout.write('\nfetchplan: grouping by egress\n');
 
-t('group by egress: same group keeps the original order, groups neither overlap nor lose anything', () => {
+t('grouping by egress: each group keeps the input order, and the groups neither overlap nor drop sources', () => {
   const sources = [
     { id: 'a', fetch: 'rss' },
     { id: 'b', fetch: 'browser' },
@@ -53,16 +53,16 @@ t('group by egress: same group keeps the original order, groups neither overlap 
   assert.deepEqual(all, ['a', 'b', 'c', 'd'], 'no source may be lost');
 });
 
-t('an unspecified egress falls into direct (rather than vanishing)', () => {
+t('a source with no egress ends up in direct (rather than vanishing)', () => {
   const plan = planFetch([{ id: 'x', fetch: 'rss' }], () => undefined);
   assert.equal(plan.groups.length, 1);
   assert.equal(plan.groups[0].mode, 'direct');
   assert.equal(plan.groups[0].sources.length, 1);
 });
 
-process.stdout.write('\nfetchplan: consecutive-failure isolation\n');
+process.stdout.write('\nfetchplan: consecutive-failure quarantine\n');
 
-t('isolation only after the threshold, and a success clears the count', () => {
+t('quarantine only after the threshold, and one success clears it', () => {
   let st = { sources: {} };
   st = recordOutcome(st, 's1', { ok: false, error: 'timeout', now: at(0) });
   assert.equal(quarantineOf(st, 's1', { now: at(1) }), null, 'failure 1 should not quarantine');
@@ -109,7 +109,7 @@ t('custom rules: quarantine after 2 failures, for 1 hour', () => {
   assert.equal(q2.rule.hours, 1);
 });
 
-t('a quarantined source goes into skipped with a reason, and is planned into no group', () => {
+t('a quarantined source is skipped with a reason and lands in no group', () => {
   let st = { sources: {} };
   for (let i = 0; i < 3; i++) st = recordOutcome(st, 'bad', { ok: false, error: 'ECONNRESET', now: at(i) });
   const sources = [
@@ -139,7 +139,7 @@ t('the quarantine state can be saved and read back (a broken file counts as empt
 
 process.stdout.write('\nfetchplan: degradation ladder\n');
 
-t('built-in ladder: only conversions that hold up', () => {
+t('built-in ladder: only substitutions that actually hold up', () => {
   assert.deepEqual(fetchLadder({ fetch: 'mediawiki-api' }).map((s) => s.fetch), ['browser']);
   assert.deepEqual(fetchLadder({ fetch: 'rss' }).map((s) => s.fetch), ['browser']);
   assert.deepEqual(fetchLadder({ fetch: 'bili-opus' }), [], 'a login-free dynamic feed has no substitute (it must not auto-upgrade to the one that needs a login)');
@@ -159,7 +159,7 @@ t('the ladder is deduped and never schedules itself (guards against an infinite 
   assert.deepEqual(fetchLadder(dup).map((x) => x.fetch), ['browser'], 'when built-in and self-declared overlap, keep only one');
 });
 
-t('the default isolation rule is "3 failures / 6 hours" (written here so it cannot be changed quietly later)', () => {
+t('the default quarantine rule is "3 failures / 6 hours" (pinned here so it cannot be changed quietly later)', () => {
   assert.deepEqual(QUARANTINE_DEFAULTS, { failures: 3, hours: 6 });
 });
 

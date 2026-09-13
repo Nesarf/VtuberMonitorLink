@@ -31,7 +31,8 @@ export const FETCH_KINDS = [
 /**
  * Whether a failure should be retried over the other egress.
  * Only switch when the source **has no explicitly pinned egress** — for a source like bilibili,
- * where "pin it to direct or you get rate-limited", auto-switching to the proxy only makes it worse.
+ * where the rule is "pin it to direct, otherwise risk control kicks in", auto-switching to the proxy
+ * only makes it worse.
  */
 function otherEgress(cfg, source) {
   if (cfg?.run?.autoFailover === false) return null;
@@ -44,7 +45,7 @@ function otherEgress(cfg, source) {
  *
  * Three policies (the pure logic lives in fetchplan.js, self-tested by fetchplan-test.mjs):
  *   1. **Parallelism grouped by egress**: what serialization used to protect was "do not hammer the
- *      same egress back to back" (one and the same face), and different egresses carry no such
+ *      same egress back to back" (they all wear the same face), and different egresses carry no such
  *      constraint — so split into one queue per egress, **parallel across queues, serial within one**.
  *      Inside a queue the rateLimit gap is still applied on purpose.
  *   2. **Quarantine after repeated failures**: sources we cannot fetch (Cloudflare, dead sites) stop
@@ -66,7 +67,7 @@ export async function fetchAll(sources, ctx) {
   if (plan.quarantined.length) {
     const detail = plan.quarantined.map((q) => `${q.id} (${q.minutesLeft} min left)`).join(', ');
     ctx.log?.warn(
-      `quarantined ${plan.quarantined.length} sources with repeated failures: ${detail} — no requests go out while quarantined, they are retried automatically once it expires`
+      `quarantined ${plan.quarantined.length} sources with repeated failures: ${detail} — no requests go out while they are quarantined, and they are retried automatically once the quarantine expires`
     );
   }
   if (plan.groups.length > 1) {
@@ -102,7 +103,7 @@ export async function fetchAll(sources, ctx) {
       let r = await attempt(s, s.fetch);
       if (!r.ok) ctx.log?.warn(`${s.id}: ${r.error ?? 'fetch failed'}`);
 
-      // ① retry once over the other egress (only when the source did not pin one)
+      // (1) retry once over the other egress (only when the source did not pin one)
       if (!r?.ok) {
         const alt = otherEgress(cfg, s);
         if (alt) {
@@ -118,7 +119,7 @@ export async function fetchAll(sources, ctx) {
         }
       }
 
-      // ② switch fetch kind (degradation ladder)
+      // (2) switch fetch kind (degradation ladder)
       if (!r?.ok) {
         const ladder = fetchLadder(s);
         for (const step of ladder) {

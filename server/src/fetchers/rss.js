@@ -1,5 +1,5 @@
 // fetchers/rss.js — RSS / Atom fetching (with proactive spacing and retries)
-// Experience: sites like Reddit rate limit per IP, and spacing requests out proactively works far better than "hammer + retry".
+// Experience: sites like Reddit rate-limit by IP, and spacing requests out proactively works far better than "hammer + retry".
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const UA =

@@ -1,4 +1,4 @@
-// accounts.js — discover the bilibili logins available on this machine / discover available bilibili logins
+// accounts.js — discover the bilibili logins available on this machine
 //
 // Why it is a module of its own: posting a danmaku **writes something out under the user's own
 // identity**, which is a completely different animal from the "read-only scraping" that
@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { netFetch } from './net.js';
 import { readBrowserCookies } from './cookies.js';
 
@@ -52,7 +53,7 @@ export function profilesUnder(root) {
   return out;
 }
 
-/** Ask bilibili "who is this cookie"; also confirms whether the login is still valid */
+/** Asks bilibili "who is this cookie", and incidentally confirms whether the login state is still valid */
 export async function whoAmI(cfg, cookieHeader) {
   try {
     const r = await netFetch(
@@ -96,15 +97,19 @@ export async function listAccounts(cfg) {
     }
     if (!ck.ok) {
       // No login state is the normal case (most profiles never signed in to bilibili),
-      // so it is not worth flooding the errors with it
+      // so it is not worth flooding the error list with it
       continue;
     }
     const hasSession = (ck.names ?? []).includes('SESSDATA');
     const hasCsrf = (ck.names ?? []).includes('bili_jct');
     const me = hasSession ? await whoAmI(cfg, ck.cookieHeader) : { ok: true, isLogin: false };
     accounts.push({
-      // id is a short hash of the profile path: no sensitive information beyond the path is handed back
-      id: Buffer.from(dir).toString('base64url').slice(0, 16),
+      // A short, stable id for the UI's <select>. It must be a **one-way** digest: this used to be
+      // `Buffer.from(dir).toString('base64url').slice(0, 16)`, which is not a hash but truncated
+      // encoding — the first bytes of the profile path were literally readable in the id
+      // (e.g. `QzpcVXNlcnNc` decodes to a Windows home path prefix). The id is returned to the
+      // client, so it must not carry the path (BUGS #69).
+      id: crypto.createHash('sha256').update(dir).digest('base64url').slice(0, 16),
       profile: dir,
       browser,
       hasSession,

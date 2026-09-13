@@ -174,7 +174,7 @@ export async function readBrowserCookies(profileDir, domains) {
   const appBound = !!osCrypt.app_bound_encrypted_key;
 
   // Where the cookie-store copy lands: VML_TEMP_DIR first (written by index.js from
-  // config.paths.tempDir, used to hold the "no temp files on the C: drive" red line),
+  // config.paths.tempDir, which is what enforces the hard rule of "no temp files on the C: drive"),
   // falling back to the system temp dir when unset.
   const tmpDir = fs.mkdtempSync(path.join(tempRoot(), 'vml-cookies-'));
   let rows = [];

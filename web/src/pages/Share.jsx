@@ -15,7 +15,7 @@ import Collapsible from '../Collapsible.jsx';
 import { Inline } from '../markdown.jsx';
 
 export default function Share({ people = [] }) {
-  const { t } = useI18n();
+  const { t, tn } = useI18n();
   const [targets, setTargets] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [scopeKind, setScopeKind] = useState('latest');
@@ -235,7 +235,7 @@ export default function Share({ people = [] }) {
           <ul className="muted small" style={{ paddingLeft: 18 }}>
             {audit.slice(0, 20).map((a, i) => (
               <li key={i}>
-                {String(a.at).slice(11, 19)} · {a.action} · {a.target ?? a.scope ?? ''} {a.items ? `${a.items} 条` : ''}
+                {String(a.at).slice(11, 19)} · {a.action} · {a.target ?? a.scope ?? ''} {a.items ? tn('items', a.items) : ''}
                 {a.ok === false ? ` ❌ ${a.error ?? ''}` : ''}
               </li>
             ))}

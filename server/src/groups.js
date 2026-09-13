@@ -2,8 +2,8 @@
 //
 // Why this is needed: a per-item intel stream suits "what is in the news today" but not "how is this agency doing right now".
 // Judging the state of an agency means looking at the shape of **a group of people** over time:
-//   · who is moving and who stopped (absence is information too)
-//   · whether they move **at the same time** (several people active on the same day = a project/collab, not N unrelated news items)
+//   · who is active and who stopped (absence is information too)
+//   · whether they are active **at the same time** (several people active on the same day = a project/collab, not N unrelated news items)
 //   · whether they stop **at the same time** (a whole agency going quiet = a signal worth a look)
 //   · whether each person is off their **own** rhythm (a daily poster silent for 3 days vs a monthly poster silent for 3 days are really not the same thing)
 //
@@ -69,7 +69,7 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
     if (rows.length >= 2 && who.length === rows.length) allActiveDays++;
   }
 
-  // Shared silence: counting back from the end of the axis, how many consecutive days **not a single member moved**
+  // Shared silence: counting back from the end of the axis, how many consecutive days **not a single member was active**
   let quietStreak = 0;
   for (let i = axis.length - 1; i >= 0; i--) {
     if (perDay[i] > 0) break;
@@ -79,8 +79,8 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
   const silent = rows.filter((row) => row.level === 'warn' || row.level === 'high').sort((a, b) => (b.quietDays ?? 0) - (a.quietDays ?? 0));
   const activeLast7 = rows.filter((row) => row.counts.slice(-7).some((n) => n > 0)).length;
 
-  // Agency-level signal: the whole agency is quiet (nobody moved), or most people are silent at once.
-  // Both require >= minMembers -- counting "1~2 people as an agency" would fire the signal constantly,
+  // Agency-level signal: the whole agency is quiet (nobody was active), or most of its people are silent at once.
+  // Both require >= minMembers -- treating "1~2 people" as an agency would fire the signal constantly,
   // which is noise rather than information (anyone who really cares about a duo can set minMembers to 2).
   const minMembers = Number(r.minMembers) || SILENCE_DEFAULTS.minMembers;
   const groupSignal =
@@ -98,18 +98,18 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
     totals: { items: rows.reduce((a, r2) => a + r2.items, 0), members: rows.length, activeMembers: rows.filter((r2) => r2.items > 0).length },
     activeLast7,
     coActiveDays: coActive.length,
-    coActive: coActive.slice(-8).reverse(), // the most recent "several people appearing at once"
+    coActive: coActive.slice(-8).reverse(), // the most recent "several people active at once"
     fullHouseDays: allActiveDays,
     quietStreak,
     silent,
-    // quietStreak stays a number: no "signal" is emitted when there are too few members, but the data is still given to the UI
+    // quietStreak stays a number: no "signal" is emitted when there are too few members, but the data still goes to the UI
     groupSignal,
   };
 }
 
 /**
  * Aggregate all followed people by agency.
- * People with no agency go into an explicit "ungrouped" block (rather than being silently dropped).
+ * People with no agency go into an explicit "ungrouped" block (never silently dropped).
  */
 export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now = new Date(), endDay = null } = {}) {
   const axis = dayAxis(days, endDay);

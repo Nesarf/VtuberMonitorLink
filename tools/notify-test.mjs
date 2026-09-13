@@ -1,4 +1,4 @@
-// notify-test.mjs — self-test for notification delivery / self-test for notification delivery
+// notify-test.mjs — self-test for notification delivery
 //
 // Focused on the three things that are easiest to get wrong and hardest to notice once wrong:
 //   · quiet hours across midnight (23:00->08:00) -- judging with `start <= t < end` is never true
@@ -184,14 +184,14 @@ t('the JSON shape of a custom webhook is stable', () => {
   assert.ok(j.at);
 });
 
-t('every channel is defined in NOTIFY_KINDS (none leaks out of the UI)', () => {
+t('every channel is defined in NOTIFY_KINDS (a missing entry would drop it from the UI)', () => {
   const kinds = new Set(NOTIFY_KINDS.map((k) => k.id));
   for (const k of ['bark', 'serverchan', 'telegram', 'dingtalk', 'wecom', 'ntfy', 'gotify', 'pushplus', 'slack', 'discord', 'feishu', 'custom']) {
     assert.ok(kinds.has(k), 'missing channel definition: ' + k);
   }
 });
 
-t('channel kinds and fields both reach newTarget / sanitizeTarget', () => {
+t('newTarget / sanitizeTarget both fall back to sane kind and field values', () => {
   const tg = newTarget('dingtalk');
   assert.equal(tg.kind, 'dingtalk');
   assert.equal(tg.quiet, 'inherit');
@@ -260,7 +260,7 @@ await ta('inside quiet hours nothing is sent, but it is queued (not lost)', asyn
   assert.ok(readQueue(liveCfg).length >= 1, 'there should be a record in the queue');
 });
 
-await ta('after quiet hours it is delivered late and the queue is emptied', async () => {
+await ta('once quiet hours end the queued notification goes out and the queue is emptied', async () => {
   liveCfg.notify.quietHours = { enabled: false };
   const before = received.length;
   const r = await flushQueue(liveCfg, null, { force: true });

@@ -247,6 +247,9 @@ export const STRINGS = {
       '日志与报告里都不会出现 cookie 内容。若浏览器启用了 App-Bound Encryption（Chrome 127+ 默认），' +
       '外部无法解密，这时只能关掉浏览器让 Playwright 复用 profile。',
     domainLabel: '要读的域名',
+    cookieCount: '{n} 个',
+    cookieCountWithSession: '{n} 个（含 SESSDATA）',
+    browserFromSettings: '设置里指定的',
 
     // llm
     llmTitle: 'LLM 分析',
@@ -421,6 +424,7 @@ export const STRINGS = {
     watchMode: '取文方式',
     ignorePatterns: '忽略行正则',
     pageTitle: '条目标题',
+    watchPagePh: '条目标题',
     namespaces: '命名空间',
     botUser: '账号名（BotPassword 形式）',
     botPassword: 'BotPassword',
@@ -439,6 +443,10 @@ export const STRINGS = {
     needUid: '请填写纯数字 UID',
     duplicateTarget: '这个监视对象已经存在了',
     watchDigest: '监视变化摘要',
+    loginRequiredTag: ' · 需登录',
+    ignorePatternsPh: '一行一个正则，命中的行会被忽略',
+    followersCount: '粉丝 {n}',
+    viewSource: '来源 ↗',
 
     // intel
     intelTitle: '情报卡片流',
@@ -479,6 +487,14 @@ export const STRINGS = {
     loss: '失败率',
     directEgress: '直连',
     proxyEgress: '代理',
+    torEgress: 'Tor',
+    egressSettled: '已判定',
+    egressTrial: '试用中',
+    lastRunFailed: '上次运行失败',
+    customNamePh: '某某的博客',
+    selfCheckHint:
+      '自检在**每次运行的最后**执行：先抓完、先出报告，最后只对出异常的来源做诊断（能连通就完全不打扰）。' +
+      '也可以随时在上面的行里手动点「自检」。',
     probe: '测速',
     probeAll: '全部测速',
     probing: '测速中…',
@@ -524,6 +540,7 @@ export const STRINGS = {
     freq_weekly: '每周',
     freq_daily: '每天',
     catchUp: '错过补跑',
+    catchUpTag: '（补跑）',
     nextFireAt: '下次运行',
     preview: '接下来几次',
     taskRunNow: '立即运行',
@@ -655,6 +672,15 @@ export const STRINGS = {
     liveNow: '直播中',
     liveRound: '轮播',
     liveOff: '未开播',
+    // Placeholders and short labels that used to be hard-coded Chinese in the JSX, which meant
+    // every one of the 25 locales showed Chinese (see docs/ENGLISH-LOGIC.md on the boundary).
+    liveHintBilibili: '直播间号，如 22637261',
+    liveHintTwitch: '频道名，如 neurosama',
+    liveHintYoutube: '频道 ID(UC…，取直播) 或视频 ID',
+    liveManualLabelPh: '显示用的名字',
+    liveRoomManualPh: '也可手填',
+    danmakuTextPh: '要发的内容',
+    auditRoom: '房间',
     liveMonitored: '监测中',
     addAllLive: '在播的全部加入多屏',
     clearGrid: '清空多屏',
@@ -694,6 +720,8 @@ export const STRINGS = {
     from: '起',
     to: '止',
     tagsInUse: '已选标签',
+    clickToRemove: '点击移除',
+    indieTag: ' · 个人势',
     noTags: '（未选，点下面的标签加条件）',
     tagCloud: '标签',
     vocabHint: '括号里是别名，点一下加为条件；多个标签是 AND 关系',
@@ -716,6 +744,7 @@ export const STRINGS = {
     exportDocx: '导出 Word',
     exportDocxReport: '导出 Word',
     extractFeatures: '抽取特征',
+    featuresShort: '特征抽取',
     featuresHint: '用 LLM 把条目抽成结构化属性（人名 / 所属 / 游戏 / 事件类型 / 标签），抽完之后这些属性都能被检索命中。有缓存，同一条不会重复花钱。',
     featuresStats: '已抽取',
     torTitle: 'Tor 无痕出口',
@@ -975,6 +1004,9 @@ export const STRINGS = {
       'If the browser uses App-Bound Encryption (the default in Chrome 127+), outside decryption is impossible and ' +
       'you have to close the browser so Playwright can reuse the profile.',
     domainLabel: 'Domains to read',
+    cookieCount: '{n} cookies',
+    cookieCountWithSession: '{n} cookies (incl. SESSDATA)',
+    browserFromSettings: 'from Settings',
 
     llmTitle: 'LLM analysis',
     llmHint:
@@ -1147,6 +1179,7 @@ export const STRINGS = {
     watchMode: 'Extract',
     ignorePatterns: 'Ignore-line regexps',
     pageTitle: 'Page title',
+    watchPagePh: 'Page title',
     namespaces: 'Namespaces',
     botUser: 'Account (BotPassword form)',
     botPassword: 'BotPassword',
@@ -1165,6 +1198,10 @@ export const STRINGS = {
     needUid: 'Please fill in a numeric UID',
     duplicateTarget: 'That watch target already exists',
     watchDigest: 'Watch changes',
+    loginRequiredTag: ' · login required',
+    ignorePatternsPh: 'One regex per line; matching lines are ignored',
+    followersCount: '{n} followers',
+    viewSource: 'Source ↗',
 
     intelTitle: 'Intel stream',
     intelHint:
@@ -1203,6 +1240,15 @@ export const STRINGS = {
     loss: 'Fail rate',
     directEgress: 'Direct',
     proxyEgress: 'Proxy',
+    torEgress: 'Tor',
+    egressSettled: 'settled',
+    egressTrial: 'trial',
+    lastRunFailed: 'last run failed',
+    customNamePh: "Someone's blog",
+    selfCheckHint:
+      'Self-checks run **at the very end of each run**: fetch first, then produce the report, and only ' +
+      'then diagnose the sources that misbehaved (a healthy source is never disturbed). You can also ' +
+      'press "check now" on any row above at any time.',
     probe: 'Probe',
     probeAll: 'Probe all',
     probing: 'Probing…',
@@ -1246,6 +1292,7 @@ export const STRINGS = {
     freq_weekly: 'Weekly',
     freq_daily: 'Daily',
     catchUp: 'Catch up if missed',
+    catchUpTag: '(catch-up)',
     nextFireAt: 'Next run',
     preview: 'Upcoming',
     taskRunNow: 'Run now',
@@ -1371,6 +1418,13 @@ export const STRINGS = {
     liveNow: 'Live now',
     liveRound: 'Rerun',
     liveOff: 'Offline',
+    liveHintBilibili: 'Room number, e.g. 22637261',
+    liveHintTwitch: 'Channel name, e.g. neurosama',
+    liveHintYoutube: 'Channel ID (UC…, live tab) or a video ID',
+    liveManualLabelPh: 'Name shown in the grid',
+    liveRoomManualPh: 'or type it in',
+    danmakuTextPh: 'Message to send',
+    auditRoom: 'room',
     liveMonitored: 'monitored',
     addAllLive: 'Add every live room',
     clearGrid: 'Clear grid',
@@ -1409,6 +1463,8 @@ export const STRINGS = {
     from: 'From',
     to: 'To',
     tagsInUse: 'Selected tags',
+    clickToRemove: 'Click to remove',
+    indieTag: ' · indie',
     noTags: '(none - click a tag below to add one)',
     tagCloud: 'Tags',
     vocabHint: 'parentheses hold aliases; click to add as a condition, several tags are ANDed',
@@ -1430,6 +1486,7 @@ export const STRINGS = {
     exportDocx: 'Export Word',
     exportDocxReport: 'Export Word',
     extractFeatures: 'Extract features',
+    featuresShort: 'Feature extraction',
     featuresHint:
       'Uses an LLM to turn items into structured attributes (names / agency / games / event types / tags) so those become searchable. Cached per item, so nothing is paid for twice.',
     featuresStats: 'Extracted',

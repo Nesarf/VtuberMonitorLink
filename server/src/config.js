@@ -25,8 +25,8 @@ export const DEFAULT_CONFIG = {
     // Backward compatible with the old shape: a flat baseUrl/apiKey/model is treated by activeProvider() as a single profile
     activeId: '',
     providers: [],
-    // Usage budget: dailyTokens = 0 means no limit. By default it only **warns** and never blocks;
-    // set onExceed to 'stop' to actually block (this is the user's own tool, so blocking has to be spelled out first).
+    // Usage budget: dailyTokens = 0 means no limit. By default it only **warns**, never blocks;
+    // set onExceed to 'stop' to actually block (this is the user's own tool, so blocking has to be asked for explicitly).
     budget: { dailyTokens: 0, onExceed: 'warn' },
     // Legacy fields of the old flat shape, kept so migration stays smooth
     provider: 'deepseek',
@@ -50,14 +50,14 @@ export const DEFAULT_CONFIG = {
     // Pre-fetch throttling: Reddit-like sites rate-limit by IP, so spacing requests out beats retrying in bursts
     defaultGapSeconds: 2,
     maxParallel: 3,
-    // After the Nth consecutive failure, quarantine this source for M hours (it is retried automatically once the time is up — not a permanent block).
-    // Reason: retrying an unreachable site every round = wasted time + extra requests nobody asked for, and those requests are themselves a footprint.
+    // After the Nth consecutive failure, quarantine this source for M hours; once that time is up it is retried automatically (this is not a permanent block).
+    // Reason: retrying an unreachable site every round wastes time and sends extra requests nobody asked for — and those requests are themselves a footprint.
     quarantine: { failures: 3, hours: 6 },
     // Whether each run also checks the watch targets
     watchWithRun: true,
     // When one exit fails, automatically try another exit (only takes effect when the source does not name an exit itself)
     autoFailover: true,
-    // At the **end** of a run, self-check the sources that errored and write a diagnostic file (sources that connect fine are left alone)
+    // At the **end** of a run, self-check the sources that errored and write a diagnostic file (sources that connect fine are never touched)
     diagnoseFailed: true,
     // Use an LLM to extract structured features (person / affiliation / game / event) so search can match on attributes; cached, with a cap
     extractFeatures: true,
@@ -163,8 +163,8 @@ export const DEFAULT_CONFIG = {
     verifiedTargets: [],
   },
   // image understanding tagging
-  // Note: **off by default**. Turning it on means sending the images attached to intel to the model service you configured —
-  // that is a privacy-relevant action, so the user has to enable it explicitly; it must never be sent quietly by default.
+  // Note: **off by default**. Turning it on means sending the images attached to intel to the model service you configured.
+  // That is a privacy-relevant action, so the user has to enable it explicitly; it must never happen quietly by default.
   vision: {
     enabled: false,
     // Which profile to tag with (empty = the currently active profile)
@@ -195,10 +195,10 @@ export const DEFAULT_CONFIG = {
     // The same content is pushed only once per N minutes (0 = no dedupe). Report titles tend to be identical every time,
     // so without dedupe it is pure harassment.
     dedupeMinutes: 0,
-    // Quiet hours: **not dropped, but queued and delivered afterwards**.
+    // Quiet hours: notifications are **not dropped, but queued and delivered afterwards**.
     // Crossing midnight (23:00 -> 08:00) is the most common shape, and calendar.js / notify.js both treat
     // "start > end" as crossing midnight. start === end means quiet all day.
-    // bypassLevels exempts urgent by default (time-sensitive notifications like going live cannot wait);
+    // bypassLevels exempts urgent by default (time-sensitive notifications such as going live cannot wait);
     // a broken config fails open (push as usual), because "a typo makes every notification disappear" is far worse.
     quietHours: {
       enabled: false,
@@ -238,7 +238,7 @@ export const DEFAULT_CONFIG = {
     intelPerSource: 24,
     probeSamples: 3,
     probeTtlMinutes: 30,
-    // Presentation layout for reports / intel (DIY-able in the web UI; think of the card listing on xiaojicidian)
+    // Presentation layout for reports / intel (adjustable in the web UI; think of a card listing such as the one on xiaojicidian)
     layout: {
       mode: 'cards', // cards | list | compact | timeline | table
       columns: 'auto', // auto | 1 | 2 | 3 | 4
@@ -252,7 +252,7 @@ export const DEFAULT_CONFIG = {
     },
   },
   privacy: {
-    // Anonymous mode: never use a login session at all (no browser cookie reads, no profile reuse);
+    // Anonymous mode: never use a login session at all (no reads of browser cookies, no reuse of a profile);
     // turning it on is the easiest route for the pre-publish self-check and for "anonymizing" scenarios.
     anonymousMode: false,
     // Whether to send request headers that may carry a site identity, such as Referer / Origin

@@ -1,12 +1,12 @@
-// vision.js — image understanding and tagging / image understanding & tagging
+// vision.js — image understanding and tagging
 //
 // Purpose: turn the images attached to intel into **searchable tags**. Text feature extraction cannot
-// answer "what is in this picture" -- while in VTuber intel an attached image often *is* the
+// answer "what is in this picture" -- and in VTuber intel an attached image often *is* the
 // information (3D model screenshots, physical merch, collab posters, event group photos).
 //
 // Needs a vision-capable model (the OpenAI-compatible `image_url` form). With nothing configured the
 // **whole feature stays off**, rather than "call it and fall back when it fails" -- because sending
-// images to an external service is a privacy-relevant act and has to be switched on explicitly by the user.
+// images to an external service is a privacy-relevant act, and it has to be switched on explicitly by the user.
 //
 // Three engineering points:
 //   1) **Cache by image URL**: the same image is never paid for twice (intel repeats across runs)
@@ -140,7 +140,7 @@ export function parseTags(text) {
   };
 }
 
-/** Transport-layer errors (connection closed by the peer, a pooled socket that happened to be dead...) -- only these deserve a retry as-is */
+/** Transport-layer errors (connection closed by the peer, a pooled socket that happened to be dead...) -- only these are worth retrying unchanged */
 export function isTransportError(error) {
   return /ECONNRESET|ECONNREFUSED|EPIPE|UND_ERR_SOCKET|UND_ERR_CONNECT|socket hang up|other side closed|terminated|fetch failed|ECONNABORTED|ETIMEDOUT/i.test(
     String(error ?? '')
@@ -160,7 +160,7 @@ export async function tagOneImage(cfg, { url, provider, context = '', prompt = n
       ],
     },
   ];
-  // Same calling convention as features.js: chatRequest only assembles the request description, the fetching is ours
+  // Same calling convention as features.js: chatRequest only assembles the request description; the fetching is ours
   const req = chatRequest(provider, messages, {
     max_tokens: Number(cfg?.vision?.maxTokens ?? 300),
     temperature: 0,
@@ -284,7 +284,7 @@ export async function tagItems(cfg, { items = [], limit = 40, force = false, con
       // round pays again for the same broken image
       const err = row.result?.error ?? 'unknown';
       cache[row.key] = { ok: false, url: row.url, error: err, at: new Date().toISOString() };
-      // Carry out **why** it failed (at most 5): with only a number, a failing end-to-end self-check
+      // Surface **why** it failed (at most 5): with only a number, a failing end-to-end self-check
       // shows `failed:1` and you cannot tell network from auth from parsing (learnt the hard way)
       if (errors.length < 5) errors.push({ url: row.url, error: err });
     }
@@ -313,7 +313,7 @@ export function applyVisionTags(items, cache, { inheritKeywords = true } = {}) {
     const tags = [...new Set(hits.flatMap((h) => h.tags ?? []))];
     const kinds = [...new Set(hits.map((h) => h.kind).filter(Boolean))];
     for (const t of tags) tagCount[t] = (tagCount[t] ?? 0) + 1;
-    // Image tags are hit by search as well (the same search path as text keywords)
+    // Search also matches image tags (the same search path as text keywords)
     const keywords = inheritKeywords ? [...new Set([...(it.keywords ?? []), ...tags])] : it.keywords ?? [];
     out.push({
       ...it,

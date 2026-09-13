@@ -105,9 +105,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   /**
    * Patch the config partially and write it to disk.
    *
-   * Two traps were hit here, worth writing down:
-   *  ① the first version called `saveConfig(...)` — **that function simply does not exist**;
-   *  ② after switching to `setConfig` it still threw `ReferenceError: setConfig is not defined`,
+   * Two traps here are worth writing down:
+   *  1) the first version called `saveConfig(...)` — **that function simply does not exist**;
+   *  2) after switching to `setConfig` it still threw `ReferenceError: setConfig is not defined`,
    *     because getConfig/setConfig/onConfigChanged are **parameters of createApp** and only code inside
    *     the factory can see them, not a helper function at module top level.
    * `node --check` is blind to both (the syntax is fine); only actually hitting the endpoint exposes them —
@@ -121,7 +121,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   // ── request log ──────────────────────────────────────────────────
   // Without this, working out "what the UI actually triggered" is pure guesswork. /api/state is polled
-  // once every 3 seconds and logging it would drown the log, so it is excluded separately; writes are
+  // once every 3 seconds and logging it would drown the log, so it is left out on purpose; writes are
   // marked out extra clearly so they can be spotted at a glance.
   app.use((req, res, next) => {
     if (!req.path.startsWith('/api/') || req.path === '/api/state') return next();
@@ -148,8 +148,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.get('/api/sources', (_req, res) => {
     const cfg = getConfig();
     // "last observed": when each source was last picked while observation mode is on.
-    // Given nothing but a sampling ratio, the user cannot tell "who has not been looked at for how long" —
-    // and that is exactly the evidence for judging whether coverage is sufficient.
+    // Given nothing but a sampling ratio, the user cannot tell which sources have not been looked at, and
+    // for how long — and that is exactly the evidence for judging whether coverage is sufficient.
     const obs = loadObservationState(cfg);
     const sources = effectiveSources(cfg).map((s) => ({
       ...s,
@@ -241,7 +241,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── proxy detection ──────────────────────────────────────────────
-  // Tries the common local proxy ports one by one and returns the addresses that really get out
+  // Tries the common local proxy ports one by one and returns the addresses that actually get through
   // (no port is hard-coded as the one true answer)
   app.get('/api/proxy/detect', async (_req, res) => {
     const ports = [7890, 7891, 7897, 1080, 1081, 8118, 10809, 10808, 10090, 2080, 8889, 8888, 20171];
@@ -290,7 +290,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const saved = activeProvider(cfg);
     const wanted = req.body?.provider ?? {};
-    // what the frontend sends back is a mask, never test with ***
+    // what the frontend sends back is a mask, so never test with ***
     const provider = { ...saved, ...wanted, apiKey: wanted.apiKey && wanted.apiKey !== '***' ? wanted.apiKey : saved.apiKey };
     const r = await preflight(cfg, provider);
     res.json(r);
@@ -446,11 +446,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const q = String(req.query.q ?? '').trim().toLowerCase();
     const onlyAlerts = req.query.alerts === '1';
     let items = (data.items ?? []).map((i) => ({ ...i, flag: flags[i.id] ?? null }));
-    // attribution to a "person": local matching, every hit carries evidence (the UI must be able to explain why it counts as theirs)
+    // attribution to a "person": local matching, every hit carries evidence (the UI must be able to explain why an item is attributed to them)
     const peopleCfg = cfg.people ?? [];
     const annotated = annotateItems(items, peopleCfg);
     items = annotated.items;
-    // image tags (from the cache, merged at read time) — when present they also join keywords, so search can hit them too
+    // image tags (from the cache, merged at read time) — when present they also join keywords, so search can match them too
     let visionTagged = 0;
     try {
       if (cfg.vision?.enabled) {
@@ -478,7 +478,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       sources: data.sources ?? [],
       total: (data.items ?? []).length,
       count: items.length,
-      // per-person hit stats: the UI uses them to show "how many items matched a followed person this time"
+      // per-person hit stats: the UI uses them to show "how many items matched a followed person in this run"
       peopleMatched: annotated.matched,
       followed: (items ?? []).filter((i) => (i.people ?? []).length > 0).length,
       visionTagged,
@@ -536,7 +536,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (!targets.length) return res.status(400).json({ error: '没有可测的目标 / nothing to probe' });
     if (targets.length > 40) targets.length = 40;
 
-    // with no egress specified, probe by **the egress these sources actually use**: when a source is set to
+    // When no egress is specified, probe over **the egress these sources actually use**: when a source is set to
     // Tor, "test the network" has to test Tor — otherwise judging whether a Tor-routed source should use Tor
     // from a direct-connection latency produces the wrong conclusion (this trap really existed: the UI had a
     // Tor option while the probe did not recognize it).
@@ -551,7 +551,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
           if (cfg.proxy?.enabled) list.push('proxy');
           // Tor is probed only when it **is genuinely going to be used**: otherwise "probe everything" makes
           // every source pay one extra round of about 2.5s (bringing up a Tor circuit is slow to begin with),
-          // which is pure waste — and that quota should be kept for the entries that really need Tor.
+          // which is pure waste — and that time is better kept for the entries that really need Tor.
           const torInPlay =
             cfg?.observation?.enabled === true || cfg?.proxy?.mode === 'tor' || cfg?.proxy?.enableTor === true;
           if (torInPlay && cfg.proxy?.torSocks) list.push('tor');
@@ -629,7 +629,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       log,
     });
     if (req.query.json === '1') return res.json(r);
-    // "this site has no usable thumbnail" is a normal result, not an error — do not use 404 and make the frontend treat it as a failed request
+    // "this site has no usable thumbnail" is a normal result, not an error — do not answer 404, which would make the frontend treat it as a failed request
     if (!r.ok) return res.json({ ok: false, error: r.error, site: url });
     res.json({ ok: true, ...r, image: `/api/thumb/file/${encodeURIComponent(r.file)}` });
   });
@@ -712,7 +712,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const wanted = sanitizeNotifyTarget(req.body?.target ?? {}, 0);
     const saved = (cfg.notify?.targets ?? []).find((t) => t.id === wanted.id);
-    // what the frontend sends back is a mask, never send with ***
+    // what the frontend sends back is a mask, so never send with ***
     const merged = { ...(saved ?? {}), ...wanted, enabled: true, on: 'always' };
     for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
       if (!wanted[k] || /\*\*\*/.test(String(wanted[k]))) merged[k] = saved?.[k] ?? wanted[k] ?? '';
@@ -794,8 +794,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cur = getConfig();
 
     // Merge the objects inside arrays by id (providers / targets / customSources / tasks …).
-    // A plain "replace the whole array" cannot work — the apiKey:'' of a redacted export would wipe the Key
-    // already on this machine, and importing a config you just exported is exactly the most common use.
+    // A plain "replace the whole array" would not work — the apiKey:'' of a redacted export would wipe the Key
+    // already on this machine, and importing a config you just exported is the most common use case of all.
     const mergeArray = (a, b) => {
       const aList = Array.isArray(a) ? a : [];
       const hasIds = b.every((x) => x && typeof x === 'object' && typeof x.id === 'string');
@@ -1004,7 +1004,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // page requests this endpoint the moment it mounts, so "open the live page → the whole console freezes for 4
   // seconds and every other page sits at loading". This is not "slow", it is one endpoint freezing the service
   // (the same category as BUGS #37).
-  // Before speaking outward (danmaku / posting) a fresh read is still forced, see danmaku.js and /api/share/post.
+  // Before speaking in public (danmaku / posting) a fresh read is still forced, see danmaku.js and /api/share/post.
   app.get('/api/accounts', async (req, res) => {
     const cfg = getConfig();
     const { accounts, cached, error } = await getAccounts(cfg, { force: req.query.force === '1' });
@@ -1098,7 +1098,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── bulk source toggles ──────────────────────────────────────────
-  // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature was forced into existence by exactly that trap)
+  // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature exists because of exactly that trap)
   app.post('/api/sources/bulk', (req, res) => {
     const cfg = getConfig();
     const { action, category, ids } = req.body ?? {};
@@ -1119,7 +1119,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // ── reports ──────────────────────────────────────────────────────
   app.get('/api/reports', (_req, res) => res.json(listReports(getConfig())));
 
-  // note: this has to be registered before /api/reports/:name, otherwise "search" gets taken for a file name
+  // note: this has to be registered before /api/reports/:name, otherwise "search" is treated as a file name
   app.get('/api/reports/search', (req, res) => {
     res.json({ query: req.query.q ?? '', hits: searchReports(getConfig(), req.query.q) });
   });
@@ -1295,11 +1295,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   app.get('/api/share/audit', (_req, res) => res.json({ ok: true, entries: readShareAudit(getConfig(), 50) }));
 
-  // speaking outward: confirmation + capability + a trail, all three gates are required (see share.js guardPost)
+  // speaking in public: confirmation + capability + a trail, all three gates are required (see share.js guardPost)
   app.post('/api/share/post', async (req, res) => {
     const cfg = getConfig();
     const target = String(req.body?.target ?? '');
-    // before speaking outward, **force a fresh read** of the login state: posting on a stale verdict is opening a new lock with an old key
+    // before speaking in public, **force a fresh read** of the login state: posting on a stale verdict is opening a new lock with an old key
     const { accounts } = await getAccounts(cfg, { force: true });
     const verified = cfg.share?.verifiedTargets ?? [];
     // verify:true means "this attempt exists precisely to verify this target" — on success it is recorded in the verified list
@@ -1424,7 +1424,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const added = [];
     const skipped = [];
     for (const r of picked) {
-      // go through the same sanitizing path as a manual add: VDB data has to pass validation too, no back door
+      // go through the same sanitizing path as a manual add: VDB data has to pass validation too, and there is no back door for it
       const { person, error } = sanitizePerson(toPerson(r), list.length + added.length);
       if (error) {
         skipped.push({ key: r.key, reason: error });
@@ -1445,7 +1445,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── LLM usage & budget ───────────────────────────────────────────
-  // Before this no usage was visible in the UI at all (usage was fetched back but nobody aggregated it), yet this is where the money goes.
+  // Before this no usage was visible in the UI at all (the usage was being fetched but nobody aggregated it), yet this is where the money goes.
   // Report only **what is visible**: a call whose usage cannot be read is counted separately, never guessed at.
   app.get('/api/cost', (req, res) => {
     const cfg = getConfig();
@@ -1722,7 +1722,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── anniversary / birthday / 3D reveal countdown ─────────────────
-  // The date arithmetic (leap-day shift, time zones, daylight saving) all lives in calendar.js with its own self-test:
+  // All the date arithmetic (leap-day shift, time zones, daylight saving) lives in calendar.js with its own self-test:
   // tools/calendar-test.mjs (26 checks, covering 2/29 and cross-time-zone, cross-day cases).
   app.get('/api/calendar', (req, res) => {
     const cfg = getConfig();
@@ -1806,7 +1806,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // once a probe succeeds the verdict is recomputed at once, so the UI need not wait for the next run
+  // once a probe succeeds the verdict is recomputed immediately, so the UI does not have to wait for the next run
 
   // ── JSON error fallback ──────────────────────────────────────────
   // When a route throws, Express replies with an HTML error page by default — the frontend's JSON.parse of it

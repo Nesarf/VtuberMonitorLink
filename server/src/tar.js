@@ -1,17 +1,18 @@
 // tar.js — a minimal tar reader (only to unpack GitHub tarballs, zero dependencies)
 //
-// Why no dependency: what we want is "fetch the whole roster in one request" (the VDB full
-// tarball is only 0.54MB), and pulling in an npm package just to unpack a tar is not worth it
-// — this project has always had exactly two runtime dependencies, express/undici.
-// Nor do we shell out to tar.exe: that would hand "which platforms this runs on" to a system tool.
+// Why no dependency: the goal is to "fetch the whole roster in one request" (the full VDB
+// tarball is only 0.54MB), and pulling in an npm package just to unpack a tar is not worth it —
+// this project has always had exactly two runtime dependencies, express and undici.
+// We do not shell out to tar.exe either: that would hand "which platforms this runs on" to a
+// system tool.
 //
 // Shapes we support (GitHub codeload / git archive use these):
 //   * ustar regular entries (type 0 / NUL / 7)
 //   * directory entries (type 5)
 //   * GNU long names (type L): the name of the next entry
 //   * pax extended headers (type x): the `path=` inside overrides the next entry's name
-//     — git archive emits pax rather than GNU L for long paths (a Chinese name + long
-//       directories triggers it easily)
+//     — git archive emits pax rather than GNU L for long paths (a Chinese name plus long
+//       directories easily triggers it)
 const BLOCK = 512;
 
 function cstr(buf) {
@@ -24,7 +25,7 @@ function octal(buf) {
   return parseInt(s, 8) || 0;
 }
 
-/** Parse a pax extended header (shaped like `path-length key=value\n`) */
+/** Parse a pax extended header (a repeating `<length> key=value\n`, where `<length>` counts itself) */
 export function parsePax(buf) {
   const out = {};
   let off = 0;

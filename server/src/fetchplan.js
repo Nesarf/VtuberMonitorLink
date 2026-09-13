@@ -10,13 +10,13 @@
 //   1. **Parallel per egress**: fetching used to be strictly serial with a deliberate delay, so 24 sources
 //      took minutes per round. But what "serial" really protects is **the identity of one egress** (do not
 //      knock with the same face back to back), and no such constraint exists between different egresses.
-//      So sources are grouped by egress into a few teams: **teams in parallel, within a team serial** --
+//      So sources are grouped by egress into a few teams: **teams in parallel, serial within a team** --
 //      the footprint is unchanged, the wall time is cut by more than half.
-//   2. **Quarantine after repeated failures**: sources that cannot be fetched (Cloudflare, dead sites) get
-//      retried every round, which is wasted time and, worse, extra requests -- and requests are footprint.
-//      After N consecutive failures the source goes quiet for M hours, then tries itself again (not a blacklist).
+//   2. **Quarantine after repeated failures**: sources that cannot be fetched (Cloudflare, unreachable sites)
+//      get retried every round, which is wasted time and, worse, extra requests -- and requests are footprint.
+//      After N consecutive failures the source goes quiet for M hours, then is retried automatically (not a blacklist).
 //   3. **Fallback ladder**: on failure we currently only switch egress, never the fetch method. Some failures
-//      mean "this method does not work" rather than "this egress does not work" (e.g. only RSS is left usable
+//      mean "this method is unusable here" rather than "this egress does not work" (e.g. only RSS is left usable
 //      on that site). The ladder only carries **defensible** transitions, and a source may declare its own
 //      fallbacks.
 import fs from 'node:fs';
@@ -29,7 +29,7 @@ export const FETCH_LADDER = {
   'mediawiki-api': ['browser'],
   // RSS unavailable (feed dead/blocked) -> fetch the same URL with a browser
   rss: ['browser'],
-  // anonymous dynamics hit a risk-control wall -> there is no anonymous alternative
+  // Anonymous dynamics hit a risk-control wall -> there is no anonymous alternative
   // (bili-dynamic needs a login, so we must not silently upgrade to it)
   'bili-opus': [],
   'bili-dynamic': [],
@@ -84,7 +84,7 @@ export function saveQuarantine(cfg, state) {
   }
 }
 
-/** Should this source be quarantined right now (and why, and for how much longer) */
+/** Should this source be quarantined right now (and if so, why, and for how much longer)? */
 export function quarantineOf(state, id, { now = new Date(), rules = QUARANTINE_DEFAULTS } = {}) {
   const rec = state?.sources?.[id];
   if (!rec) return null;
@@ -101,8 +101,8 @@ export function quarantineOf(state, id, { now = new Date(), rules = QUARANTINE_D
 
 /**
  * Record one fetch outcome and return the new quarantine state.
- * Success -> reset to zero (the quarantine lifts by itself); failure -> count up, and once the threshold
- * is reached quarantine for M hours.
+ * Success -> reset the counter to zero (the quarantine lifts by itself); failure -> count up, and once the
+ * threshold is reached quarantine for M hours.
  */
 export function recordOutcome(state, id, { ok, error = null, now = new Date(), rules = QUARANTINE_DEFAULTS } = {}) {
   const next = { sources: { ...(state?.sources ?? {}) } };
@@ -128,8 +128,8 @@ export function recordOutcome(state, id, { ok, error = null, now = new Date(), r
 /**
  * Split the sources into a schedule plan "grouped by egress".
  *
- * Order is preserved inside a group (the delay is the caller's decision, from rateLimit); groups may run
- * in parallel.
+ * Order is preserved within a group (the delay comes from rateLimit and is the caller's decision); groups
+ * may run in parallel.
  * @param {Array} sources
  * @param {(source:object)=>string} resolveMode which egress this source actually takes
  * @param {{now?:Date, rules?:object, quarantine?:object}} opts
@@ -154,7 +154,7 @@ export function planFetch(sources, resolveMode, opts = {}) {
     byMode.get(mode).push(s);
   }
 
-  // A stable group order (direct -> proxy -> tor), so logs read well and tests assert well
+  // A stable group order (direct -> proxy -> tor), so that logs read well and tests assert well
   const order = ['direct', 'proxy', 'tor'];
   const groups = [...byMode.entries()]
     .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))

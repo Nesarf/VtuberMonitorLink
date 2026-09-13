@@ -51,7 +51,7 @@ t('a 2/29 birthday shifts to 3/1 in a common year and is explicitly flagged', ()
   assert.equal(r.leapAdjusted, true);
 });
 
-t('2/29 already past its shifted day -> look at the next year (not fall back)', () => {
+t('2/29 whose shifted day has already passed -> the next year (no fallback to this year)', () => {
   const r = nextOccurrence({ date: '02-29' }, '2026-03-02');
   assert.equal(r.day, '2027-03-01');
 });
@@ -118,7 +118,7 @@ t('sorted by days remaining', () => {
   assert.deepEqual(u.all.map((x) => x.id), ['near', 'mid', 'far']);
 });
 
-t('the reminder window only holds entries inside the window', () => {
+t('only entries inside the reminder window show up there', () => {
   const cfg = {
     calendar: {
       entries: [
@@ -176,7 +176,7 @@ t('recognizes a Japanese birthday post', () => {
   assert.equal(r[0].date, '05-20');
 });
 
-t('a full date carrying a year', () => {
+t('recognizes a full date that carries a year', () => {
   const r = detectFromItems([{ title: 'デビュー記念 2026年4月1日 お知らせ' }]);
   assert.equal(r[0].kind, 'debut');
   assert.equal(r[0].date, '2026-04-01');

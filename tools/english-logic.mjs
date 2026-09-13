@@ -20,7 +20,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/;
+// Chinese, CJK punctuation and enclosed numerals. The last two are not Chinese strictly speaking,
+// but they only ever arrive as translation leftovers: a reviewer found the CJK double dash and
+// enclosed-numeral bullets (U+2460 and friends) in files this guard had already called clean,
+// because the class stopped at U+4E00-U+9FFF / U+3000-U+303F / U+FF00-U+FFEF. A single em dash
+// (U+2014) is legitimate English and is NOT flagged; only the doubled form is.
+const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef\u2460-\u24ff]|\u2014\u2014/;
 
 /** What gets scanned: wherever engineering logic lives (the UI dictionary dirs are excluded). */
 function targets() {

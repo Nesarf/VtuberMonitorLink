@@ -1,8 +1,8 @@
-// dormant.js — objects that stopped being active (graduated / long hiatus): list their latest content at the end of the daily report
+// dormant.js — people who stopped being active (graduated / long hiatus): list their latest content at the end of the daily report
 //
 // Why this is needed: the daily report answers "what is new today", so **anyone who stopped never shows up in it** --
-// even if they posted something yesterday (their only post in half a year, and precisely the one that most deserves to be seen).
-// Conversely, someone quiet for half a year who suddenly moves should be visible at a glance in the daily report.
+// even if they posted something yesterday (the only post in half a year, and precisely the one that most deserves to be seen).
+// Conversely, someone who has been quiet for half a year and suddenly moves should be visible at a glance in the daily report.
 //
 // So the rule is: list everyone who has "been inactive past the threshold (6 months by default)" together at the **end** of the
 // daily report, each with their latest one or two items and dates. That way the report stays continuous about *people*:
@@ -17,7 +17,7 @@ export const DORMANT_DEFAULTS = {
   months: 6, // the threshold the user asked for: half a year
   maxPeople: 12, // how many people to list at most in one run (more than that becomes noise)
   maxItems: 2, // how many items per person at most
-  comebackDays: 3, // "comeback" criterion: after being dormant this long, there is movement again in the last few days
+  comebackDays: 3, // "comeback" criterion: after being dormant this long, there is activity again in the last few days
 };
 
 const DAY_MS = 86400000;
@@ -33,7 +33,7 @@ export function daysSince(day, now = new Date()) {
 
 /**
  * Does this person count as "no longer active".
- * months uses 30.44 days/month (not 30: half a year differs by more than a day, which makes boundaries inconsistent).
+ * months uses 30.44 days/month (not 30: half a year differs by more than a day, which would put the boundary in different places).
  */
 export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS.months } = {}) {
   const days = daysSince(lastDay, now);
@@ -65,14 +65,14 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
     const days = byDay[String(p.id)] ?? {};
     const baseline = baselineOf(days, { now });
     if (baseline.lastDay === null) {
-      // Never seen at all: this is not "stopped being active", it is "not seen yet" -- do not list (listing it is noise)
+      // Never seen at all: this is not "stopped being active", it is "nothing new yet" -- do not list them (listing is noise)
       out.skipped++;
       continue;
     }
     const activeDays = Object.keys(days)
       .filter((d) => Number(days[d]) > 0)
       .sort();
-    // A comeback has to be read like this: there is movement in the last few days, and **before that** the person had
+    // A comeback has to be read like this: there is activity in the last few days, and **before that** the person had
     // already been silent for at least a full threshold --
     // looking only at the "last active day" misses it (a returning person's last active day is today, so they look healthy).
     const recentActive = daysSince(activeDays.at(-1), now) <= (Number(r.comebackDays) || DORMANT_DEFAULTS.comebackDays);
@@ -99,7 +99,7 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
     else candidates.push(rec);
   }
 
-  // Returnees first (those are what most deserves to be seen), the rest by "who had movement most recently"
+  // Comebacks first (those are what most deserve to be seen), then the rest by most recent activity
   out.returnees.sort((a, b) => a.quietDays - b.quietDays);
   candidates.sort((a, b) => (b.lastDay ?? '').localeCompare(a.lastDay ?? ''));
   const picked = [...out.returnees, ...candidates].slice(0, Math.max(1, Number(r.maxPeople) || DORMANT_DEFAULTS.maxPeople));

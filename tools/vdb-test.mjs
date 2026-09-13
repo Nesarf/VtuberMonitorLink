@@ -69,7 +69,7 @@ t('a plain entry (with a UTF-8 Chinese filename) reads back with identical conte
   assert.equal(files.get('vdb-master/vtbs/嘉然今天吃什么.json').toString('utf8'), '{"group":"A-SOUL"}');
 });
 
-t('directory entries never enter the table; multiple entries are all there', () => {
+t('directory entries are skipped, and every file entry is present', () => {
   const buf = tarOf([
     ['vdb-master/', '', '5'],
     ['vdb-master/vtbs/a.json', '{"name":{"cn":"甲"}}'],
@@ -86,7 +86,7 @@ t('directory entries never enter the table; multiple entries are all there', () 
  */
 function paxRecord(key, value) {
   const body = Buffer.from(`${key}=${value}\n`, 'utf8');
-  let len = body.length + 2; // the minimum is "digits + space + body"
+  let len = body.length + 2; // the length counts its own digits: "digits + space + body"
   while (String(len).length + 1 + body.length !== len) len = String(len).length + 1 + body.length;
   return Buffer.concat([Buffer.from(`${len} `, 'utf8'), body]);
 }
@@ -127,7 +127,7 @@ t('parsePax parses several records', () => {
   void body;
 });
 
-t('an empty tar / a truncated tar does not throw', () => {
+t('an empty or truncated tar does not throw', () => {
   assert.deepEqual([...readTar(Buffer.alloc(1024)).keys()], []);
   assert.deepEqual([...readTar(Buffer.alloc(100)).keys()], []);
 });
@@ -206,7 +206,7 @@ t('**searchable by any platform account id**: twitch / youtube / twitter / nicon
   assert.equal(searchIndex(idx, '12345')[0].names[0], '鹿乃', 'a niconico id must be searchable');
 });
 
-t('searchable by platform link shape (pasting a space/channel link finds them too)', () => {
+t('searchable by the shape of a platform link (pasting a profile or channel URL finds them too)', () => {
   assert.equal(searchIndex(idx, 'space.bilibili.com/316381099')[0].names[0], '鹿乃');
   assert.equal(searchIndex(idx, 'twitch.tv/someone_tv')[0].names[0], '某个人');
 });
@@ -228,7 +228,7 @@ t('membersOfGroup returns every member of one group', () => {
   assert.deepEqual(membersOfGroup(idx, '没有这个箱'), []);
 });
 
-t('the index summary is readable', () => {
+t('indexSummary reads as a human-readable line, and a missing index says so', () => {
   assert.match(indexSummary(idx), /4 位（社团 2 个）/);
   assert.match(indexSummary(null), /尚未获取/);
 });

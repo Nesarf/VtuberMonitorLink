@@ -86,7 +86,7 @@ t('unrelated events are not merged in', () => {
   assert.equal(game.items.length, 1, 'the game announcement must form its own cluster');
 });
 
-t('same person + similar title -> relaxed threshold (collab posts for one person often differ a lot in wording)', () => {
+t('same person + similar title -> relaxed threshold (posts about one person often differ a lot in wording)', () => {
   const a = { id: 'p1', sourceId: 'bili-opus-jaran', title: '嘉然 新动态', publishedAt: at('2026-03-01T10:00:00Z'), people: ['jaran'] };
   const b = { id: 'p2', sourceId: 'x-twitter', title: '嘉然 新动态 转推', publishedAt: at('2026-03-01T11:00:00Z'), people: ['jaran'] };
   const cs = cluster([a, b], { weight: () => 1 });
@@ -106,11 +106,13 @@ t('different people do not merge just because the wording is similar', () => {
   const b = { id: 'b', sourceId: 's2', title: 'B 的生日直播 5月20日', publishedAt: at('2026-05-01T11:00:00Z'), people: ['b'] };
   const cs = cluster([a, b], { weight: () => 1 });
   // The text really is similar (only the person name differs), but what this case demands is
-  // "do not merge blindly just because the threshold is relaxed" - with no same-person boost it
-  // should at least either stay in separate clusters or clearly state whom it merged
+  // "do not merge blindly just because the threshold is relaxed": with no same-person boost, either
+  // keep them in separate clusters, or keep both people listed when they do merge
   const merged = cs.length === 1;
-  assert.ok(merged || cs.length === 2, 'either do not merge, or if merged, people must still show two different people');
-  if (merged) assert.equal(cs[0].people.length, 2);
+  // The old `assert.ok(merged || cs.length === 2, ...)` was a tautology: those are the only two
+  // possible cluster counts, so the assertion could never fail. State the real expectation instead.
+  assert.ok(cs.length === 1 || cs.length === 2, `expected 1 or 2 clusters, got ${cs.length}`);
+  if (merged) assert.equal(cs[0].people.length, 2, 'if they do merge, both people must still be listed');
 });
 
 process.stdout.write('\ncluster: source weights\n');
@@ -142,7 +144,15 @@ t('the highest-weighted source in an event becomes the lead, and the first repor
   const big = cs.find((c) => c.items.length > 1);
   assert.ok(big.leadSourceId, 'a lead source is expected');
   assert.ok(['official-hololive', 'news-moguravr', 'community-reddit'].includes(big.leadSourceId));
-  assert.equal(big.items[0].id, big.items[0].id);
+  // was `assert.equal(big.items[0].id, big.items[0].id)` — a self-comparison that always passes.
+  // The claim in this test's name is "the highest-weighted source becomes the lead", so check that:
+  // every clustered item comes from the input, and the lead really is the heaviest of them
+  // (`weigh` is called with a sourceId, see cluster.js's weigh(it.sourceId)).
+  assert.ok(big.items.every((it) => items.some((orig) => orig.id === it.id)), 'cluster items must come from the input');
+  const weights = big.items.map((it) => weigh(it.sourceId));
+  const leadItem = big.items.find((it) => it.sourceId === big.leadSourceId);
+  assert.ok(leadItem, 'the lead source must be one of the clustered items');
+  assert.equal(weigh(leadItem.sourceId), Math.max(...weights), 'the lead must be the highest-weighted source');
   assert.ok(big.firstAt <= big.lastAt);
 });
 
@@ -218,7 +228,7 @@ t('the result is independent of input order (determinism)', () => {
   assert.deepEqual(a, b);
 });
 
-t('identical duplicate reports must merge (here nothing counts as a rare term)', () => {
+t('identical duplicate reports must merge (no term counts as rare in this input)', () => {
   // 20 identical items: every term's count equals the document count, so not one rare term is
   // left. A gate that only looks at rare terms misses every real duplicate (measured in practice).
   const same = Array.from({ length: 20 }, (_, i) => ({

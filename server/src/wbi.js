@@ -124,7 +124,7 @@ export const SIGN_ERROR_CODES = new Set([-352, -403, -412]);
  * Why a separate one: many bilibili write operations are POST + form body, while the signature
  * belongs on the **query** (`w_rid`/`wts` go into the URL) and the body stays as it is.
  * Mixing the two is a very easy mistake to make — if signature parameters end up in the body,
- * the server decides the signature is wrong.
+ * the server treats the signature as invalid.
  */
 export async function wbiPost(cfg, url, { params = {}, body = '', headers = {}, log = null, mode = 'direct', retry = true } = {}) {
   const k = await getWbiKeys(cfg, { log, headers });
@@ -146,16 +146,31 @@ export async function wbiPost(cfg, url, { params = {}, body = '', headers = {}, 
 
   try {
     let res = await doFetch(signUrl(u.toString(), k.mixin));
-    let j = await res.json().catch(() => null);
+    // Read the body once as text: `res.json()` alone throws away the raw reply, and the caller
+    // (danmaku.js) wants it to show what the server actually said when it is not JSON at all.
+    // It used to slice a `text` binding that never existed here, so a non-JSON reply surfaced as
+    // the useless error "text is not defined" instead of the real body (BUGS #68).
+    let text = await res.text().catch(() => '');
+    let j = null;
+    try {
+      j = text ? JSON.parse(text) : null;
+    } catch (e) {
+      j = null;
+    }
     if (retry && j && SIGN_ERROR_CODES.has(Number(j.code))) {
       const fresh = await getWbiKeys(cfg, { force: true, log, headers });
       if (fresh.ok) {
         res = await doFetch(signUrl(u.toString(), fresh.mixin));
-        j = await res.json().catch(() => null);
-        return { ok: res.ok && Number(j?.code) === 0, status: res.status, json: j, retried: true };
+        text = await res.text().catch(() => '');
+        try {
+          j = text ? JSON.parse(text) : null;
+        } catch (e) {
+          j = null;
+        }
+        return { ok: res.ok && Number(j?.code) === 0, status: res.status, json: j, text, retried: true };
       }
     }
-    return { ok: res.ok && Number(j?.code) === 0, status: res.status, json: j };
+    return { ok: res.ok && Number(j?.code) === 0, status: res.status, json: j, text };
   } catch (e) {
     const cause = e?.cause?.code ?? e?.cause?.message ?? '';
     return { ok: false, error: cause ? `${e.message}(${cause})` : e.message, stage: 'fetch' };
@@ -165,8 +180,8 @@ export async function wbiPost(cfg, url, { params = {}, body = '', headers = {}, 
 
 /**
  * Signed request: sign first, and on a signature-class error **force a key refresh and retry once**.
- * This is mandatory — the key rotates daily, so a long-running process is guaranteed to hit
- * the moment when "the key has expired".
+ * This is mandatory: the key rotates daily, so a long-running process is guaranteed to hit an
+ * expired key at some point.
  */
 export async function wbiFetch(cfg, url, { params = {}, headers = {}, log = null, mode = 'direct', retry = true } = {}) {
   const k = await getWbiKeys(cfg, { log, headers });

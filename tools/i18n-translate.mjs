@@ -11,7 +11,7 @@
 //      polluting anything. The cache is reusable and committable (it holds no keys).
 //   3) **Glossary**: person names and product words must be pinned (one glossary key must not be
 //      translated as "Intel" in one place and "Info" in another).
-//      The method is to replace the term with a sentinel before translating and restore it afterwards ——
+//      The method is to replace the term with a sentinel before translating and restore it afterwards -- 
 //      that way the model never gets a chance to change it.
 //   4) **Placeholder protection**: `{target}`, `${x}`, `%s`, newlines and shapes like `MM-DD` must survive verbatim.
 //      After translating it **verifies that every sentinel was restored**; one missing means that entry
@@ -126,7 +126,7 @@ export function loadGlossary() {
 
 /**
  * Replace everything that must be preserved with sentinels.
- * Returns { text, tokens } —— tokens are used to restore and **verify** after translating.
+ * Returns { text, tokens } -- tokens are used to restore and **verify** after translating.
  */
 export function protect(text, glossary = {}, locale = '') {
   const tokens = [];
@@ -173,7 +173,7 @@ export function restore(text, tokens) {
  * Does this translation look like it was **not translated at all**?
  *
  * Why this is needed: coverage only counts "is there a value", so "the value is the Chinese source"
- * also counts as 100% —— the metric would be hollow.
+ * also counts as 100% -- the metric would be hollow.
  * The criterion: Han characters appear in a target language that is neither Chinese nor Japanese (words
  * the glossary deliberately keeps in the source form are stripped first).
  * Japanese is the exception (Han characters are normal writing there).
@@ -197,7 +197,7 @@ export function looksUntranslated(text, locale, glossary = {}) {
  *
  * This is a real incident: the source string for "days later" held no placeholder at all (tokens was empty), yet
  * the model wrote a ⟦0⟧ of its own (it had seen that thing in the prompt), and restore() only checked
- * "did an emitted sentinel go missing", never "did extra sentinels appear in the translation" —— so
+ * "did an emitted sentinel go missing", never "did extra sentinels appear in the translation" -- so
  * "daqui a ⟦0⟧ dias" was written into the Portuguese UI that way, and four languages were hit.
  * The criterion: any sentinel in the translation is disallowed (after restoring there should be none).
  *
@@ -219,17 +219,17 @@ export function looksBroken(text, locale, glossary = {}) {
  * Cache invalidation strategy.
  *
  * Why this is needed: the cache key is "source string + language", so **changing the prompt or the
- * glossary still hits the old translations** —— the proper-noun policy changed and the old entries
+ * glossary still hits the old translations** -- the proper-noun policy changed and the old entries
  * cannot be pulled back, leaving you staring at them helplessly. Four modes:
  *   none       normal cache use (default)
  *   terms      re-translate only entries whose **source string contains a proper noun** (a word from the
  *              glossary, or a Latin fragment with capitals)
- *   suspicious re-translate only entries that "look untranslated" (Han characters left in the translation) —— used to fix machine-translation misses
+ *   suspicious re-translate only entries that "look untranslated" (Han characters left in the translation) -- used to fix machine-translation misses
  *   all        re-translate everything (only when the model changed or the whole approach is wrong; it costs the money again)
  */
 export function needsRetranslate(sourceText, mode, glossary = {}, existing = null, locale = '') {
   if (mode === 'all') return true;
-  // Broken translations (unfinished / stray sentinel) are always re-translated —— both are the classic "has a value but is unusable"
+  // Broken translations (unfinished / stray sentinel) are always re-translated -- both are the classic "has a value but is unusable"
   if (mode === 'suspicious') return looksBroken(existing, locale, glossary);
   if (mode !== 'terms') return false;
   for (const term of Object.keys(glossary)) if (String(sourceText).includes(term)) return true;
@@ -243,7 +243,7 @@ async function translateBatchOpenAI({ texts, locale, target }, provider = {}, { 
   const url = `${String(provider.baseUrl).replace(/\/+$/, '')}/chat/completions`;
   // "Finishing off a half-done translation" is a call with a **different task**: the input is not the
   // Chinese source but the previous output with "Chinese and English/Korean mixed together". This point
-  // is crucial —— the temperature is 0, so as long as the input and the prompt are unchanged the model
+  // is crucial -- the temperature is 0, so as long as the input and the prompt are unchanged the model
   // hands back the same broken translation again (hit before: 6 ko-KR entries returned verbatim three times in a row).
   const finishing = task === 'finish';
   const body = {
@@ -259,7 +259,7 @@ async function translateBatchOpenAI({ texts, locale, target }, provider = {}, { 
           'Output JSON only: {"t":["...","..."]} with exactly ' + texts.length + ' items, same order. Keep it short like a UI label.',
           'Never translate ⟦n⟧ placeholders — copy them exactly.',
           // Proper-noun policy (set by the user): prefer keeping the original form; replace only where the target language has an established local name.
-          // This has to go into the prompt —— the glossary only covers the words listed in it, and anything it does not cover relies on the model policing itself.
+          // This has to go into the prompt -- the glossary only covers the words listed in it, and anything it does not cover relies on the model policing itself.
           'PROPER NOUNS: keep person names, group names, brand names, product names and service names in their original form.',
           'Only replace a proper noun when the target language has a widely established local name for it (e.g. YouTube→유튜브 in Korean, Telegram→Телеграм in Russian, hololive→ホロライブ in Japanese).',
           'If unsure, keep the original — never invent a transliteration.',
@@ -317,7 +317,7 @@ async function translateBatch({ texts, locale, target }, opts = {}) {
  * Read the model tier from the **local application config**.
  *
  * Why this engine exists: passing the key with `--key` would put it into the command line and the shell
- * history —— a translation script that "types the key into the command line" is a hazard in itself.
+ * history -- a translation script that "types the key into the command line" is a hazard in itself.
  * Going through this engine keeps the key in this process's memory only, and uses the tier you already
  * configured in the UI (the packaged build wins, then the dev tree's config.json).
  */
@@ -374,7 +374,7 @@ function readMachine() {
  * dead); (2) keys whose Simplified Chinese source is character-for-character identical to the English
  * (every language uses the same string, so no translation is needed).
  * What happens without pruning: machine.json piles up invisible old translations, and the ones holding
- * Han characters get caught by the "suspected untranslated" statistics —— turning into a chore of fixing
+ * Han characters get caught by the "suspected untranslated" statistics -- turning into a chore of fixing
  * a broken translation for something that does not exist in the UI at all.
  */
 export function pruneMachine(machine, { zh, en } = {}) {
@@ -399,7 +399,7 @@ function writeMachine(all) {
 /**
  * This one does not need translating at all: the Simplified Chinese source and the English are **character-for-character
  * identical** (brand names and abbreviations such as LLM / API Key).
- * The criterion comes from the source itself (zh value === en value); no separate exemption list —— a list would drift.
+ * The criterion comes from the source itself (zh value === en value); no separate exemption list -- a list would drift.
  */
 export function isLanguageNeutral(zhValue, enValue) {
   return !!zhValue && zhValue === enValue;
@@ -545,7 +545,7 @@ async function main() {
             if (looksBroken(prev, locale, glossary)) {
               // The old value is broken too -> clear it as well, otherwise "better missing than broken" is just a slogan:
               // the broken value stays in machine.json and the UI still shows that Chinese sentence / that ⟦0⟧.
-              // (When the old value is good, never touch it —— do not delete a translation just because the model has a bad day.)
+              // (When the old value is good, never touch it -- do not delete a translation just because the model has a bad day.)
               delete machine[locale][b[i].key];
               log(`  ✕ ${b[i].key}: retranslation ${why}, removed from the machine layer (UI falls back to English, retry next run)`);
             } else {

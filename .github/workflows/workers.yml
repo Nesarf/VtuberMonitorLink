@@ -65,6 +65,13 @@ jobs:
       - name: Build every implementation that can be built here, then diff the corpus
         run: node tools/workers.mjs
 
+      # The corpus is a floor, not a ceiling: this points the same diff at generated input, seeded so a
+      # divergence is reproducible. It is what found the PowerShell worker rejecting every astral code
+      # point, which the hand-written corpus had missed.
+      - name: Diff the implementations over generated input
+        shell: bash
+        run: node tools/workers-diff.mjs --n 150 --seed 20260101
+
       - name: Report which implementations this platform ran
         if: always()
         shell: bash

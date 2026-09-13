@@ -323,6 +323,20 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   contract itself gets corrected, by editing the snapshot *and* the reference together, on purpose.
 - `npm run workers -- --list` shows which languages/capabilities are present and which are missing a
   build; a missing worker is reported as `[skip]`, never as a pass, and never as a failure.
+- The corpus is a floor, not a ceiling. `npm run workers:diff` (tool: `tools/workers-diff.mjs`) points
+  the same diff at **generated** input: a seeded generator per capability produces cases nobody wrote
+  down - random markup with quoted `>`, CDATA, astral characters, compatibility forms, schedules with a
+  contended request budget - and every implementation answers the same generated case, so the verdict
+  is still the cross-implementation diff. Everything is seeded, so a divergence is reproducible from
+  the seed and case index it prints, and each one is printed as a ready-to-paste corpus entry:
+  promoting a case is a review decision, so the tool never writes to `workers/spec/` itself. It fuzzes
+  the published registry only, because a worker under development would report its own half-finished
+  state as a divergence of the layer.
+- That is not a hypothetical: the first fuzz run found a real bug in a published worker. The PowerShell
+  implementation rejected **every** astral code point - it walked UTF-16 code units and asked .NET for a
+  code point by code unit, which throws on a lone surrogate - so an emoji, which a Vtuber monitoring tool
+  sees constantly, came back as `bad-input` while five other implementations normalized it. The fuzzer
+  shrank it to the single code point `U+1F600` and the corpus now pins it.
 
 ## 6. Adding a language
 
@@ -361,28 +375,32 @@ another copy of anything:
 
 ## 8. Where this stands, and what is deliberately not here yet
 
-Landed: the contract, the two shared tables, the reference implementation, 65 corpus cases with a
-reviewed snapshot, the conformance runner (`npm run workers`), and implementations in JavaScript,
-Java, C++, Go and Python — five that agree case for case, and a machine-local R worker whose hashes are
-still wrong (see below). Editor tasks live in `.vscode/tasks.json`, and a CI job builds and diffs the
-layer on Linux and Windows.
+Landed: the contract, the two shared tables, the reference implementation, 115 corpus cases with a
+reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
+(`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, PowerShell and SQL.
+Editor tasks live in `.vscode/tasks.json`, and a CI job builds, diffs and fuzzes the layer on Linux and
+Windows (macOS informationally). The state of agreement is not a number to keep in this paragraph: the
+runner prints it, section 5 says how to read it, and `docs/BUGS.md` records what is currently open.
 
 Deliberately not here yet:
 
 - **No packaging into the release artifact.** The portable exe is unchanged and the release checks do
   not know about `workers/`. This layer has to earn its way in: it is published as source first.
-- **The machine-local workers are not in the published registry.** R, J, PowerShell and the POSIX
-  shell implementations depend on interpreters that not every machine has; they live in
-  `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]`
-  elsewhere rather than failing. A worker that cannot start is not a worker that is wrong.
-- **`search.query` is implemented by three workers now** — the JavaScript reference, a Java inverted
-  index and a SQL one — so what is left in the plan is `fetch.plan`/`fetch.batch` (Go, concurrent,
-  per-egress limits) and then the LLM/vision glue (Python).
+- **The machine-local workers are not in the published registry.** Some implementations depend on
+  interpreters that not every machine has - R, J and the POSIX shell ones today; they live in
+  `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]` elsewhere
+  rather than failing. A worker that cannot start is not a worker that is wrong.
+- **`search.query` is implemented by three workers now** - the JavaScript reference, a Java inverted
+  index and a SQL one - and `fetch.plan` is specified in section 10 with a JavaScript reference and a Go
+  implementation on the way, because concurrency and per-egress limits are what Go is here for. What is
+  left after that is the LLM/vision glue (Python).
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
-- **Known open items.** Six implementations agree on all 67 cases, so what is left here is what the
-  corpus still cannot see. Malformed-request error *text* differs per language by design. The
+- **Known open items.** Six implementations agree on every corpus case except the one this section's
+  fuzzer pinned and whose fix is still in flight (see section 5 and `docs/BUGS.md`), so what is left
+  here is what the corpus still cannot see. Malformed-request error *text* differs per language by
+  design. The
   **removed-element pre-scan ends an opening tag at the first `>`**, so a quoted attribute containing
   `>` (`<script src="a>b">`) is mis-scanned and the whole element may not be removed; the main tag
   scanner *is* quote-aware, so this is an inconsistency between two passes of the same function. No

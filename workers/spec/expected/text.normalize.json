@@ -1,7 +1,7 @@
 {
  "capability": "text.normalize",
  "generatedBy": "js-text (workers/js/vmltext.js)",
- "generatedAt": "2026-09-13T19:57:34.761Z",
+ "generatedAt": "2026-09-13T20:54:29.368Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "ascii-passthrough": {
@@ -63,6 +63,12 @@
   },
   "mixed-long-paragraph": {
    "text": "【3d披露】新衣装お披露目!abc - 已经开播了.new outfit reveal live now - watch at https://example.com/a-b 'quoted' \"double\" ... cafe lodz ooaeaess istanbul Привет مرحبا 한국어 テスト.开播了,快来看!123,456.123 ab spaced out"
+  },
+  "astral-emoji-survives-normalization": {
+   "text": "cat 😀 tail 🇯🇵"
+  },
+  "astral-case-mapping-and-compatibility": {
+   "text": "𝐀𐐀 𐐨 a"
   }
  }
 }

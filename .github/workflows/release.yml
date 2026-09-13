@@ -36,8 +36,22 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Fast checks (integrity, locales, i18n keys, unit tests)
-        run: npm run verify:fast
+      - name: Fast checks (integrity, locales, i18n keys, plural forms, unit tests)
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'verify-fast.log'
+          npm run verify:fast *> $log
+          $code = $LASTEXITCODE
+          Get-Content $log
+          if ($code -ne 0) {
+            # The job log needs a token to read; a check annotation does not. Emit the tail as an
+            # annotation so a failed release stays diagnosable from outside (BUGS #71).
+            $tail = (Get-Content $log -Tail 12) -join "`n"
+            $tail = $tail -replace '%', '%25'
+            $tail = $tail -replace "`r?`n", '%0A'
+            Write-Host "::error title=verify:fast failed::$tail"
+          }
+          exit $code
 
       - name: Build web UI, portable exe and release zip
         run: node tools/build-portable.cjs

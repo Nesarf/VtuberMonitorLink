@@ -3,6 +3,14 @@ name: ci
 # Fast feedback on every push: does the frontend build, does the source stay
 # free of hard-coded machine paths and secrets, and does the launcher still
 # resolve a layout correctly.
+#
+# Two jobs on purpose:
+#   * `check` (ubuntu) — the cheap platform-independent things.
+#   * `fast`  (windows) — the whole `verify:fast` chain. It used to run only on a release tag,
+#     which is exactly how a Windows-only failure stayed invisible until release day (BUGS #71);
+#     running it on every push makes that class of "green here, red there" show up immediately.
+#     Its failing step also emits a check annotation, because reading the job log needs a token
+#     while annotations are public — a red build should stay diagnosable from outside.
 
 on:
   push:
@@ -48,3 +56,32 @@ jobs:
           node -e "const s=require('fs').readFileSync('launcher/launch.cjs','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.cjs is not ASCII');process.exit(1)}"
           node -e "const s=require('fs').readFileSync('launcher/launch.cmd','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.cmd is not ASCII');process.exit(1)}"
           node -e "const s=require('fs').readFileSync('launcher/launch.sh','utf8'); if(/[^\x00-\x7F]/.test(s)){console.error('launch.sh is not ASCII');process.exit(1)}"
+
+  fast:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Fast checks (integrity, locales, i18n keys, plural forms, unit tests)
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'verify-fast.log'
+          npm run verify:fast *> $log
+          $code = $LASTEXITCODE
+          Get-Content $log
+          if ($code -ne 0) {
+            $tail = (Get-Content $log -Tail 12) -join "`n"
+            $tail = $tail -replace '%', '%25'
+            $tail = $tail -replace "`r?`n", '%0A'
+            Write-Host "::error title=verify:fast failed::$tail"
+          }
+          exit $code
+

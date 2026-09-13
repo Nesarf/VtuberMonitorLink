@@ -282,7 +282,7 @@ differential: 456/456 identical
 $ node tools/workers.mjs --no-build --cap search.query     # with a temporary registry.local.json entry
   overlay    : workers/registry.local.json (2 machine-local entries)
 workers: multilingual conformance run
-  repository : E:\VtuberMonitorLink
+  repository : <the checkout directory>
   corpus     : search.query(16)
   workers    : js-text, js-search, java-text, cpp-text, go-text, python-text, pwsh-text, r-text, sql-search
 

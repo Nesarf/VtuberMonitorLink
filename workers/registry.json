@@ -63,10 +63,19 @@
         ["python3", "workers/python/vmltext.py"]
       ],
       "notes": "Python 3.13, standard library only, no build step (build.mjs only checks the interpreter)"
+    },
+    {
+      "id": "pwsh-text",
+      "language": "pwsh",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "build": ["node", "workers/pwsh/build.mjs"],
+      "artifact": "workers/pwsh/vmltext.ps1",
+      "launch": ["pwsh", "-NoProfile", "-NoLogo", "-NonInteractive", "-File", "workers/pwsh/vmltext.ps1"],
+      "notes": "PowerShell 7, no modules, no compilation (the artifact IS the script); build.mjs only checks the interpreter, the shared tables and the built-in self-check. -NoProfile keeps a user profile out of the protocol stream, -NonInteractive keeps a prompt from becoming a stdout line."
     }
   ],
   "_planned": [
-    "pwsh-text, bash-text, zsh-text - the shell implementations (byte-oriented where the shell is)",
+    "bash-text, zsh-text - the remaining shell implementations (byte-oriented where the shell is)",
     "r-text, j-text, apl-text - the array languages, once the toolchains are installed and recorded",
     "sql-text - SQLite FTS as the SQL implementation of search.query, later",
     "upc / linux: see the portability section of docs/WORKERS.md"

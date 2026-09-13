@@ -353,9 +353,12 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   the machine on compilers than the whole layer would ever use, and the symptom on a smaller developer
   machine is indistinguishable from a worker that has hung. The fuzzer is sequential for the same reason.
   Measured on this project's development machine, and worth stating as the shape of the problem rather than
-  as a number about one computer: one heavy step runs at full speed, and every additional concurrent one
-  takes away **more than its share** - two at once are slower than the same two run one after the other. So
-  the cheap way to be fast here is sequence, and the expensive way is parallelism.
+  as a number about one computer: **cores are not what runs out.** One CPU-bound process does 142 ms of work,
+  twelve at once do 150 ms each - about 6% each, on a machine with twelve logical cores - so light processes
+  are nearly free. What runs out is memory: with 4.8 GB free of 15.9 GB, the steps that spawn many processes
+  or allocate heavily are the ones that slow everything down, and a build is exactly that. So the rule is
+  "one build at a time", not "one process at a time", and the reason is allocation rather than contention
+  for the CPU.
 - `--build-only` compiles everything that is missing and stops; `--cap` and `--only` narrow a run;
   `--update` re-records the snapshot from the reference.
 - The primary verdict is the **cross-implementation diff**, not "matches the reference": the tool

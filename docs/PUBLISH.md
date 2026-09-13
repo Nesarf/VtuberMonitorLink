@@ -67,12 +67,15 @@ drag the zip in -> Publish.
 
 **One heavy step at a time.** Every command below is heavy in a different way - `workers` compiles Java,
 C++ and Go and then runs eight interpreters, `release` builds a portable package and drives a browser,
-`verify:fast` runs twenty-odd test scripts - and on a machine that is also running anything else, the cost
-of a second concurrent one is not additive. Measured on the development machine for this project: a single
-heavy command runs at full speed, and each additional concurrent one takes away more than its share, to the
-point where two together are slower than the same two run one after the other. So run them in sequence, and
-when a step exists in a narrow form, prefer it (`node tools/workers.mjs --cap <name> --only <worker>`)
-while anything else is running.
+`verify:fast` runs twenty-odd test scripts. What makes that a rule is **memory, not cores**, and it is worth
+being exact because the obvious guess is wrong. Measured on the development machine for this project (6
+physical cores, 12 logical): one CPU-bound process runs at 142 ms of work, two at 142 ms, four at 144, eight
+at 144, twelve at 150 - i.e. light single-threaded processes are nearly free up to the core count, and the
+serialisation rule has nothing to do with them. What is not free is allocation: the machine had 4.8 GB free
+of 15.9 GB, so the steps that spawn many processes or allocate heavily - a portable build, a .NET or JVM
+build, a browser traversal with its dozen helper processes - are the ones that make everything else crawl,
+themselves included. Run *those* one at a time, and when a step exists in a narrow form, prefer it
+(`node tools/workers.mjs --cap <name> --only <worker>`) while anything else is running.
 
 ```powershell
 npm run sanitize-check   # any hard-coded paths / secrets / private names in the source

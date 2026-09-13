@@ -21,7 +21,7 @@ const blankForm = { name: '', kind: 'birthday', date: '', since: '', note: '', r
 const blankGridForm = { name: '', kind: 'event', date: '', since: '', note: '', remindDaysBefore: 3 };
 
 export default function Calendar() {
-  const { t, weekdays, weekdaysSunFirst, fmtDateTime } = useI18n();
+  const { t, weekdays, weekdaysSunFirst, weekStart, fmtDateTime } = useI18n();
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
@@ -35,13 +35,16 @@ export default function Calendar() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.getCalendar({ days: 400, month, year, weekStart: weekdays.length === 7 ? 1 : 1 });
+      // The region decides which day the month starts on, and the i18n layer already knows it: this
+      // used to send a constant 1 (a conditional whose two branches were the same value), so thirteen
+      // locales whose week starts on Sunday were shown a Monday-first grid. See docs/BUGS.md #80.
+      const r = await api.getCalendar({ days: 400, month, year, weekStart });
       setData(r);
       setErr('');
     } catch (e) {
       setErr(e.message);
     }
-  }, [month, year, weekdays.length]);
+  }, [month, year, weekStart]);
 
   useEffect(() => {
     load();
@@ -51,11 +54,13 @@ export default function Calendar() {
   const all = data?.all ?? [];
   const grid = data?.grid;
 
-  // Month calendar header: rotated by the region's week start day
+  // Month calendar header: rotated by the region's week start day. The server echoes the value it built
+  // the grid with, and until that answer arrives the region's own value is the right guess - the `1` that
+  // used to sit here was Monday for everyone.
   const header = useMemo(() => {
-    const start = data?.grid?.weekStart ?? 1;
+    const start = data?.grid?.weekStart ?? weekStart;
     return weekdaysSunFirst.slice(start).concat(weekdaysSunFirst.slice(0, start));
-  }, [data, weekdaysSunFirst]);
+  }, [data, weekdaysSunFirst, weekStart]);
 
   const save = async () => {
     setBusy('add');
@@ -211,7 +216,7 @@ export default function Calendar() {
             ▶
           </button>
           <span className="muted small">
-            {t('calWeekStart')}: {weekdaysSunFirst[data?.grid?.weekStart ?? 1]}
+            {t('calWeekStart')}: {weekdaysSunFirst[data?.grid?.weekStart ?? weekStart]}
           </span>
         </div>
         <div className="cal-grid">

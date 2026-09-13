@@ -6,6 +6,9 @@
 // It also verifies that local keyword extraction (no network, no LLM) does not mistake
 // unrelated dates for anniversaries.
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   dayInTz,
   daysBetween,
@@ -17,6 +20,9 @@ import {
   upcoming,
   detectFromItems,
 } from '../server/src/calendar.js';
+import { LOCALES, byCode } from '../web/src/locales/index.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let pass = 0;
 let fail = 0;
@@ -213,6 +219,55 @@ t('rejects bad dates and an empty name', () => {
 t('reminder days are clamped to a sane range', () => {
   assert.equal(sanitizeEntry({ name: 'X', date: '03-05', remindDaysBefore: 999 }).entry.remindDaysBefore, 60);
   assert.equal(sanitizeEntry({ name: 'X', date: '03-05', remindDaysBefore: -5 }).entry.remindDaysBefore, 0);
+});
+
+process.stdout.write('\ncalendar: the week starts where the region says it does\n');
+
+// BUGS #80: the page sent the server a constant 1, so the month grid started on Monday in thirteen
+// locales whose week starts on Sunday. Three things have to stay true, and each is checked where it can
+// actually be checked: the registry is the source of the value, the server honours whichever value it is
+// given, and the page passes the region's value rather than a constant of its own.
+
+t('the registry carries a week start for every locale, and it is 0 or 1', () => {
+  for (const loc of LOCALES) {
+    assert.ok(loc.weekStart === 0 || loc.weekStart === 1, `${loc.code} has weekStart=${loc.weekStart}`);
+  }
+});
+
+t('the locales whose week starts on Sunday say so, and the named ones are as measured', () => {
+  const sunday = LOCALES.filter((l) => l.weekStart === 0).map((l) => l.code);
+  const monday = LOCALES.filter((l) => l.weekStart === 1).map((l) => l.code);
+  assert.ok(sunday.length > 0 && monday.length > 0, 'both kinds exist in this registry');
+  for (const code of ['en-US', 'ja-JP', 'zh-TW', 'ko-KR', 'th-TH', 'ar-SA']) {
+    assert.equal(byCode(code)?.weekStart, 0, `${code} should start on Sunday`);
+  }
+  for (const code of ['zh-Hans', 'de-DE', 'ru-RU', 'vi-VN', 'fr-FR']) {
+    assert.equal(byCode(code)?.weekStart, 1, `${code} should start on Monday`);
+  }
+});
+
+t('the server grid begins on the day it was asked for', () => {
+  // 2026-09-01 is a Tuesday, so a Monday-first grid leads with 2026-08-31 and a Sunday-first one with
+  // 2026-08-30. The first cell carries the date, which makes the assertion about the calendar rather than
+  // about an index.
+  const monday = monthGrid(2026, 9, 1);
+  const sunday = monthGrid(2026, 9, 0);
+  assert.equal(monday.weekStart, 1);
+  assert.equal(sunday.weekStart, 0);
+  assert.equal(monday.cells[0].day, '2026-08-31');
+  assert.equal(sunday.cells[0].day, '2026-08-30');
+  assert.equal(monday.cells[1].day, '2026-09-01');
+  assert.equal(sunday.cells[2].day, '2026-09-01');
+});
+
+t('the page asks for the region week start instead of a constant', () => {
+  // A source assertion, and it is the honest shape of this check: the page is a React component and the
+  // repository has no DOM harness for it, so what can be pinned without one is that the request goes out
+  // with the region's value and that the constant which caused the bug has not come back.
+  const src = fs.readFileSync(path.join(ROOT, 'web/src/pages/Calendar.jsx'), 'utf8');
+  assert.ok(/weekStart[,\s}]/.test(src), 'the page should take weekStart from the i18n context');
+  assert.ok(/getCalendar\(\{[^}]*weekStart\b/s.test(src), 'the calendar request should carry weekStart');
+  assert.ok(!/getCalendar\(\{[^}]*\? 1 : 1/s.test(src), 'the request must not send a constant week start');
 });
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);

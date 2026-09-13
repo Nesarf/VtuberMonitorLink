@@ -255,10 +255,16 @@ function runWorker(w, capability, cases, probeCapability) {
       }
       resolve({ descriptor, answers, stderr: stderr.trim(), stderrTail: stderr.trim().split('\n').slice(-3).join(' | '), error: null });
     };
+    // The budget is per worker and declared in the registry, because the budget exists to catch a
+    // worker that has stopped answering, not to enforce a performance bar: the shell implementation
+    // needs about 35 seconds for the 22 normalize cases on this machine - measured, and inherent to
+    // spawning processes from a shell - so it declares 120000 and the run reports it as answering
+    // rather than as missing. A worker that says nothing at all still fails, which is the point.
+    const budgetMs = Number(w.timeoutMs) > 0 ? Number(w.timeoutMs) : 30000;
     const timer = setTimeout(() => {
-      stderr += `\n(timeout after 30s: answered ${answers.size}/${cases.length})`;
+      stderr += `\n(timeout after ${budgetMs / 1000}s: answered ${answers.size}/${cases.length})`;
       finish();
-    }, 30000);
+    }, budgetMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (d) => (stderr += d));

@@ -369,6 +369,13 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   contract itself gets corrected, by editing the snapshot *and* the reference together, on purpose.
 - `npm run workers -- --list` shows which languages/capabilities are present and which are missing a
   build; a missing worker is reported as `[skip]`, never as a pass, and never as a failure.
+- **A worker may declare its own budget.** `"timeoutMs"` in a registry entry replaces the 30-second
+  default for that worker. The budget exists to catch a worker that has stopped answering, not to enforce
+  a performance bar, and one implementation here genuinely needs more of it: the shell one takes about 35
+  seconds for the 22-case normalize stream, because a command substitution costs 10-20 ms in that
+  interpreter and no arrangement of the contract removes that. Declaring it turns three `MISSING` cases
+  into three answered ones without pretending the shell got faster, which is the honest trade: a worker
+  that says how long it needs is more useful than one that fails quietly behind a default.
 - **The mismatch is asked about, not assumed.** Every worker is sent one request for a capability it was
   not launched for, and the contract says the answer is `unsupported` with the worker still alive. No
   corpus case can ask that question, because every case arrives with the matching capability - which is

@@ -762,6 +762,13 @@ vm_tag_name_of() {
   raw=${raw%% *}
   raw=${raw%%	*}
   raw=${raw%%>*}
+  # A self-closing tag's slash is not part of its name: the reference reads the name with
+  # /^\/?\s*([A-Za-z][A-Za-z0-9:-]*)/, a character set that stops at the slash, so `<br/>`, `<p/>`,
+  # `<hr/>` and every other tag written without a space before the slash are ordinary tags there. This
+  # function used to keep the slash, which made the name `br/`, which is not in the newline list - so
+  # `<br/>` contributed nothing while `<br />` worked, and the fuzzer found it as a single missing
+  # newline in one generated case.
+  raw=${raw%%/*}
   first=${raw:0:1}
   case $first in
     [A-Za-z]) VM_NAME_VALID=1 ;;
@@ -1746,6 +1753,17 @@ vm_loop() {
           "$(vm_json_encode "$IMPL")" "$(vm_json_encode "$RUNTIME")"
         ;;
       invoke)
+        # The contract says a worker answers `unsupported` when it is asked for a capability it was not
+        # launched for. This worker used to run whatever it had been launched with and report whatever
+        # went wrong inside that, which is a wiring mistake dressed up as a bad request; the mismatch
+        # probe in tools/workers.mjs asks this question of every implementation on every run, and it
+        # named this one as soon as the worker stopped timing out.
+        asked=
+        if vm_json_value "$line" capability && vm_json_string "$VM_J_VAL"; then asked=$VM_STR; fi
+        if [ -n "$asked" ] && [ "$asked" != "$VMLTEXT_CAPABILITY" ]; then
+          vm_bad "$idjson" unsupported "this worker implements $VMLTEXT_CAPABILITY"
+          continue
+        fi
         input='{}'
         if vm_json_value "$line" input; then input=$VM_J_VAL; fi
         out=

@@ -11,6 +11,9 @@
 // local fake origin), then look at whether the first bytes in the tunnel are a TLS ClientHello (0x16) or plaintext HTTP.
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { socksAgent, torLaunchPlan } from '../server/src/socks.js';
 
 let pass = 0;
@@ -166,16 +169,24 @@ if (torUp) {
 // ── "launch Tor with one click" argument building (a pure function, assertable offline)
 process.stdout.write('\nsocks: Tor launch arguments\n');
 
-const TB_EXE = 'E:\\Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe';
-const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: 'C:\\vml-test\\pkg\\app' });
+// Build a **synthetic Tor Browser layout** in a temp directory instead of pointing at a real install.
+// The planner's only question is "is there a `Browser/TorBrowser/Data/Tor/torrc` next to the exe?",
+// so a fixture answers it identically everywhere. The previous version used the developer's own
+// install path (`E:\Tor Browser\...`), and its guard was `if (!realPlan.ok)` — which is *not* the
+// same as "Tor Browser was detected": with no torrc the planner still returns a valid plan, just of
+// kind `standalone`, so on CI (where that path does not exist) the test fell through to
+// `assert.equal(realPlan.kind, 'tor-browser')` and failed. A test that only passes on the machine
+// it was written on is a red build waiting to happen (BUGS #71).
+const tbRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-socks-tb-'));
+const tbData = path.join(tbRoot, 'Tor Browser', 'Browser', 'TorBrowser', 'Data', 'Tor');
+fs.mkdirSync(tbData, { recursive: true });
+fs.writeFileSync(path.join(tbData, 'torrc'), 'SocksPort 9150\nDisableNetwork 1\n', 'utf8');
+fs.writeFileSync(path.join(tbData, 'torrc-defaults'), 'ClientTransportPlugin snowflake exec snowflake-client\n', 'utf8');
+const TB_EXE = path.join(tbRoot, 'Tor Browser', 'Browser', 'TorBrowser', 'Tor', 'tor.exe');
+const realPlan = torLaunchPlan({ exe: TB_EXE, socksUrl: 'socks5://127.0.0.1:9150', appRoot: path.join(tbRoot, 'pkg', 'app') });
 
 await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNetwork forced to 0', async () => {
-  if (!realPlan.ok) {
-    // With Tor Browser not installed on this machine, verify the logic itself with a fake layout
-    const fake = torLaunchPlan({ exe: 'X:\\nope\\TorBrowser\\Tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9150' });
-    assert.equal(fake.kind, 'standalone', 'with no torrc it should fall back to the standalone tor branch');
-    return;
-  }
+  assert.equal(realPlan.ok, true, JSON.stringify(realPlan));
   assert.equal(realPlan.kind, 'tor-browser', JSON.stringify(realPlan));
   assert.ok(realPlan.args.includes('--defaults-torrc'), '--defaults-torrc is mandatory (passing -f twice is rejected by Tor)');
   assert.ok(realPlan.args.includes('-f'), 'the torrc is mandatory');
@@ -183,6 +194,13 @@ await t('Tor Browser layout: --defaults-torrc plus its own torrc, with DisableNe
   assert.equal(realPlan.args[realPlan.args.indexOf('--SocksPort') + 1], '9150', 'the port must match the configuration');
   assert.ok(/Browser$/.test(realPlan.cwd), 'cwd must be the Browser directory (pluggable transports use relative paths): ' + realPlan.cwd);
 });
+
+await t('no torrc next to the exe: falls back to the standalone tor branch', async () => {
+  const plan = torLaunchPlan({ exe: path.join(tbRoot, 'nope', 'TorBrowser', 'Tor', 'tor.exe'), socksUrl: 'socks5://127.0.0.1:9150' });
+  assert.equal(plan.kind, 'standalone', JSON.stringify(plan));
+});
+
+fs.rmSync(tbRoot, { recursive: true, force: true });
 
 await t('standalone tor: the data directory sits under the app directory and never touches the C drive', async () => {
   const plan = torLaunchPlan({ exe: 'X:\\tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9050', appRoot: 'E:\\App' });

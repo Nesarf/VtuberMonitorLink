@@ -405,8 +405,13 @@ runner prints it, section 5 says how to read it, and `docs/BUGS.md` records what
 
 Deliberately not here yet:
 
-- **No packaging into the release artifact.** The portable exe is unchanged and the release checks do
-  not know about `workers/`. This layer has to earn its way in: it is published as source first.
+- **No packaging into the release artifact.** The portable exe is unchanged, the release checks do not
+  know about `workers/`, and the release copy leaves the whole directory out: `tools/make-release.mjs`
+  names it in its exclusion list, so the layer does not ship until somebody removes that one line. The
+  requirement it was built under was "prove it in the development tree first", and the honest reading of
+  that is the strict one - a source tree carrying a worker that answers nothing, or one whose cost is a
+  documented timeout, is worse than a source tree without the layer at all. Promoting it is deliberate and
+  cheap; the alternative, shipping eight languages of half-proven code to users by accident, is neither.
 - **The machine-local workers are not in the published registry.** Some implementations depend on
   interpreters that not every machine has - R, J and the POSIX shell ones today; they live in
   `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]` elsewhere

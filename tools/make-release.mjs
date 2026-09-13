@@ -68,6 +68,13 @@ const NEVER_COPY = new Set([
   // copy: the copy walks the filesystem, so a gitignored file ships unless it is named here. Found by
   // probing the copy with the project's own scanner and getting "clean" for a directory containing it.
   'registry.local.json',
+  // The worker layer itself, for now. It is a development tree of eight languages and six capabilities
+  // that the application does not call yet, several of its implementations are still being written, and
+  // the requirement it was built under is explicit: it runs in the development tree first and enters the
+  // release when it has earned it. Publishing a source tree that carries a worker answering nothing, or
+  // one whose cost is a documented timeout, would be worse than publishing a project without it.
+  // Promoting the layer is therefore one line: remove this entry, and it ships as source.
+  'workers',
   // Build intermediates of the worker layer: Java's classes, C#'s obj/ and bin/ hold absolute SDK paths
   // in their generated project files, and none of it belongs in a source release.
   'obj',

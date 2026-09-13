@@ -319,6 +319,11 @@ function main() {
       for (const [re, why, isSecret] of secretPatterns.concat(personalPatterns)) {
         if (!re.test(line)) continue;
         if (EXAMPLE_HINT.test(line) && !/sk-[A-Za-z0-9]{16,}/.test(line)) continue;
+        // The pre-publish check lets a line exempt itself with `sanitize-allow`, for the synthetic drive
+        // paths in test fixtures that no pattern can tell apart from a leak. This scanner reads the same
+        // tree, so it has to honour the same marker: two guards disagreeing about one line means one of
+        // them is wrong and nobody knows which, and the release scan is the one that runs last.
+        if (line.includes('sanitize-allow') && !/sk-[A-Za-z0-9]{16,}/.test(line)) continue;
         // On a secret hit report only "which file, which line, how long" and **never echo the secret
         // itself**: a self-check printing the raw API key into the console/log is a leak in itself
         // (it really happened).

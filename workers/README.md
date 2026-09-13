@@ -31,8 +31,14 @@ npm run workers -- --list      # what is registered, what is built, how big the 
 npm run workers -- --build-only
 npm run workers -- --cap text.fingerprint --only go-text
 npm run workers -- --update    # re-record the reviewed snapshot from the reference
-node workers/java/vmltext.jar --selfcheck     # one implementation's own case list
+npm run workers:diff -- --cap text.extract --n 60 --seed 7   # generated input, same cross-language diff
+java -jar workers/java/dist/vmltext.jar --selfcheck          # one implementation's own case list
 ```
+
+The last line is worth knowing about: the corpus is a floor, not a ceiling, and `workers:diff` points the
+same cross-implementation diff at input nobody wrote down - seeded, so a divergence is reproducible from
+the seed and case index it prints, and every case is asked twice so a worker whose answer depends on
+something other than its input is caught rather than trusted.
 
 The verdict is the cross-implementation diff. A run prints, per capability, how many cases were
 unanimous across how many answering implementations, then one `DIVERGES` block per case that was not —
@@ -62,17 +68,22 @@ these was found by an implementation disagreeing with another, not by a test the
 
 ## Machine-local implementations
 
-`r-text`, `j-text`, `pwsh-text` and `bash-text` need interpreters that not every machine has. Their
-entries live in `workers/registry.local.json` (gitignored, merged over the published registry by the
-harness) so that the published registry stays portable and a run elsewhere reports them as `[skip]`.
+`r-text`, `j-text` and `bash-text` need interpreters that not every machine has. Their entries live in
+`workers/registry.local.json` (gitignored, merged over the published registry by the harness) so that the
+published registry stays portable and a run elsewhere reports them as `[skip]`. The PowerShell worker is
+**not** in that list: PowerShell 7 is present on every CI runner, so `pwsh-text` is registered in
+`registry.json` like any other, and the same is true of Java, Go, Python, node and SQLite.
 Copy `registry.local.example.json` and fill in your own paths; never put an absolute path from your
 machine into `registry.json` — the release checks reject machine-specific paths, and a registry that
-only works on one computer is not a registry.
+only works on one computer is not a registry. A language whose interpreter cannot read a live pipe at all
+is a third case, handled by `"batch": true` in the same entry (contract section 1.3).
 
-The R worker currently agrees with everyone on `text.extract` and `text.normalize` and disagrees on
-every SimHash: that is a 64-bit arithmetic problem in R (where `integer` is 32-bit and `double` loses
-precision above 2^53), not a language limit, and it is listed in `docs/WORKERS.md` section 8 as an
-open item rather than hidden.
+The machine-local implementations are not decoration. R agrees with everyone on `text.normalize`,
+`text.extract` and `text.fingerprint` case for case, which took fixing a 64-bit arithmetic problem in a
+language where `integer` is 32-bit and `double` loses precision above 2^53: forming a 64-bit intermediate
+and taking its residue recomputes a correct answer as a wrong one. An earlier version of this paragraph
+reported that R disagreed on every SimHash; that was true when it was written and it is not true now,
+which is the fate of every sentence about the current state - prefer the run over the sentence.
 
 ## Adding a language
 

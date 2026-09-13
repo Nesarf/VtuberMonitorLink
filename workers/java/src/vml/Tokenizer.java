@@ -79,39 +79,50 @@ public final class Tokenizer {
         StringBuilder run = new StringBuilder();
         int runLength = 0;
         boolean runIsCjk = false;
-        int runFirst = -1;
-        int runSecond = -1;
+        int previousCjk = -1; // the previous CJK code point, so each new one emits one bigram
         for (int cp : cps) {
             boolean cjk = isCjk(cp);
             if (runLength > 0 && cjk != runIsCjk) {
-                flush(out, run, runLength, runIsCjk, runFirst, runSecond);
+                flush(out, run, runLength, runIsCjk);
                 run.setLength(0);
                 runLength = 0;
+                previousCjk = -1;
             }
             if (runLength == 0) {
                 runIsCjk = cjk;
-                runFirst = cp;
-                runSecond = -1;
-            } else if (runIsCjk && runLength == 1) {
-                runSecond = cp;
+            }
+            // A CJK run of length n emits its n-1 overlapping bigrams: every code point after the
+            // first pairs with its predecessor. (An earlier version kept the run's first two code
+            // points and emitted one bigram when the run ended, so "经开开播" produced ["经开"] - only
+            // the first of its three bigrams. That made a term match a tag it had no business
+            // matching; the corpus case `tag-tokens-must-share-one-tag` did not see it because it is
+            // Latin, and it took a differential run against the reference to surface it.)
+            if (cjk && previousCjk >= 0) {
+                out.add(new String(Character.toChars(previousCjk)) + new String(Character.toChars(cp)));
+            }
+            if (cjk) {
+                previousCjk = cp;
             }
             run.appendCodePoint(cp);
             runLength++;
         }
-        flush(out, run, runLength, runIsCjk, runFirst, runSecond);
+        flush(out, run, runLength, runIsCjk);
         return out;
     }
 
-    private static void flush(List<String> out, StringBuilder run, int length, boolean cjk, int first, int second) {
+    /**
+     * Ends a run. An "other" run emits itself whole; a CJK run of length 1 emits that one code point;
+     * a longer CJK run has already emitted all of its bigrams while it was walked and emits nothing
+     * more here.
+     */
+    private static void flush(List<String> out, StringBuilder run, int length, boolean cjk) {
         if (length == 0) {
             return;
         }
         if (!cjk) {
             out.add(run.toString());
         } else if (length == 1) {
-            out.add(new String(Character.toChars(first)));
-        } else {
-            out.add(new String(Character.toChars(first)) + new String(Character.toChars(second)));
+            out.add(run.toString());
         }
     }
 

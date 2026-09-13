@@ -195,6 +195,23 @@ public final class SearchSelfCheck {
                             && intField(no, "total") == 0;
                 }),
 
+        new Case("a CJK run longer than two characters emits every bigram", () -> {
+            // "经开开播" is a four-code-point run, so its tokens are 经开, 开开, 开播 - all three, in
+            // order for the last two. An implementation that stops at the first bigram (this one did,
+            // until a differential run found it) still matches a title containing the run, so the
+            // check that sees it is the negative one: the *middle* bigram 开开 must be a token, which
+            // means it matches a tag holding 开开 and must not be found in a tag holding only 经开.
+            Map<String, Object> middle = query("{\"docs\":[{\"id\":\"a\",\"title\":\"\",\"text\":\"\","
+                    + "\"tags\":[\"开开\"],\"ts\":null}],\"query\":{\"terms\":[\"经开开播\"]},\"limit\":0}");
+            Map<String, Object> run = query("{\"docs\":[{\"id\":\"a\",\"title\":\"经开开播\",\"text\":\"\","
+                    + "\"tags\":[],\"ts\":null}],\"query\":{\"terms\":[\"经开开播\"]},\"limit\":0}");
+            // and the split-tag case in CJK: two tags holding one bigram each are not one tag
+            Map<String, Object> split = query("{\"docs\":[{\"id\":\"a\",\"title\":\"\",\"text\":\"\","
+                    + "\"tags\":[\"经开\",\"开播\"],\"ts\":null}],\"query\":{\"terms\":[\"经开开播\"]},\"limit\":0}");
+            return intField(run, "total") == 1 && hitScore(run, 0) == 7
+                    && intField(middle, "total") == 0 && intField(split, "total") == 0;
+                }),
+
         new Case("match:all requires every term, match:any requires one",
                 () -> {
                     Map<String, Object> all = query("{\"docs\":[{\"id\":\"a\",\"title\":\"alpha\",\"text\":\"\","

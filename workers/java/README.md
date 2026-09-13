@@ -265,6 +265,7 @@ workers/java/
   src/vml/SearchSelfCheck.java  --selfcheck: 24 checks
   tools/probe-search.mjs        runs the corpus through this worker and diffs it against the snapshot
   tools/probe-search-cases.mjs  prints the JavaScript reference's answer for inputs you paste in
+  tools/probe-search-cases-both.mjs runs inputs through both this worker and the reference, side by side
 ```
 
 ## Build and run
@@ -370,22 +371,55 @@ was, and the decision has now been moved onto the rule as the contract states it
 
 ## Tests
 
-* `--selfcheck`: **27/27 checks passed**, exit 0. It covers the corpus's edge rules (the empty query,
+* `--selfcheck`: **28/28 checks passed**, exit 0. It covers the corpus's edge rules (the empty query,
   the whole-query bonus, a CJK term through the bigrams including a term that is *not* a bigram of
-  the run, `match: all` versus `any`, an exact tag filter, a token of a two-word tag, a term whose
-  tokens are split over two tags, a punctuation-only term, a `null` `ts` excluded and counted,
-  `excludedByTime` counting only documents the other filters kept, inclusive bounds on both ends, both
-  tie-breaks, the facet key order, a negative `ts` bucketed before the epoch, the limit, limit 0, the
-  negative-limit refusal, the repeated-term score, the field order of the answer) and the response
-  envelopes of `describe`, `invoke`, `bad-input`, `unsupported`, a non-JSON line and bare `shutdown`,
-  answered through the real request path.
+  the run, a CJK run longer than two code points emitting every bigram, `match: all` versus `any`, an
+  exact tag filter, a token of a two-word tag, a term whose tokens are split over two tags, a
+  punctuation-only term, a `null` `ts` excluded and counted, `excludedByTime` counting only documents
+  the other filters kept, inclusive bounds on both ends, both tie-breaks, the facet key order, a
+  negative `ts` bucketed before the epoch, the limit, limit 0, the negative-limit refusal, the
+  repeated-term score, the field order of the answer) and the response envelopes of `describe`,
+  `invoke`, `bad-input`, `unsupported`, a non-JSON line and bare `shutdown`, answered through the real
+  request path.
 * `node workers/java/tools/probe-search.mjs`: **19/19 cases match the reviewed snapshot**.
+* `node workers/java/tools/probe-search-cases-both.mjs`: 28 hand-written inputs the corpus does not
+  carry — CJK (Han, kana, Hangul) tag and field cases, mixed-script tokens, punctuation-only tokens,
+  tag splits, boundary timestamps — all **byte-identical to the JavaScript reference**. This is the
+  probe that found the second bug below.
 * `node tools/workers.mjs --no-build --cap search.query` with a machine-local entry for `java-search`:
   **19/19 cases unanimous across `js-search`, `java-search` and `sql-search`**, no `DIVERGES`, no
   `ORDER`, no `SNAPSHOT` line.
 * The facet check does not read a literal expectation: it derives the expected key order by sorting
   the same keys by their UTF-8 bytes in the check itself and then requires the emitted order to equal
   it, so a wrong expectation cannot quietly agree with a wrong implementation.
+
+## Two bugs this worker had, and what found them
+
+Both were in the first version of `search.query` and both are fixed; they are written down because
+the way each was found is the argument for the corpus and for the differential runs.
+
+1. **The tag field was one set instead of a list of sets.** The first version tokenized a document's
+   tags into a single field and read the +2 weight off it, so a term whose tokens were split across
+   two tags matched a tag field that does not contain it: tags `["openai", "gpt"]` matched the term
+   `openai gpt`. Section 9's "or any tag" reads two ways, and the code implemented the reading I had
+   *rejected* in my own report. `tag-tokens-must-share-one-tag`, added to the corpus after
+   `java-search` and `sql-search` both flagged the hole, is what settled it — one document too many in
+   `total`, and the tag facet counting `openai` and `gpt` separately, which is the same mistake seen
+   from the other side. The tag field is now the list of per-tag token sets section 9 gives it, and
+   `Term.matchesTag` is the only place it is decided.
+2. **A CJK run emitted only its first bigram.** `tokenizeToken` remembered the first two code points
+   of a run and emitted one bigram when the run ended, so `经开开播` (four code points) tokenized to
+   `[经开]` instead of `[经开, 开开, 开播]`. Nothing in the corpus could see it: it carries CJK
+   *titles* and CJK *text* but no CJK tag split, and a longer string still contains its own first
+   bigram, so every corpus case came out right. It surfaced from the first bug's fix — with tags as a
+   list of sets, the tokenizer's missing bigrams became visible as a term matching tags it should not
+   (`["经开","开播"]` matched `经开开播`). The tokenizer now walks a sliding window and emits one
+   bigram per code point after the first; `tools/probe-search-cases-both.mjs` diffs Han, kana and
+   Hangul inputs against the JavaScript reference, and `--selfcheck` pins the middle bigram of a
+   four-code-point run.
+
+The lesson recorded rather than the fix: a corpus that covers a *rule* in one script does not cover
+that rule in another, and a differential run is what finds the difference.
 
 ## Known limits
 

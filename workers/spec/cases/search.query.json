@@ -190,6 +190,27 @@
       }
     },
     {
+      "id": "cjk-middle-bigram-must-match",
+      "note": "a CJK run of n code points emits ALL n-1 bigrams, not just the first. A term that is a *middle* bigram of a longer run is the case that catches a tokenizer which only remembers the run's first two code points - a real bug in one implementation, invisible to every other case because a longer run always contains its own first bigram",
+      "input": {
+        "docs": [{ "id": "a", "title": "经开开播", "text": "", "tags": [], "ts": null }],
+        "query": { "terms": ["开开"] },
+        "limit": 0
+      }
+    },
+    {
+      "id": "cjk-tag-bigrams-are-per-tag",
+      "note": "the same rule inside a tag: a two-character term matches half of a three-character tag, and the tokens of a term must still share one tag",
+      "input": {
+        "docs": [
+          { "id": "tag-run", "title": "", "text": "", "tags": ["经开开播"], "ts": null },
+          { "id": "split-run", "title": "", "text": "", "tags": ["经开", "开播"], "ts": null }
+        ],
+        "query": { "terms": ["开开"] },
+        "limit": 0
+      }
+    },
+    {
       "id": "long-mixed-corpus",
       "note": "20 documents with mixed scripts, tags and dates, so the ordering rules have to hold together rather than one at a time",
       "input": {

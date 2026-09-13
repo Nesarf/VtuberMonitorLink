@@ -1,7 +1,7 @@
 {
  "capability": "search.query",
  "generatedBy": "js-search (workers/js/vmlsearch.js)",
- "generatedAt": "2026-09-13T20:28:33.042Z",
+ "generatedAt": "2026-09-13T20:42:54.120Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "empty-query-matches-everything": {
@@ -288,6 +288,36 @@
     "months": {
      "1969-12": 2
     }
+   },
+   "excludedByTime": 0
+  },
+  "cjk-middle-bigram-must-match": {
+   "hits": [
+    {
+     "id": "a",
+     "score": 7
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {},
+    "months": {}
+   },
+   "excludedByTime": 0
+  },
+  "cjk-tag-bigrams-are-per-tag": {
+   "hits": [
+    {
+     "id": "tag-run",
+     "score": 2
+    }
+   ],
+   "total": 1,
+   "facets": {
+    "tags": {
+     "经开开播": 1
+    },
+    "months": {}
    },
    "excludedByTime": 0
   },

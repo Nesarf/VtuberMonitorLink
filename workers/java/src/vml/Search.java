@@ -8,16 +8,21 @@
 // documents again. The README says exactly what the index holds; the short version is:
 //
 //   Field (title, text): token -> the set of documents whose *that field* contains the token.
-//   The tag index holds two things: the exact tag string -> the documents carrying it, which is what
-//   the tag filter needs, and an exact tag string *tokenized* -> the documents where one of their
-//   tags contains that token, which is what the +2 tag score needs (a tag with two words can be
-//   matched by either word, and a two-word term can be matched across one tag).
+//   The tag index holds two things, and they answer two different questions: the exact tag string ->
+//   the documents carrying that tag, which is what the `query.tags` filter needs, and token of a tag
+//   -> the documents where *some* tag contains that token, which is a superset used only to pick
+//   candidates. A term's match against the tag **field** is neither of those: section 9 makes the tag
+//   field a list of sets, so the answer is "does one single tag hold every token of the term", and
+//   that is decided per document against the document's own per-tag token sets (Term.matchesTag).
+//   Reading the +2 score off the token index instead is wrong and was a bug here - tags
+//   ["openai","gpt"] must not match the term `openai gpt`.
 //
 // Two consequences worth stating, because they are the reason this is an index and not a scan:
 //
 //   * the score never re-tokenizes a field. The bit for "the term matches the title" is read from
-//     the title posting list, the bit for "the term matches any tag" from the tag posting list, and
-//     the bit for the text from the text posting list, so the three weights are three lookups.
+//     the title posting list, the bit for the text from the text posting list, and "the term matches
+//     a tag" from the per-tag token sets built once when the index was built - so the three weights
+//     are two bit reads and one containment test, and no text is walked again.
 //   * candidate selection is a bitset reduction: `match: "all"` intersects the terms' posting lists
 //     (a document with none of them cannot match), `match: "any"` unions them, and a term's tokens
 //     are intersected inside a field, which is what "every token of the term is in the field's set"
@@ -366,9 +371,9 @@ public final class Search {
         Index index = buildIndex(asList(rawDocs, "input.docs"));
 
         // Candidate selection from the posting lists. Each term is resolved once into a bitset for the
-        // title and one for the text, and the tag field's superset bitset is the union of both fields'
-        // tag-token postings: a term is *maybe* matched by a document when one of those holds it, and
-        // the tag case is settled precisely per document below.
+        // title and one for the text, and the tag field's superset bitset from the tag-token postings:
+        // a term is *maybe* matched by a document when one of those holds it, and the tag case is
+        // settled precisely per document, against the tags as a list of sets, below.
         List<Term> terms = new ArrayList<Term>(rawTerms.size());
         BitSet union = null; // every document that could match at least one term
         for (String rawTerm : rawTerms) {

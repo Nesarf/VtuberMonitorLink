@@ -1,6 +1,6 @@
 name: release
 
-# 推 tag（形如 v1.7.0）→ 出便携 exe → 附到 GitHub Release
+# 推 tag（形如 v1.0.0）→ 出便携 exe → 附到 GitHub Release
 # 手动跑（workflow_dispatch）→ 只产出构建物，不发 Release
 #
 # 设计原则：**和本机发布完全同源**，避免「本机绿、CI 红」。

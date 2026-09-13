@@ -65,6 +65,16 @@ jobs:
       - name: Build every implementation that can be built here, then diff the corpus
         run: node tools/workers.mjs
 
+      # Measured rather than assumed, on all three platforms at once. The Perl implementation lives in
+      # the machine-local overlay because nobody had checked whether `perl` is on these runners; "it
+      # probably is" is not a measurement, and the cheapest way to get one is to ask the runners. This
+      # step prints the version or says it is absent and never fails, so the answer arrives in the log
+      # without touching the gate.
+      - name: Does this runner have Perl? (measured, not assumed)
+        shell: bash
+        run: |
+          perl -e 'print "perl $^V on $^O\n"' 2>/dev/null || echo "perl: absent on this runner"
+
       # The corpus is a floor, not a ceiling: this points the same diff at generated input, seeded so a
       # divergence is reproducible. It is what found the PowerShell worker rejecting every astral code
       # point, which the hand-written corpus had missed.

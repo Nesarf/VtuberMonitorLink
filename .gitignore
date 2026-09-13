@@ -30,6 +30,9 @@ Desktop.ini
 .DS_Store
 .idea/
 .vscode/*
+# Except the task definitions: they are contributor-facing, contain no machine paths, and
+# docs/WORKERS.md promises they exist. Everything else under .vscode stays local.
+!.vscode/tasks.json
 !.vscode/extensions.json
 
 # playwright browser cache (if downloaded locally)
@@ -49,6 +52,14 @@ workers/*/dist/
 workers/*/build/
 workers/*/obj/
 workers/*/bin/
+# Scratch files inside a worker directory: the convention is a leading underscore, so an
+# implementation being written can leave probes and traces behind without polluting the repository.
+workers/*/_*
+__pycache__/
+*.pyc
+
+# machine-local worker registry overlay: tool paths that belong to one computer, never published
+workers/registry.local.json
 
 
 # machine-translation working cache (source-string hash -> translation); machine.json is a product

@@ -70,6 +70,7 @@ npm run sanitize-check   # any hard-coded paths / secrets / private names in the
 npm run brand            # VML naming consistency: full name for outward-facing artifacts, VML for internal identifiers
 npm run english          # English coverage (percentages for the engineering layer / the UI side)
 npm run commit-msg       # is every commit message English (the whole history)
+npm run workers          # the multilingual worker layer: build what is missing, then diff the corpus
 npm run release          # build + proofread + endpoint traversal + UI traversal (needs a browser on this machine)
 ```
 

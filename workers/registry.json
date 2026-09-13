@@ -1,0 +1,74 @@
+{
+  "_doc": "What exists in the multilingual worker layer. See docs/WORKERS.md. A missing artifact is reported as [skip], never as a pass.",
+  "_schema": {
+    "id": "unique worker id, <language>-<capability group>",
+    "language": "the implementation language",
+    "capabilities": "capabilities this artifact implements",
+    "build": "argv, run from the repository root, once per run when the artifact is missing or older than the sources",
+    "artifact": "path that must exist after a successful build",
+    "launch": "argv prefix; the host appends --capability <name>",
+    "notes": "English, one line"
+  },
+  "workers": [
+    {
+      "id": "js-text",
+      "language": "javascript",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "artifact": "workers/js/vmltext.js",
+      "launch": ["node", "workers/js/vmltext.js"],
+      "notes": "the reference implementation, and a worker like the others: it is diffed against them rather than trusted. No build step."
+    },
+    {
+      "id": "java-text",
+      "language": "java",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "build": ["node", "workers/java/build.mjs"],
+      "artifact": "workers/java/dist/vmltext.jar",
+      "launch": [
+        "java",
+        "-Dfile.encoding=UTF-8",
+        "-Dsun.stdout.encoding=UTF-8",
+        "-Dsun.stderr.encoding=UTF-8",
+        "-jar",
+        "workers/java/dist/vmltext.jar"
+      ],
+      "notes": "JDK 17, no third-party libraries, table-driven normalizer"
+    },
+    {
+      "id": "cpp-text",
+      "language": "cpp",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "build": ["node", "workers/cpp/build.mjs"],
+      "artifact": { "win32": "workers/cpp/dist/vmltext.exe", "default": "workers/cpp/dist/vmltext" },
+      "launch": { "win32": ["workers/cpp/dist/vmltext.exe"], "default": ["workers/cpp/dist/vmltext"] },
+      "notes": "C++17, no third-party libraries, tables embedded at build time"
+    },
+    {
+      "id": "go-text",
+      "language": "go",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "build": ["node", "workers/go/build.mjs"],
+      "artifact": { "win32": "workers/go/dist/vmltext.exe", "default": "workers/go/dist/vmltext" },
+      "launch": { "win32": ["workers/go/dist/vmltext.exe"], "default": ["workers/go/dist/vmltext"] },
+      "notes": "Go, standard library only"
+    },
+    {
+      "id": "python-text",
+      "language": "python",
+      "capabilities": ["text.normalize", "text.extract", "text.fingerprint"],
+      "build": ["node", "workers/python/build.mjs"],
+      "artifact": "workers/python/vmltext.py",
+      "launch": [
+        ["python", "workers/python/vmltext.py"],
+        ["python3", "workers/python/vmltext.py"]
+      ],
+      "notes": "Python 3.13, standard library only, no build step (build.mjs only checks the interpreter)"
+    }
+  ],
+  "_planned": [
+    "pwsh-text, bash-text, zsh-text - the shell implementations (byte-oriented where the shell is)",
+    "r-text, j-text, apl-text - the array languages, once the toolchains are installed and recorded",
+    "sql-text - SQLite FTS as the SQL implementation of search.query, later",
+    "upc / linux: see the portability section of docs/WORKERS.md"
+  ]
+}

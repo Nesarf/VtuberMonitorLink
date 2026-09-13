@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "workers: what exists",
+      "type": "shell",
+      "command": "npm run workers -- --list",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: build every implementation",
+      "type": "shell",
+      "command": "node tools/workers.mjs --build-only",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: conformance run (cross-language diff)",
+      "type": "shell",
+      "command": "npm run workers",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: re-record the reviewed snapshot",
+      "type": "shell",
+      "command": "npm run workers:update",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: self-check one language",
+      "type": "shell",
+      "command": "node workers/${input:workerLanguage}/${input:workerScript} --selfcheck",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "release: fast chain",
+      "type": "shell",
+      "command": "npm run verify:fast",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "release: full local chain (build + traversal)",
+      "type": "shell",
+      "command": "npm run release",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "workerLanguage",
+      "type": "pickString",
+      "description": "which implementation",
+      "options": ["js", "java", "cpp", "go", "python"],
+      "default": "js"
+    },
+    {
+      "id": "workerScript",
+      "type": "promptString",
+      "description": "artifact inside that directory (vmltext.js, dist/vmltext.exe, dist/vmltext.jar)",
+      "default": "vmltext.js"
+    }
+  ]
+}

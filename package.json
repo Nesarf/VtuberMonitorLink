@@ -22,6 +22,8 @@
     "smoke": "node server/scripts/smoke.mjs",
     "sanitize-check": "node server/scripts/sanitize-check.mjs",
     "commit-msg": "node tools/commit-msg-check.mjs",
+    "workers": "node tools/workers.mjs",
+    "workers:update": "node tools/workers.mjs --update",
     "mock-llm": "node tools/mock-llm.cjs",
     "doctor": "node launcher/launch.cjs --doctor",
     "paths": "node launcher/launch.cjs --paths",

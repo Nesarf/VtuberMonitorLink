@@ -1,0 +1,26 @@
+{
+  "capability": "text.normalize",
+  "note": "Hand-written inputs. The contract is docs/WORKERS.md section 2; the cases are chosen to hit every rule and every place two implementations normally disagree. Expected outputs are the reviewed snapshot in workers/spec/expected/, produced by the reference and then compared across every implementation.",
+  "cases": [
+    { "id": "ascii-passthrough", "note": "nothing to do", "input": { "text": "Hello, world." } },
+    { "id": "fullwidth-ascii", "note": "U+FF01-U+FF5E -> ASCII", "input": { "text": "\uff21\uff22\uff23\uff11\uff12\uff13\uff01\uff20\uff03" } },
+    { "id": "accents-composed", "note": "lowercase then fold, both tables load-bearing", "input": { "text": "Caf\u00e9 \u00c9COLE \u00c0\u00c9\u00ce\u00d5\u00dc" } },
+    { "id": "accents-decomposed", "note": "combining marks are deleted, so NFD equals NFC", "input": { "text": "Cafe\u0301 E\u0301COLE A\u0301" } },
+    { "id": "non-decomposable-letters", "note": "fold table overrides: stroke, eth, thorn, ae, sharp s", "input": { "text": "\u0141\u00f3d\u017a \u017b\u00d3\u0141\u0106 \u00d8 \u00f8 \u00c6 \u00e6 \u00df \u00de \u00fe \u0110 \u0111" } },
+    { "id": "turkish-dotted-i", "note": "U+0130 is absent from the one-to-one lower table and is folded to i", "input": { "text": "\u0130stanbul \u0131sparta" } },
+    { "id": "cjk-untouched", "note": "Han, kana and Hangul must survive byte for byte", "input": { "text": "\u5df2\u7ecf\u5f00\u64ad\u4e86 \u65e5\u672c\u8a9e\u306e\u30c6\u30b9\u30c8 \ud55c\uad6d\uc5b4 \ubc29\uc1a1" } },
+    { "id": "cyrillic-arabic-untouched", "note": "scripts the tables do not mention pass through", "input": { "text": "\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645" } },
+    { "id": "zero-width-and-bom", "note": "zero-width, bidi controls and BOM are deleted", "input": { "text": "a\u200bb\u200f\u2060c\ufeffd" } },
+    { "id": "controls-deleted", "note": "C0 controls and DEL are deleted, tab/LF/CR are not", "input": { "text": "a\u0001b\u0007c\u001fd\u007fe\tf\ng\rh" } },
+    { "id": "whitespace-collapse", "note": "runs of space, tab, LF and CR collapse to one space, then trim", "input": { "text": "  a \t\n b \r\n  c  " } },
+    { "id": "quotes-and-dashes", "note": "typographic quotes, dashes, ellipsis and the minus sign", "input": { "text": "\u2018a\u2019 \u201cb\u201d \u2014 c \u2013 d \u2026 e \u2212 f" } },
+    { "id": "cjk-punctuation", "note": "U+3001 and U+3002 are mapped, the CJK brackets are not", "input": { "text": "a\u3001b\u3002c\u300c\u5f15\u300d\u3010\u62ec\u3011" } },
+    { "id": "ideographic-space", "note": "U+3000 is a space, not a CJK character", "input": { "text": "\u30a2\u3000\u30a4\u3000\u30a6" } },
+    { "id": "nbsp", "note": "U+00A0 is a space", "input": { "text": "a\u00a0b\u00a0\u00a0c" } },
+    { "id": "empty", "note": "the empty string is valid input", "input": { "text": "" } },
+    { "id": "only-whitespace", "note": "trims to the empty string", "input": { "text": "   \t\n " } },
+    { "id": "idempotency-source", "note": "its output must be the second case's input", "input": { "text": "\u2018\u00c9\u2019 \uff21\uff22\uff23  \u0141\u00f3d\u017a\u200b" } },
+    { "id": "idempotency-fixed-point", "note": "normalize must be a no-op on this (the previous case's expected output)", "input": { "text": "'e' abc lodz" } },
+    { "id": "mixed-long-paragraph", "note": "about 1 KB, mixed scripts, to catch per-implementation slowdowns and state bugs", "input": { "text": "\u30103D\u62ab\u9732\u3011\u65b0\u8863\u88c5\u304a\u62ab\u9732\u76ee\uff01\uff21\uff22\uff23 \u2014 \u5df2\u7ecf\u5f00\u64ad\u4e86\u3002New outfit reveal live now \u2014 watch at https://example.com/a\u2014b \u2018quoted\u2019 \u201cdouble\u201d \u2026 Caf\u00e9 \u0141\u00f3d\u017a \u00d8\u00f8\u00c6\u00e6\u00df \u0130stanbul \u041f\u0440\u0438\u0432\u0435\u0442 \u0645\u0631\u062d\u0628\u0627 \ud55c\uad6d\uc5b4 \u30c6\u30b9\u30c8\u3002\u5f00\u64ad\u4e86\uff0c\u5feb\u6765\u770b\uff01123\u3001456\u3002\uff11\uff12\uff13 \u00a0a\u200bb\ufeff \t  spaced   out  " } }
+  ]
+}

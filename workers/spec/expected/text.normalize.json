@@ -1,0 +1,68 @@
+{
+ "capability": "text.normalize",
+ "generatedBy": "js-text (workers/js/vmltext.js)",
+ "generatedAt": "2026-09-13T19:12:45.880Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "ascii-passthrough": {
+   "text": "hello, world."
+  },
+  "fullwidth-ascii": {
+   "text": "abc123!@#"
+  },
+  "accents-composed": {
+   "text": "cafe ecole aeiou"
+  },
+  "accents-decomposed": {
+   "text": "cafe ecole a"
+  },
+  "non-decomposable-letters": {
+   "text": "lodz zolc o o ae ae ss th th d d"
+  },
+  "turkish-dotted-i": {
+   "text": "istanbul isparta"
+  },
+  "cjk-untouched": {
+   "text": "已经开播了 日本語のテスト 한국어 방송"
+  },
+  "cyrillic-arabic-untouched": {
+   "text": "Привет мир مرحبا بالعالم"
+  },
+  "zero-width-and-bom": {
+   "text": "abcd"
+  },
+  "controls-deleted": {
+   "text": "abcde f g h"
+  },
+  "whitespace-collapse": {
+   "text": "a b c"
+  },
+  "quotes-and-dashes": {
+   "text": "'a' \"b\" - c - d ... e - f"
+  },
+  "cjk-punctuation": {
+   "text": "a,b.c「引」【括】"
+  },
+  "ideographic-space": {
+   "text": "ア イ ウ"
+  },
+  "nbsp": {
+   "text": "a b c"
+  },
+  "empty": {
+   "text": ""
+  },
+  "only-whitespace": {
+   "text": ""
+  },
+  "idempotency-source": {
+   "text": "'e' abc lodz"
+  },
+  "idempotency-fixed-point": {
+   "text": "'e' abc lodz"
+  },
+  "mixed-long-paragraph": {
+   "text": "【3d披露】新衣装お披露目!abc - 已经开播了.new outfit reveal live now - watch at https://example.com/a-b 'quoted' \"double\" ... cafe lodz ooaeaess istanbul Привет مرحبا 한국어 テスト.开播了,快来看!123,456.123 ab spaced out"
+  }
+ }
+}

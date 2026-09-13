@@ -1,0 +1,74 @@
+name: workers
+
+# The multilingual worker layer, built and diffed on three platforms.
+#
+# This is what "Linux adaptation" means for this layer: the same contract, the same corpus, a
+# different toolchain - and the same answer. It is a separate workflow from ci.yml on purpose, since
+# nothing here is packaged into the release artifact yet and a red run must not be confused with a
+# red release.
+#
+# What each platform is expected to run (everything absent is reported as [skip], never as a failure):
+#   linux   - the reference (node), java (setup-java), cpp (g++), go, python3
+#   windows - the reference, java, go, python            (no g++ on the runner; cpp-text is skipped)
+#   macos   - the reference, java, cpp (clang++), go, python3 - and nobody has run this layer on
+#             macOS yet, so the job is informational until someone does: a red macOS job is data,
+#             not a broken build.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: workers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            experimental: false
+          - os: windows-latest
+            experimental: false
+          - os: macos-latest
+            experimental: true
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Java is the one toolchain the runner does not ship, and java-text is in the published
+      # registry, so it has to be here or the Linux job would silently skip a worker it should run.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # No `npm ci`: the harness and the reference implementation use Node's standard library only,
+      # and a dependency-free layer that proves it on every push is worth more than a cache.
+      - name: Build every implementation that can be built here, then diff the corpus
+        run: node tools/workers.mjs
+
+      - name: Report which implementations this platform ran
+        if: always()
+        shell: bash
+        run: node tools/workers.mjs --list || true
+
+      - name: Note a red run in the summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### workers: conformance failed on ${{ matrix.os }}"
+            echo
+            echo "Every implementation that answered agrees, or one of them does not follow the contract."
+            echo "The DIVERGES lines name the implementations and show their answers side by side;"
+            echo "docs/WORKERS.md section 5 says which of the two is at fault when they disagree."
+          } >> "$GITHUB_STEP_SUMMARY"

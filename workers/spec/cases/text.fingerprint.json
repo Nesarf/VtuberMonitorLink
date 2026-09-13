@@ -1,0 +1,22 @@
+{
+  "capability": "text.fingerprint",
+  "note": "Hand-written inputs for docs/WORKERS.md section 4. Inputs are already-normalized text, because that is what the pipeline feeds in. The cases pin the tokenizer (CJK bigrams, run splitting, punctuation trimming), the shingle rule, and the FNV-1a/SimHash integers - the part of the contract where 'byte-identical across languages' is achievable rather than aspirational.",
+  "cases": [
+    { "id": "single-token", "note": "fewer than three tokens: the whole token list is the one shingle, and the simhash equals the token's own hash", "input": { "text": "x" } },
+    { "id": "empty", "note": "no tokens, no shingles, all-zero hash", "input": { "text": "" } },
+    { "id": "punctuation-only", "note": "tokens that are nothing but punctuation emit nothing", "input": { "text": "-- !! ???" } },
+    { "id": "two-tokens", "note": "still one shingle", "input": { "text": "a b" } },
+    { "id": "three-tokens", "note": "exactly one shingle", "input": { "text": "a b c" } },
+    { "id": "four-tokens", "note": "two overlapping shingles", "input": { "text": "a b c d" } },
+    { "id": "repeated-phrase", "note": "the same shingle twice keeps the hash stable", "input": { "text": "a b c a b c" } },
+    { "id": "trailing-punctuation", "note": "edge punctuation is trimmed, so this matches 'hello world'", "input": { "text": "hello, world." } },
+    { "id": "cjk-two-chars", "note": "a two-character CJK run emits one bigram, per token", "input": { "text": "\u5df2\u7ecf \u5df2\u7ecf" } },
+    { "id": "cjk-three-chars", "note": "a three-character run emits two overlapping bigrams", "input": { "text": "\u5df2\u7ecf\u5f00\u64ad" } },
+    { "id": "cjk-single-char", "note": "a run of one emits the character itself", "input": { "text": "\u5df2" } },
+    { "id": "mixed-runs-in-one-token", "note": "one token with a latin run, a CJK run and a latin run", "input": { "text": "abc\u5df2\u7ecfdef" } },
+    { "id": "kana-and-hangul", "note": "kana and Hangul are CJK runs too", "input": { "text": "\u30c6\u30b9\u30c8 \ubc29\uc1a1 \uc548\ub155" } },
+    { "id": "realistic-title", "note": "the shape of a real feed title: CJK brackets, a full-width prefix, latin words", "input": { "text": "\u30103d\u62ab\u9732\u3011\u65b0\u8863\u88c5\u304a\u62ab\u9732\u76ee live now" } },
+    { "id": "long-latin-text", "note": "over 300 tokens, to catch accumulator bugs that only show on longer input", "input": { "text": "the quick brown fox jumps over the lazy dog while the diligent vtuber monitor watches every source it was told to watch and writes a dated report about everything it saw and everything it could not see because the network refused to cooperate again today" } },
+    { "id": "digits-and-symbols", "note": "digits are tokens, a lone punctuation token is not", "input": { "text": "2434 = nijisanji 10035 entries" } }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+ "capability": "text.fingerprint",
+ "generatedBy": "js-text (workers/js/vmltext.js)",
+ "generatedAt": "2026-09-13T19:12:45.879Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "single-token": {
+   "simhash": "af63f54c86021707",
+   "tokens": 1,
+   "shingles": 1
+  },
+  "empty": {
+   "simhash": "0000000000000000",
+   "tokens": 0,
+   "shingles": 0
+  },
+  "punctuation-only": {
+   "simhash": "0000000000000000",
+   "tokens": 0,
+   "shingles": 0
+  },
+  "two-tokens": {
+   "simhash": "e63f991904833892",
+   "tokens": 2,
+   "shingles": 1
+  },
+  "three-tokens": {
+   "simhash": "69cf480885ad45af",
+   "tokens": 3,
+   "shingles": 1
+  },
+  "four-tokens": {
+   "simhash": "2983000005a50428",
+   "tokens": 4,
+   "shingles": 2
+  },
+  "repeated-phrase": {
+   "simhash": "69cf080085ad05a7",
+   "tokens": 6,
+   "shingles": 4
+  },
+  "trailing-punctuation": {
+   "simhash": "779a65e7023cd2e7",
+   "tokens": 2,
+   "shingles": 1
+  },
+  "cjk-two-chars": {
+   "simhash": "27bfb7b6385da4c5",
+   "tokens": 2,
+   "shingles": 1
+  },
+  "cjk-three-chars": {
+   "simhash": "b8513c30a1bd3294",
+   "tokens": 3,
+   "shingles": 1
+  },
+  "cjk-single-char": {
+   "simhash": "1a57c71b66959be5",
+   "tokens": 1,
+   "shingles": 1
+  },
+  "mixed-runs-in-one-token": {
+   "simhash": "6613409665a67923",
+   "tokens": 3,
+   "shingles": 1
+  },
+  "kana-and-hangul": {
+   "simhash": "4222304022018000",
+   "tokens": 4,
+   "shingles": 2
+  },
+  "realistic-title": {
+   "simhash": "fdfc4a10562db16d",
+   "tokens": 11,
+   "shingles": 9
+  },
+  "long-latin-text": {
+   "simhash": "9fe9e24f2a6ef5ca",
+   "tokens": 45,
+   "shingles": 43
+  },
+  "digits-and-symbols": {
+   "simhash": "4070422882fb3800",
+   "tokens": 4,
+   "shingles": 2
+  }
+ }
+}

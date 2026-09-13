@@ -1,0 +1,15 @@
+{
+  "_doc": "Copy to workers/registry.local.json (gitignored) on a machine where a worker's tool lives somewhere unusual, or where a worker exists that should not be published. What is here wins over workers/registry.json. Keep absolute paths OUT of the published registry: the release checks reject machine-specific paths.",
+  "_example": {
+    "workers": [
+      {
+        "id": "apl-text",
+        "language": "apl",
+        "capabilities": ["text.normalize"],
+        "artifact": "workers/apl/vmltext.apl",
+        "launch": ["<absolute path to this machine's interpreter>", "workers/apl/vmltext.apl"],
+        "notes": "machine-local: the interpreter is installed here only"
+      }
+    ]
+  }
+}

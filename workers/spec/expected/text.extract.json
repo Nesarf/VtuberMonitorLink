@@ -1,0 +1,267 @@
+{
+ "capability": "text.extract",
+ "generatedBy": "js-text (workers/js/vmltext.js)",
+ "generatedAt": "2026-09-13T19:12:45.877Z",
+ "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
+ "cases": {
+  "simple-paragraph": {
+   "title": "",
+   "text": "\nHello world\n",
+   "links": [],
+   "images": 0
+  },
+  "inline-nesting": {
+   "title": "",
+   "text": "\nHello world and more\n",
+   "links": [],
+   "images": 0
+  },
+  "attribute-with-gt": {
+   "title": "",
+   "text": "z",
+   "links": [
+    {
+     "href": "x>y",
+     "absolute": false,
+     "text": "z"
+    }
+   ],
+   "images": 0
+  },
+  "unclosed-tag-at-eof": {
+   "title": "",
+   "text": "\nab",
+   "links": [],
+   "images": 0
+  },
+  "unclosed-script-at-eof": {
+   "title": "",
+   "text": "\na\n",
+   "links": [],
+   "images": 0
+  },
+  "removed-elements": {
+   "title": "",
+   "text": "\nkeep\n",
+   "links": [],
+   "images": 0
+  },
+  "comments-doctype-cdata": {
+   "title": "",
+   "text": "\ncdata text\n",
+   "links": [],
+   "images": 0
+  },
+  "cdata-with-markup": {
+   "title": "",
+   "text": "<b>raw</b>",
+   "links": [],
+   "images": 0
+  },
+  "cdata-unclosed-at-eof": {
+   "title": "",
+   "text": "unclosed",
+   "links": [],
+   "images": 0
+  },
+  "cdata-suppresses-entities": {
+   "title": "",
+   "text": "a &amp; b &#65;",
+   "links": [],
+   "images": 0
+  },
+  "cdata-inside-removed-element": {
+   "title": "",
+   "text": "\n<script>x</script>\n",
+   "links": [],
+   "images": 0
+  },
+  "tag-name-only-at-eof": {
+   "title": "",
+   "text": "",
+   "links": [],
+   "images": 0
+  },
+  "title-inside-anchor": {
+   "title": "T",
+   "text": "t",
+   "links": [
+    {
+     "href": "/x",
+     "absolute": false,
+     "text": "t"
+    }
+   ],
+   "images": 0
+  },
+  "entities-variants": {
+   "title": "",
+   "text": "a & b & — — &unknown; &copy2024 &",
+   "links": [],
+   "images": 0
+  },
+  "title-first-only": {
+   "title": "One",
+   "text": "Two\nbody\n",
+   "links": [],
+   "images": 0
+  },
+  "title-with-entities": {
+   "title": "A & B — C",
+   "text": "\nx\n",
+   "links": [],
+   "images": 0
+  },
+  "img-counting": {
+   "title": "",
+   "text": "",
+   "links": [],
+   "images": 3
+  },
+  "link-href-forms": {
+   "title": "",
+   "text": "1234",
+   "links": [
+    {
+     "href": "/x",
+     "absolute": false,
+     "text": "1"
+    },
+    {
+     "href": "https://e.com/p",
+     "absolute": true,
+     "text": "2"
+    },
+    {
+     "href": "//cdn.e.com/x",
+     "absolute": false,
+     "text": "3"
+    },
+    {
+     "href": "mailto:a@b.c",
+     "absolute": true,
+     "text": "4"
+    }
+   ],
+   "images": 0
+  },
+  "link-text-with-tags": {
+   "title": "",
+   "text": "a b c",
+   "links": [
+    {
+     "href": "/x",
+     "absolute": false,
+     "text": "a b c"
+    }
+   ],
+   "images": 0
+  },
+  "lt-not-a-tag": {
+   "title": "",
+   "text": "a < b > c 5<6",
+   "links": [],
+   "images": 0
+  },
+  "newline-tags": {
+   "title": "",
+   "text": "\na\n\nb\n\nc\n\nd\n",
+   "links": [],
+   "images": 0
+  },
+  "table-structure": {
+   "title": "",
+   "text": "\n\n\na\n\nb\n\n\n",
+   "links": [],
+   "images": 0
+  },
+  "cjk-content": {
+   "title": "",
+   "text": "\n已经开播了\n中文链接",
+   "links": [
+    {
+     "href": "/b",
+     "absolute": false,
+     "text": "中文链接"
+    }
+   ],
+   "images": 0
+  },
+  "entities-then-normalize": {
+   "title": "",
+   "text": "\na b　　c\n",
+   "links": [],
+   "images": 0
+  },
+  "empty-input": {
+   "title": "",
+   "text": "",
+   "links": [],
+   "images": 0
+  },
+  "only-a-removed-element": {
+   "title": "",
+   "text": "",
+   "links": [],
+   "images": 0
+  },
+  "link-without-href": {
+   "title": "",
+   "text": "text",
+   "links": [
+    {
+     "href": "",
+     "absolute": false,
+     "text": "text"
+    }
+   ],
+   "images": 0
+  },
+  "nested-links-and-unclosed-anchor": {
+   "title": "",
+   "text": "onetwo",
+   "links": [
+    {
+     "href": "/one",
+     "absolute": false,
+     "text": "one"
+    },
+    {
+     "href": "/two",
+     "absolute": false,
+     "text": "two"
+    }
+   ],
+   "images": 0
+  },
+  "nested-anchors-both-reported": {
+   "title": "",
+   "text": "onetwo",
+   "links": [
+    {
+     "href": "/one",
+     "absolute": false,
+     "text": "one"
+    },
+    {
+     "href": "/two",
+     "absolute": false,
+     "text": "two"
+    }
+   ],
+   "images": 0
+  },
+  "unclosed-tag-exactly-at-eof": {
+   "title": "",
+   "text": "\nabc",
+   "links": [],
+   "images": 0
+  },
+  "lone-lt-at-eof": {
+   "title": "",
+   "text": "a<",
+   "links": [],
+   "images": 0
+  }
+ }
+}

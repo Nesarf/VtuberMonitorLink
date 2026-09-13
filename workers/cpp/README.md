@@ -62,7 +62,7 @@ workers\cpp\dist\vmltext.exe --capability text.normalize
 {"id":3,"ok":true,"output":{"bye":true}}
 ```
 
-Self-check (42 built-in cases, one English line per case, `N/M checks passed`, exit 1 on failure):
+Self-check (47 built-in cases, one English line per case, `N/M checks passed`, exit 1 on failure):
 
 ```
 workers\cpp\dist\vmltext.exe --selfcheck
@@ -118,16 +118,17 @@ buffered `fread` on a pipe keeps asking the kernel for more bytes until its buff
 worker that reads a block at a time answers nothing while stdin is open; that bug was live in this
 worker for one build.)
 
-**`text.extract` is a scanner with stated tie-breaks.** Removed elements are skipped to `</name>`
-(case-insensitively, quotes honoured) or to end of input; an `<a>` opened while another is open
-closes the outer one and reports it before the inner starts, which is what a browser does with
-markup HTML does not allow; an anchor still open at end of input is reported with the text it
-collected; an incomplete tag at end of input is dropped entirely — name characters included, and it
-contributes no newline and counts no image, so `<p` extracts to the empty string — while a lone `<`
-that never started a tag is literal text. CDATA is character data: `<![CDATA[<b>raw</b>]]>` keeps
-`<b>raw</b>` as text and is not re-parsed as markup, and an unclosed CDATA section keeps everything
-to the end of input, like a removed element with no closing tag. Entities are decoded to their own
-character (`&nbsp;` is U+00A0, not a space, and not the ASCII the normalizer would later produce),
+**`text.extract` runs the contract's passes before it walks anything.** CDATA bodies are hidden
+behind sentinels first (so no later rule can read them as markup or as entities, and an unclosed
+section keeps everything to the end of input), then comments and doctypes go, then each listed
+element is removed with its content, and only then is the rest walked for text, tags, the title,
+links and images. Removals therefore never depend on how the walk would have read the text around
+them. In the walk, the tie-breaks are the pinned ones: removed elements are already gone; an `<a>`
+opened while another is open closes the outer one and reports it before the inner starts, which is
+what a browser does with markup HTML does not allow; an anchor still open at end of input is reported
+with the text it collected; an incomplete tag at end of input is dropped entirely — no newline, no
+image, no link, name characters included, so `<p` extracts to the empty string — while a lone `<`
+that never started a tag is literal text. Entities are decoded to their own character (`&nbsp;` is U+00A0, not a space, and not the ASCII the normalizer would later produce),
 with or without the trailing semicolon and without backtracking, so `&copy2024` stays literal. The
 title is decoded, is not normalized, is kept out of `text`, and a title inside an anchor belongs to
 the title and not to the link's text either. Nothing in `text.extract` normalizes anything:
@@ -155,25 +156,24 @@ escapes, again matching `JSON.stringify`.
 | `src/extract.cpp` | `text.extract` |
 | `src/fingerprint.cpp` | `text.fingerprint` |
 | `src/render.cpp` | builds each capability's output object (shared by the loop and the self-check) |
-| `src/selfcheck.cpp` | the 42 built-in cases |
+| `src/selfcheck.cpp` | the 47 built-in cases |
 
 ## Known limits
 
 * **Artifact name follows the platform.** The build writes `dist/vmltext.exe` on Windows and
   `dist/vmltext` everywhere else, matching the per-platform `artifact`/`launch` entries in
   `workers/registry.json`, so the same command works for a Linux CI job.
-* **`text.extract` re-scans for the closing tag of a removed element.** `<script>` and friends are
-  skipped by searching for `</name` (case-insensitively, honouring quotes) from after the opening
-  tag. A missing closing tag means "to end of input", as the contract says; nested same-name
-  elements and a `</script>` inside a JavaScript string literal are not modelled, because the
-  contract does not ask for them.
-* **CDATA, comments and doctypes are handled inside the scan**, not as the pre-passes the JavaScript
-  reference uses. The observable results agree on the corpus; they can differ only for a comment
-  nested inside a `<script>` whose closing tag is missing, where this worker removes everything to
-  end of input (the contract's rule for a missing closing tag) rather than removing the comment
-  first. CDATA content is copied as literal text, so entities inside it are decoded by this worker
-  (the contract's entity rule is global and gives CDATA no exception) while tags inside it stay
-  literal.
+* **The removal passes are text passes, which is what section 3 says they are.** `text.extract` hides
+  every CDATA body behind a private-use sentinel, removes comments and doctypes, removes each listed
+  element with its content using a scan over the raw text, and only then walks what is left — the
+  order the contract states, not the order the rules are numbered in. Two properties of that scan are
+  deliberate and match the pattern the contract describes: the opening tag ends at its **first** `>`
+  with no quote awareness, and the closing tag must be the name followed by whitespace only. The
+  content of a removed element is therefore never walked, so `</p>` inside a JavaScript string cannot
+  end anything, and a `<script>` whose closing tag is missing runs to the end of the input whether or
+  not the text before it looks like an unclosed tag. This is the shape a seeded differential run
+  against the reference forced: an earlier version of this file did every pass in one left-to-right
+  scan and disagreed on three generated cases.
 * **The `describe` `runtime` field is machine-specific** (`g++ 13.2.0`, `MSVC cl 19.51...`), like the
   Java worker's JDK version. It is the one field of the protocol that cannot be identical across
   languages; capability outputs are byte-identical.

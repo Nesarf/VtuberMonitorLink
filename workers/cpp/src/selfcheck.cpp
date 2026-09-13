@@ -276,6 +276,23 @@ int RunSelfcheck() {
       "{\"title\":\"T\",\"text\":\"t\",\"links\":[{\"href\":\"/x\",\"absolute\":false,"
       "\"text\":\"t\"}],\"images\":0}");
 
+  // The pass order of section 3: removals run over the raw text before anything
+  // is walked, so what precedes a listed element cannot protect it, and a tag
+  // that only exists because a doctype was still in the way cannot be seen.
+  add("extract: a listed element is removed even when its < follows an unclosed-looking tag",
+      ExtractJson("<p t<style>a{color:red}</style><p "),
+      "{\"title\":\"\",\"text\":\"\",\"links\":[],\"images\":0}");
+
+  add("extract: a script element goes with its content before any tag is walked",
+      ExtractJson("<p t<script>if (a < b) { x = \"</p>\"; }</script>alphax]word word<p><h1>"
+                  "<div class=\"x\"><a href='b?x=1&y=2'><p title=\"unclosedxstreamgpt3D&lt;-"),
+      "{\"title\":\"\",\"text\":\"\\n\\n\\n\",\"links\":[{\"href\":\"b?x=1&y=2\","
+      "\"absolute\":false,\"text\":\"\"}],\"images\":0}");
+
+  add("extract: a doctype is removed first, so the tag after it swallows the anchor",
+      ExtractJson("</p<a href='b?x=1&y=2'></A><p t<p<!DOCTYPE html><a href=\"outer\">"),
+      "{\"title\":\"\",\"text\":\"\\n\\n\",\"links\":[],\"images\":0}");
+
   // ---- text.fingerprint (section 4) ----
   add("fingerprint: empty text has no tokens, no shingles and an all-zero hash",
       FingerprintJson(""),

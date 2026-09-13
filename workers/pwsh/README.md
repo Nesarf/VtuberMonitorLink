@@ -140,6 +140,8 @@ diagnostics when a case fails, so a failing run is legible either way.
 
 ## Bugs this file hit (kept as notes, because they are PowerShell-specific)
 
+Found while writing it:
+
 - Parsing `$args` inside a function instead of at script scope → every run exited 2 with no output.
 - Fusing steps 3+4 into the step-2 map → `text.normalize` returned `ABC` for full-width
   `ABC` (the map produced `A`, and step 3 had already been spent on the source code point).
@@ -149,3 +151,28 @@ diagnostics when a case fails, so a failing run is legible either way.
   and "expected" its own input.
 - Treating CDATA as a pre-pass that re-parses its body → `<![CDATA[<b>raw</b>]]>` lost its tags, and
   entities inside a CDATA body were decoded.
+
+Found later by `tools/workers-diff.mjs` — the hand-written corpus contained none of these:
+
+- **Every astral (non-BMP) code point was rejected.** `text.normalize` walked the *replacement string*
+  of steps 3 and 4 by UTF-16 code unit, so for an unmapped astral code point the replacement is a
+  surrogate pair and the high surrogate was handed to `[char]::ConvertFromUtf32`, which throws — and
+  the throw surfaced as a `bad-input` answer rather than a crash. Fixed by walking that replacement by
+  code point (`Get-CodePoints`, built on `[char]::ConvertToUtf32` / `[char]::IsHighSurrogate`), while
+  keeping the fast path: a replacement of one unit that is not a high surrogate — which is every entry
+  in the map table — never calls the helper, so BMP throughput is unchanged.
+  `"cat 😀 tail 🇯🇵"` and `"𝐀𐐀 𐐨 A"` now match the reference exactly (`"cat 😀 tail 🇯🇵"`,
+  `"𝐀𐐀 𐐨 a"`). The tables stay BMP-only; astral input passes through, as section 2 says.
+- **An uppercase attribute name lost its href.** `[regex]'...\bhref...'` is **case-sensitive** in .NET,
+  while the reference regex carries the `i` flag, so `<A HREF="C">` produced an empty href. Fixed with an
+  explicit `IgnoreCase`. (PowerShell's own `-match` operator is case-insensitive, which is what makes
+  this trap easy to miss. Related: `[regex]'pattern', $options` is *not* a constructor call — it casts
+  the options enum to a string and yields an invalid pattern.)
+- **An unclosed comment at end of input left one character behind.** In .NET an unanchored `$` also
+  matches just *before* a trailing `"\n"`, while JavaScript's `$` (without `m`) matches only at the very
+  end, so `"<p>a</p><!-- unclosed\n"` produced one newline too many. The end-of-input alternatives in
+  the comment and CDATA patterns now use `\z`, the exact end of the input.
+
+All three are covered by built-in self-check cases now. `tools/workers-diff.mjs` is clean for
+`text.normalize` and `text.fingerprint` (200 generated cases each, 6-way unanimous), and `pwsh-text` is
+never on the minority side of an `text.extract` divergence.

@@ -270,13 +270,39 @@ function Initialize-Tables {
 # Capability text.normalize (docs/WORKERS.md section 2)
 # --------------------------------------------------------------------------------------------
 
+function Get-CodePoints {
+    <#
+      UTF-16 string -> its code points, as a List[int].
+
+      .NET strings are UTF-16, so a string built from an astral code point is a surrogate PAIR. Walking
+      such a string by index and treating every unit as a code point hands a lone surrogate to
+      [char]::ConvertFromUtf32, which rejects it -- that is not a wrong answer, it is an exception, and
+      the whole request turns into `bad-input`. Surrogate pairs are therefore folded with
+      [char]::ConvertToUtf32 / [char]::IsHighSurrogate here.
+
+      The unary comma is load-bearing (PowerShell unrolls a returned enumerable; an empty List would
+      arrive as $null, and a one-element List as its element).
+    #>
+    param([string]$Text)
+    $points = [System.Collections.Generic.List[int]]::new($Text.Length)
+    $n = $Text.Length
+    $i = 0
+    while ($i -lt $n) {
+        $ch = $Text[$i]
+        if ([char]::IsHighSurrogate($ch) -and ($i + 1) -lt $n -and [char]::IsLowSurrogate($Text[$i + 1])) {
+            $points.Add([char]::ConvertToUtf32($ch, $Text[$i + 1]))
+            $i += 2
+            continue
+        }
+        $points.Add([int]$ch)
+        $i++
+    }
+    return , $points
+}
+
 function ConvertTo-Normalized {
     <#
       Steps 1-6 in the contract's order, over Unicode scalar values.
-
-      The walk is over UTF-16 with [char]::ConvertToUtf32 rather than over a code-point array: a
-      surrogate pair is folded into its scalar value here, so the tables are consulted with a code
-      point and never with a surrogate half.
     #>
     param([string]$Text)
 
@@ -305,9 +331,24 @@ function ConvertTo-Normalized {
             $piece = [char]::ConvertFromUtf32($cp)
         }
 
-        # Steps 3 and 4, applied to each code point of the step-2 replacement, each exactly once.
-        for ($m = 0; $m -lt $piece.Length; $m++) {
-            $pcp = [int]$piece[$m]
+        # Steps 3 and 4, applied to each CODE POINT of the step-2 replacement, each exactly once.
+        #
+        # A replacement for an astral code point is a surrogate pair, so walking the string by index
+        # would feed step 3 a lone surrogate (a table miss, harmless) and then step 4 a
+        # [char]::ConvertFromUtf32 call on that surrogate -- which throws, and the whole request turns
+        # into `bad-input`. This is the bug tools/workers-diff.mjs found on "\u{1F600}". BMP
+        # replacements (every entry in the map table) are one code unit and keep the straight-line
+        # path, which is what keeps the 10 KB corpus case fast.
+        if ($piece.Length -eq 1 -and -not [char]::IsHighSurrogate($piece[0])) {
+            $pcp = [int]$piece[0]
+            $lowerChar = $null
+            if ($lowered.TryGetValue($pcp, [ref]$lowerChar)) { $pcp = [int][char]$lowerChar }
+            $foldChar = $null
+            if ($folded.TryGetValue($pcp, [ref]$foldChar)) { [void]$mapped.Append($foldChar) }
+            else { [void]$mapped.Append([char]::ConvertFromUtf32($pcp)) }
+            continue
+        }
+        foreach ($pcp in (Get-CodePoints -Text $piece)) {
             $lowerChar = $null
             if ($lowered.TryGetValue($pcp, [ref]$lowerChar)) { $pcp = [int][char]$lowerChar }
             $foldChar = $null
@@ -366,12 +407,24 @@ foreach ($pair in @(
 # `&copy2024` stays literal: the name run is maximal and is not backtracked.
 $script:ENTITY_RE = [regex]'^(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,7})(;?)'
 $script:SCHEME_RE = [regex]'^[A-Za-z][A-Za-z0-9+.-]*:'
-$script:HREF_RE = [regex]'\bhref\s*=\s*("([^"]*)"|''([^'']*)''|([^\s>]+))'
+# IgnoreCase, and it matters: the reference regex has the `i` flag, while a PowerShell `[regex]'...'`
+# literal is case-SENSITIVE by default (PowerShell's own -match is not, which makes this a trap). Without
+# it, `<A HREF="C">` loses its href entirely -- found by tools/workers-diff.mjs, which generates
+# uppercase attribute names that the hand-written corpus never had.
+# `[regex]` takes ONE argument: `[regex]'pattern', $options` is not a constructor call, it is a cast of
+# the options enum to a string, and the resulting pattern then fails to compile at first use ("internal"
+# for every request). The real constructor is used explicitly here.
+$script:HREF_RE = [System.Text.RegularExpressions.Regex]::new('\bhref\s*=\s*("([^"]*)"|''([^'']*)''|([^\s>]+))', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 $script:TAG_NAME_RE = [regex]'^/?\s*([A-Za-z][A-Za-z0-9:-]*)'
 # A CDATA section is hidden before any other pass runs; an unclosed one keeps everything to the end of
 # the input (the same principle as a removed element with no closing tag).
-$script:CDATA_RE = [regex]'<!\[CDATA\[([\s\S]*?)(?:\]\]>|$)'
-$script:COMMENT_RE = [regex]'<!--[\s\S]*?(?:-->|$)'
+#
+# `\z`, NOT `$`: in .NET an unanchored `$` also matches just BEFORE a trailing "\n", while JavaScript's
+# `$` (without `m`) matches only at the very end. Writing `$` here left that trailing newline in the
+# source, so `"<p>a</p><!-- unclosed\n"` produced one newline too many. `\z` is the exact end of the
+# input, which is what the JavaScript `$` means.
+$script:CDATA_RE = [regex]'<!\[CDATA\[([\s\S]*?)(?:\]\]>|\z)'
+$script:COMMENT_RE = [regex]'<!--[\s\S]*?(?:-->|\z)'
 $script:DOCTYPE_RE = [regex]'<!DOCTYPE[^>]*>'
 $script:ENTITY_WINDOW = 12
 
@@ -1092,6 +1145,19 @@ function Get-SelfCheckCases {
     # The idempotency pair: expected $null means "the second pass must not change the first".
     & $add 'normalize: idempotency pair (first pass, second pass must match)' 'text.normalize' `
         (& $cp @(0x201C, 0x45, 0x2019, 0x201D, 0x3000, 0x2014, 0xFF21)) $null
+    # Astral (non-BMP) input: an astral character is ONE code point and TWO UTF-16 code units, and the
+    # tables stop at U+024F, so every one of these passes through unchanged. Walking the replacement
+    # string by code unit used to hand a lone surrogate to [char]::ConvertFromUtf32, which throws and
+    # turned the whole request into bad-input; tools/workers-diff.mjs found it on U+1F600.
+    & $add 'normalize: astral emoji survives (U+1F600, ZWJ sequence, regional indicators)' 'text.normalize' `
+        ((& $cp @(0x1F600)) + ' ' + (& $cp @(0x1F469, 0x200D, 0x1F4BB)) + ' ' + (& $cp @(0x1F1EF, 0x1F1F5))) `
+        ([ordered]@{ text = ((& $cp @(0x1F600)) + ' ' + (& $cp @(0x1F469, 0x200D, 0x1F4BB)) + ' ' + (& $cp @(0x1F1EF, 0x1F1F5))) })
+    & $add 'normalize: astral case pair U+10400/U+10428 is outside the tables, ASCII still folds' 'text.normalize' `
+        ((& $cp @(0x1D400, 0x10400)) + ' ' + (& $cp @(0x10428)) + ' A') `
+        ([ordered]@{ text = ((& $cp @(0x1D400, 0x10400)) + ' ' + (& $cp @(0x10428)) + ' a') })
+    & $add 'normalize: astral between two BMP characters that do get folded' 'text.normalize' `
+        ('x' + (& $cp @(0x1F600)) + 'Caf' + [char]0x00E9 + ' ' + [char]0xFF21) `
+        ([ordered]@{ text = ('x' + (& $cp @(0x1F600)) + 'cafe a') })
 
     & $add 'extract: unclosed tag at end of input is dropped' 'text.extract' '<p>abc<b' `
         ([ordered]@{ title = ''; text = "`nabc"; links = @(); images = 0 })
@@ -1122,6 +1188,19 @@ function Get-SelfCheckCases {
                 [ordered]@{ href = '/two'; absolute = $false; text = 'two' })
             images = 0
         })
+    # Two more cases that came out of tools/workers-diff.mjs rather than the hand-written corpus: an
+    # uppercase attribute name (the reference regex is case-insensitive; a PowerShell [regex] literal is
+    # not), and an unclosed comment at end of input (in .NET `$` matches before a trailing newline,
+    # which left one character behind).
+    & $add 'extract: an uppercase attribute name still yields its href, scheme case is preserved' 'text.extract' '<A HREF="HTTP://e/x">X</A>' `
+        ([ordered]@{
+            title = ''
+            text  = 'X'
+            links = @([ordered]@{ href = 'HTTP://e/x'; absolute = $true; text = 'X' })
+            images = 0
+        })
+    & $add 'extract: an unclosed comment at end of input takes the trailing newline with it' 'text.extract' "<p>a</p><!-- unclosed`n" `
+        ([ordered]@{ title = ''; text = "`na`n"; links = @(); images = 0 })
 
     & $add 'fingerprint: empty text emits nothing' 'text.fingerprint' '' `
         ([ordered]@{ simhash = '0000000000000000'; tokens = 0; shingles = 0 })

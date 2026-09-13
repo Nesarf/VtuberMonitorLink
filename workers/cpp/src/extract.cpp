@@ -1,10 +1,21 @@
 // text.extract: the specified state machine of docs/WORKERS.md section 3.
 //
 // There is no HTML parser in C++ without a dependency and the project has no
-// HTML dependency on purpose, so this is a hand-written single left-to-right
-// scanner over the UTF-8 bytes. Every ASCII delimiter the scanner looks for
-// ('<', '>', '&', '"', '\'') is a byte that cannot occur inside a multi-byte
-// UTF-8 sequence, which is what makes byte scanning safe here.
+// HTML dependency on purpose, so this is a hand-written scanner over the UTF-8
+// bytes. Every ASCII delimiter the scanner looks for ('<', '>', '&', '"', '\'')
+// is a byte that cannot occur inside a multi-byte UTF-8 sequence, which is what
+// makes byte scanning safe here.
+//
+// **The pass order is the contract's, and it is not the order the rules are
+// numbered in.** Section 3: hide every CDATA body first, then remove comments
+// and doctypes, then remove the listed elements with their content, and only
+// then walk what is left. The remover runs over the raw text, looking for the
+// element start, so whether the '<' of a `<style>` happens to sit after
+// characters that a *later* tag walk would read as an unclosed tag cannot
+// protect it - that walk has not run yet. This file used to do all of that in
+// one left-to-right scan, which a seeded differential run against the reference
+// caught: `<p t<style>a</style>` kept the style body, and `<p t<p<!DOCTYPE
+// html><a href="x">` found an anchor the four other implementations do not.
 //
 // Section 3 step 8 is honoured: this file never normalizes anything. The
 // extracted text keeps its newlines and its runs of whitespace, the title and
@@ -21,6 +32,13 @@
 
 namespace vml {
 namespace {
+
+// CDATA bodies hide behind these two private-use code points while the removal
+// passes run, and are put back after the walk. Private-use code points cannot
+// occur in sampled text by accident, and they contain none of '<', '>' or '&',
+// so no rule can mistake a hidden body for markup or for an entity.
+const char kCdataOpen[] = "\xEE\x80\x80";   // U+E000
+const char kCdataClose[] = "\xEE\x80\x81";  // U+E001
 
 bool IsAsciiAlpha(unsigned char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 bool IsAsciiDigit(unsigned char c) { return c >= '0' && c <= '9'; }
@@ -42,26 +60,9 @@ bool IsTagNameChar(char c) {
 
 char AsciiLower(char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 
-bool MatchAt(const std::string& s, size_t pos, const char* literal) {
-  const size_t len = std::strlen(literal);
-  if (pos + len > s.size()) return false;
-  return s.compare(pos, len, literal) == 0;
-}
-
-bool MatchAtCaseInsensitive(const std::string& s, size_t pos, const char* literal) {
-  const size_t len = std::strlen(literal);
-  if (pos + len > s.size()) return false;
-  for (size_t k = 0; k < len; ++k) {
-    if (AsciiLower(s[pos + k]) != AsciiLower(literal[k])) return false;
-  }
-  return true;
-}
-
-// Section 3 step 1: removed together with their content.
-bool IsRemovedElement(const std::string& name) {
-  return name == "script" || name == "style" || name == "noscript" || name == "template" ||
-         name == "svg" || name == "iframe";
-}
+// Note: there is no "is this a removed element" check in the walk any more. The
+// listed elements are gone before the walk starts, which is what section 3's
+// pass order means; a stray closing tag for one of them is just a dropped tag.
 
 // Section 3 step 3: a tag becomes a newline, on the opening and the closing tag.
 bool IsBlockTag(const std::string& name) {
@@ -221,8 +222,207 @@ bool FindHref(const std::string& raw, std::string* href) {
   return false;
 }
 
+// --- the removal passes, in the order section 3 states -------------------------
+
+size_t FindCaseInsensitive(const std::string& s, size_t from, const char* literal) {
+  const size_t length = std::strlen(literal);
+  if (length == 0 || s.size() < length) return std::string::npos;
+  for (size_t i = from; i + length <= s.size(); ++i) {
+    bool matched = true;
+    for (size_t k = 0; k < length; ++k) {
+      if (AsciiLower(s[i + k]) != AsciiLower(literal[k])) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return i;
+  }
+  return std::string::npos;
+}
+
+// Pass 1: every CDATA body is hidden behind a sentinel. An unclosed section -
+// "]]>" missing - keeps everything to the end of the input, the same principle
+// as a removed element with no closing tag.
+void HideCdataBodies(const std::string& src, std::string* out, std::vector<std::string>* bodies) {
+  static const char kOpen[] = "<![CDATA[";
+  const size_t openLength = sizeof(kOpen) - 1;
+  size_t i = 0;
+  while (i < src.size()) {
+    const size_t start = src.find(kOpen, i);
+    if (start == std::string::npos) {
+      out->append(src, i, src.size() - i);
+      return;
+    }
+    out->append(src, i, start - i);
+    const size_t contentStart = start + openLength;
+    const size_t end = src.find("]]>", contentStart);
+    const size_t contentEnd = (end == std::string::npos) ? src.size() : end;
+    bodies->push_back(src.substr(contentStart, contentEnd - contentStart));
+    out->append(kCdataOpen);
+    out->append(std::to_string(bodies->size() - 1));
+    out->append(kCdataClose);
+    i = (end == std::string::npos) ? src.size() : end + 3;
+  }
+}
+
+// Pass 2a: comments, with an unterminated one running to the end of the input.
+void RemoveComments(const std::string& src, std::string* out) {
+  size_t i = 0;
+  while (i < src.size()) {
+    const size_t start = src.find("<!--", i);
+    if (start == std::string::npos) {
+      out->append(src, i, src.size() - i);
+      return;
+    }
+    out->append(src, i, start - i);
+    const size_t end = src.find("-->", start + 4);
+    i = (end == std::string::npos) ? src.size() : end + 3;
+  }
+}
+
+// Pass 2b: doctype declarations. The pattern needs its closing '>'; without one
+// nothing is removed here and the walk deals with what is left.
+void RemoveDoctypes(const std::string& src, std::string* out) {
+  size_t i = 0;
+  while (i < src.size()) {
+    const size_t start = FindCaseInsensitive(src, i, "<!DOCTYPE");
+    if (start == std::string::npos) {
+      out->append(src, i, src.size() - i);
+      return;
+    }
+    const size_t end = src.find('>', start);
+    if (end == std::string::npos) {
+      out->append(src, i, src.size() - i);
+      return;
+    }
+    out->append(src, i, start - i);
+    i = end + 1;
+  }
+}
+
+// The start of an element: "<name" where the name is followed by a character
+// that is not a word character.
+size_t FindElementStart(const std::string& src, size_t from, const std::string& name) {
+  for (size_t i = from; i + 1 + name.size() <= src.size(); ++i) {
+    if (src[i] != '<') continue;
+    bool matched = true;
+    for (size_t k = 0; k < name.size(); ++k) {
+      if (AsciiLower(src[i + 1 + k]) != name[k]) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) continue;
+    const size_t after = i + 1 + name.size();
+    if (after < src.size() && IsWordChar(src[after])) continue;
+    return i;
+  }
+  return std::string::npos;
+}
+
+// The end of the closing tag: "</name" followed by whitespace only and then '>'.
+// Returns one past the '>', or npos when the element never closes.
+size_t FindElementEnd(const std::string& src, size_t from, const std::string& name) {
+  for (size_t i = from; i + 2 + name.size() <= src.size(); ++i) {
+    if (src[i] != '<' || src[i + 1] != '/') continue;
+    bool matched = true;
+    for (size_t k = 0; k < name.size(); ++k) {
+      if (AsciiLower(src[i + 2 + k]) != name[k]) {
+        matched = false;
+        break;
+      }
+    }
+    if (!matched) continue;
+    size_t p = i + 2 + name.size();
+    while (p < src.size() && IsHtmlSpace(src[p])) ++p;
+    if (p < src.size() && src[p] == '>') return p + 1;
+  }
+  return std::string::npos;
+}
+
+// Pass 3: one element type removed everywhere, with its content. This runs over
+// the raw text and looks for the element start, so what precedes it - including
+// characters a later tag walk would read as an unclosed tag - cannot protect it.
+// The opening tag ends at its first '>', and a missing closing tag means "to end
+// of input".
+std::string RemoveElementEverywhere(const std::string& src, const std::string& name) {
+  std::string out;
+  size_t i = 0;
+  while (i < src.size()) {
+    const size_t start = FindElementStart(src, i, name);
+    if (start == std::string::npos) {
+      out.append(src, i, src.size() - i);
+      break;
+    }
+    const size_t openEnd = src.find('>', start + 1 + name.size());
+    if (openEnd == std::string::npos) {
+      out.append(src, i, src.size() - i);
+      break;
+    }
+    out.append(src, i, start - i);
+    const size_t closeEnd = FindElementEnd(src, openEnd + 1, name);
+    if (closeEnd == std::string::npos) return out;  // to end of input
+    i = closeEnd;
+  }
+  return out;
+}
+
+std::string PrepareSource(const std::string& html, std::vector<std::string>* cdataBodies) {
+  std::string hidden;
+  HideCdataBodies(html, &hidden, cdataBodies);
+  std::string withoutComments;
+  RemoveComments(hidden, &withoutComments);
+  std::string src;
+  RemoveDoctypes(withoutComments, &src);
+  static const char* const kRemoved[] = {"script", "style", "noscript",
+                                         "template", "svg",   "iframe"};
+  for (const char* name : kRemoved) src = RemoveElementEverywhere(src, name);
+  return src;
+}
+
+// Puts the hidden CDATA bodies back once no rule can mistake them for markup.
+std::string RestoreCdata(const std::string& s, const std::vector<std::string>& bodies) {
+  const size_t openLength = std::strlen(kCdataOpen);
+  const size_t closeLength = std::strlen(kCdataClose);
+  std::string out;
+  size_t i = 0;
+  while (i < s.size()) {
+    const size_t start = s.find(kCdataOpen, i);
+    if (start == std::string::npos) {
+      out.append(s, i, s.size() - i);
+      break;
+    }
+    const size_t digitsStart = start + openLength;
+    const size_t close = s.find(kCdataClose, digitsStart);
+    if (close == std::string::npos || close == digitsStart) {
+      out.append(s, i, digitsStart - i);
+      i = digitsStart;
+      continue;
+    }
+    size_t index = 0;
+    bool digits = true;
+    for (size_t k = digitsStart; k < close; ++k) {
+      if (!IsAsciiDigit(static_cast<unsigned char>(s[k]))) {
+        digits = false;
+        break;
+      }
+      index = index * 10 + static_cast<size_t>(s[k] - '0');
+    }
+    if (!digits) {
+      out.append(s, i, digitsStart - i);
+      i = digitsStart;
+      continue;
+    }
+    out.append(s, i, start - i);
+    if (index < bodies.size()) out += bodies[index];
+    i = close + closeLength;
+  }
+  return out;
+}
+
 struct Extractor {
-  const std::string& html;
+  std::string html;                            // the prepared source, owned
+  const std::vector<std::string>& cdataBodies;  // bodies to put back at the end
   std::string text;
   std::string title;
   std::vector<ExtractLink> links;
@@ -232,7 +432,8 @@ struct Extractor {
   ExtractLink current;
   int images = 0;
 
-  explicit Extractor(const std::string& source) : html(source) {}
+  Extractor(std::string source, const std::vector<std::string>& bodies)
+      : html(std::move(source)), cdataBodies(bodies) {}
 
   // Section 3 step 5: the title's own text is not part of `text`. Everything
   // else lands in the document text and, while an <a> is open, in the link text.
@@ -268,71 +469,12 @@ struct Extractor {
     PushText(plain);
   }
 
-  // Section 3 step 1: skip an element's content up to and including its closing
-  // tag; a missing closing tag means "to end of input".
-  size_t SkipToClosingTag(size_t from, const std::string& name) {
-    const size_t n = html.size();
-    for (size_t p = from; p + 1 < n; ++p) {
-      if (html[p] != '<' || html[p + 1] != '/') continue;
-      const size_t nameStart = p + 2;
-      if (nameStart + name.size() > n) continue;
-      bool match = true;
-      for (size_t t = 0; t < name.size(); ++t) {
-        if (AsciiLower(html[nameStart + t]) != name[t]) {
-          match = false;
-          break;
-        }
-      }
-      if (!match) continue;
-      const size_t after = nameStart + name.size();
-      if (after < n && !IsHtmlSpace(html[after]) && html[after] != '>' && html[after] != '/') {
-        continue;  // e.g. "</scriptx" does not close "</script>"
-      }
-      size_t k = after;
-      while (k < n) {
-        const char c = html[k];
-        if (c == '>') return k + 1;
-        if (c == '"' || c == '\'') {
-          const size_t e = html.find(c, k + 1);
-          if (e == std::string::npos) return n;
-          k = e + 1;
-          continue;
-        }
-        ++k;
-      }
-      return n;
-    }
-    return n;
-  }
-
   size_t HandleTag(size_t pos) {
     const size_t n = html.size();
-    const size_t bang = pos + 1;  // html[bang] is [A-Za-z/!]
 
-    if (html[bang] == '!') {
-      // Section 3 step 2. CDATA first, then comments, then doctypes.
-      if (MatchAt(html, bang, "![CDATA[")) {
-        const size_t contentStart = bang + 8;
-        const size_t e = html.find("]]>", contentStart);
-        const size_t contentEnd = (e == std::string::npos) ? n : e;
-        // CDATA is character data: its content is copied verbatim. No tag inside
-        // it is markup and no entity inside it is a reference - "a &amp; b"
-        // stays exactly that - which is the half of the rule that survives
-        // after an implementation stops re-parsing the tags.
-        PushText(html.substr(contentStart, contentEnd - contentStart));
-        return (e == std::string::npos) ? n : e + 3;
-      }
-      if (MatchAt(html, bang, "!--")) {
-        const size_t e = html.find("-->", bang + 3);
-        return (e == std::string::npos) ? n : e + 3;
-      }
-      if (MatchAtCaseInsensitive(html, bang, "!DOCTYPE")) {
-        const size_t e = html.find('>', bang);
-        return (e == std::string::npos) ? n : e + 1;
-      }
-      // Any other "<!...>" is an ordinary tag and is dropped below.
-    }
-
+    // Comments, doctypes and CDATA were dealt with by the passes that ran before
+    // this walk, which is the order section 3 states. An unrecognised "<!...>"
+    // that survived them is an ordinary tag and is dropped below.
     // Scan to the '>' that ends the tag, honouring quoted attribute values: a
     // '>' inside them does not end the tag.
     size_t j = pos + 1;
@@ -375,10 +517,6 @@ struct Extractor {
     name.reserve(p - nameStart);
     for (size_t t = nameStart; t < p; ++t) name.push_back(AsciiLower(raw[t]));
 
-    if (IsRemovedElement(name)) {
-      if (closing) return next;
-      return SkipToClosingTag(next, name);
-    }
     if (name == "title") {
       if (!closing && !titleSeen) {
         inTitle = true;
@@ -440,10 +578,19 @@ struct Extractor {
       links.push_back(current);
       haveLink = false;
     }
+    // Now that no rule can mistake them for markup, the hidden CDATA bodies go
+    // back into every field that carried a sentinel.
     ExtractResult result;
-    result.title = title;
-    result.text = text;
-    result.links = links;
+    result.title = RestoreCdata(title, cdataBodies);
+    result.text = RestoreCdata(text, cdataBodies);
+    result.links.reserve(links.size());
+    for (const ExtractLink& link : links) {
+      ExtractLink restored;
+      restored.href = link.href;
+      restored.absolute = link.absolute;
+      restored.text = RestoreCdata(link.text, cdataBodies);
+      result.links.push_back(std::move(restored));
+    }
     result.images = images;
     return result;
   }
@@ -452,7 +599,9 @@ struct Extractor {
 }  // namespace
 
 ExtractResult ExtractHtml(const std::string& html) {
-  Extractor extractor(html);
+  std::vector<std::string> cdataBodies;
+  const std::string prepared = PrepareSource(html, &cdataBodies);
+  Extractor extractor(prepared, cdataBodies);
   return extractor.Run();
 }
 

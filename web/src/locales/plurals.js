@@ -627,4 +627,34 @@ export const PLURALS = {
     cookieCountWithSession_other: '{n} คุกกี้ (รวม SESSDATA)',
     followersCount_other: '{n} ผู้ติดตาม',
   },
+  // Vietnamese (added one release after Thai) has **no table here**, and the note sits in this
+  // position on purpose: the next reader to look for a `vi-VN` entry should find the decision
+  // instead of an empty space. It is the second locale after Indonesian to land in the bare-numeral
+  // tier, but it does not land there for Indonesian's reason, so the difference is written out.
+  //
+  // The measurement first, because the measurement is only half the evidence:
+  //
+  //   `Intl.PluralRules('vi').resolvedOptions().pluralCategories` is `["other"]` -- one category.
+  //   Measured over 0..2000, `select(n)` is `other` for all 2001 integers: no residue class, no
+  //   last-digit rule, no threshold. Decimals select `other` as well (0.5 / 1.5 / 2.5 / 100.5 /
+  //   1000.25), and so do 0, 1, 2, 1e6 and the non-number fallbacks. A form table could therefore
+  //   hold exactly one form per key -- and that form could only repeat whatever the base value in
+  //   overlays.js already says, which is a table that cannot change any label.
+  //
+  // The half a category count cannot see is word order, and that is where Vietnamese differs from
+  // Thai and Filipino rather than resembling them. Thai needs the classifier as a **separate
+  // obligatory word** in the count phrase (`3 รายการ`, `2 วัน`, `5 ครั้ง`) and Tagalog needs the
+  // **linker** `na` between numeral and noun (`5 na item`) -- both are words that are not the noun,
+  // so "number in front of a bare noun" renders a fragment. Vietnamese puts the numeral directly in
+  // front of the unit word, and for every count key in this project the unit word IS the head noun:
+  // `12 mục`, `2 ngày`, `4 người`, `4 nhóm`, `5 thành viên`, `5 lần gọi`, `3 kết quả khớp`,
+  // `6 cảnh báo`, `36 cookie`, `128 người theo dõi`. Where Vietnamese does require a classifier
+  // (`3 con mèo`, `2 quyển sách`), it belongs to individual-object nouns -- a class none of these
+  // keys counts, and the reason the wording of the base values (not a table) is what keeps these
+  // labels idiomatic.
+  //
+  // So the hand layer's base values are the count wording, `countLabel()` prepends the numeral, and
+  // tools/i18n-plural-test.mjs pins all three parts: the 0..2000 measurement, the exact rendered
+  // labels, and the fact that no table is needed -- so nobody can add one by analogy with Thai, and
+  // nobody can drop the classifier-bearing nouns out of the base values either.
 };

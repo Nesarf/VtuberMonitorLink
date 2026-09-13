@@ -241,3 +241,18 @@ if (regressions.length) {
   process.exit(1);
 }
 process.stdout.write('\ncoverage did not regress ✓\n');
+
+// The front page states how many locales ship, and a number written in prose is the kind of thing that
+// goes stale in silence: it said 25 for three rounds after the 26th, 27th and 28th locales had landed -
+// a claim a reader trusts and a maintainer never re-reads. The real count is already known here, so the
+// claim is checked here: every `<number> locales` in README.md has to agree with the locale table. A
+// statement that can be compared with the code should be compared with it, by the same command that
+// decides whether the translations kept up.
+const claimed = [...fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8').matchAll(/(\d+)\s+locales?\b/g)].map((m) => Number(m[1]));
+const wrong = [...new Set(claimed.filter((n) => n !== rows.length))];
+if (wrong.length) {
+  process.stdout.write(`\nthe documented locale count disagrees with the registry: README.md says ${wrong.join(' and ')}, this tree ships ${rows.length}.\n`);
+  process.stdout.write('(update the number in README.md, or check the registry if the count moved by accident)\n');
+  process.exit(1);
+}
+process.stdout.write(`documented locale count agrees with the registry (${rows.length}) ✓\n`);

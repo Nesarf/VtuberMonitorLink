@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PLURALS } from '../web/src/locales/plurals.js';
+import { HAND_COMMON } from '../web/src/locales/overlays.js';
 import { countLabel, fillParams, pickPlural, pluralCategory } from '../web/src/plural.js';
 import { readDicts } from './lib/i18n-source.mjs';
 import { usableChain } from './lib/locale-chain.mjs';
@@ -314,6 +315,109 @@ t('Thai count labels carry their classifier - the failure mode that must be visi
   for (const [key, form] of Object.entries(PLURALS['th-TH'])) {
     const rendered = countLabel(form, 12);
     assert.ok(classifierRe.test(rendered), `${key}: the rendered label is not "number space Thai": ${rendered}`);
+  }
+});
+
+t('vi-VN needs no table either - and the tier it lands in is a measurement, not an inference from the count', () => {
+  // Added with the Vietnamese locale (the 29th), which is the first locale to reach the bare-numeral
+  // tier *after* Filipino and Thai showed that the tier has to be earned rather than read off the
+  // category count. Both halves are therefore pinned here: the measurement, and the wording the
+  // measurement is only half the evidence for.
+  //
+  // The measurement, spelled out rather than sampled (the Filipino mistake was reading a spot check as
+  // the rule, and the Thai mistake would have been stopping at the first plausible answer):
+  //
+  //   `Intl.PluralRules('vi').resolvedOptions().pluralCategories` is `["other"]` -- one category.
+  //   Measured over 0..2000, `select(n)` is `other` for all 2001 integers: no residue class, no
+  //   last-digit rule, no threshold. Decimals select `other` as well (0.5 / 1.5 / 2.5 / 100.5 /
+  //   1000.25), and `other` is also the non-number fallback in web/src/plural.js. So a `vi-VN` table
+  //   could hold exactly one form per key, and that form could only repeat the base value in
+  //   overlays.js -- a table that cannot change any label.
+  //
+  //   What the count cannot see is word order, and that is where Vietnamese differs from Thai and
+  //   Filipino instead of resembling them: Thai needs the classifier as a separate obligatory word
+  //   (`3 รายการ`), Tagalog needs the linker `na` (`5 na item`) -- both are words that are not the
+  //   noun, which is why a bare noun after a numeral is a fragment there. Vietnamese puts the numeral
+  //   directly in front of the unit word, and for every count key in this project that unit word IS
+  //   the head noun (`12 mục`, `2 ngày`, `4 người`, `4 nhóm`, `5 thành viên`, `5 lượt gọi`,
+  //   `3 kết quả khớp`, `6 cảnh báo`, `36 cookie`, `128 người theo dõi`). Where Vietnamese does need a
+  //   classifier (`3 con mèo`, `2 quyển sách`) it belongs to individual-object nouns, a class none of
+  //   these keys counts -- so the wording, not a table, is what keeps these labels idiomatic, and the
+  //   exact rendered labels are pinned below.
+  //
+  //   This is also why vi-VN is *not* simply appended to the zh/ja/ko/id list above: that list asserts
+  //   "one category, so nothing to say"; here there is something to say (the unit word), and it is
+  //   asserted. A future reader who wants to add a table has to delete a pinned label to do it, and a
+  //   reader who wants to drop the unit words out of the base values fails the same assertion.
+  const vi = new Intl.PluralRules('vi-VN');
+  assert.equal(vi.resolvedOptions().pluralCategories.join(), 'other', 'vi reports more than one category now');
+  const nonOther = [];
+  for (let n = 0; n <= 2000; n++) if (vi.select(n) !== 'other') nonOther.push(`${n}->${vi.select(n)}`);
+  assert.equal(nonOther.length, 0, 'vi no longer selects `other` for every integer: ' + nonOther.slice(0, 6).join(', '));
+  for (const n of [0.5, 1.5, 2.5, 100.5, 1000.25]) assert.equal(vi.select(n), 'other', `vi decimal ${n}`);
+  assert.equal(pluralCategory('vi-VN', Number.NaN), 'other', 'other is still the non-number fallback');
+  assert.ok(!PLURALS['vi-VN'], 'vi-VN has a form table now: with a single category it can only repeat the base value, so the reason for it has to be written down in locales/plurals.js first');
+  // The wording: the base values of the hand layer, rendered through the real lookup path. `dict` is
+  // the hand layer alone, because with no table on the chain that is exactly what pickPlural() sees.
+  const bases = HAND_COMMON['vi-VN'];
+  assert.ok(bases, 'vi-VN has no hand layer, so it has no count wording');
+  const expected = {
+    items: [12, '12 mục'],
+    groupDays: [2, '2 ngày'],
+    groupPeopleUnit: [4, '4 người'],
+    vdbGroups: [4, '4 nhóm'],
+    outsideRange: [12, '12 mục bị loại bởi bộ lọc thời gian'],
+    groupMembers: [21, '21 thành viên'],
+    groupPeopleCount: [3, '3 người được theo dõi'],
+    costCalls: [5, '5 lượt gọi'],
+    matches: [3, '3 kết quả khớp'],
+    alerts: [6, '6 cảnh báo'],
+    cookieCount: [36, '36 cookie'],
+    cookieCountWithSession: [36, '36 cookie (gồm SESSDATA)'],
+    followersCount: [128, '128 người theo dõi'],
+  };
+  for (const [key, [n, label]] of Object.entries(expected)) {
+    assert.equal(countLabel(pickPlural({ ...bases }, key, 'vi-VN', n), n), label, `${key}: the rendered count label moved`);
+  }
+  // One is not a special case in Vietnamese, and neither is a signed follower delta: the UI passes
+  // "+12" straight through `tn('followersCount', ...)` on the Watch and Intel pages.
+  assert.equal(countLabel(pickPlural({ ...bases }, 'items', 'vi-VN', 1), 1), '1 mục');
+  assert.equal(countLabel(pickPlural({ ...bases }, 'followersCount', 'vi-VN', '+12'), '+12'), '+12 người theo dõi');
+  // Every pinned label is a number, a space and a Vietnamese unit word -- a base value reduced to a
+  // bare numeral, or left as the English noun, fails right here. `cookie` is deliberately NOT in the
+  // English-noun pattern: it is a loanword and it *is* the Vietnamese wording (the same call Thai's
+  // `คุกกี้` and Filipino's `cookie` record), so `36 cookie` is a correct label and flagging it would
+  // make this check lie. The two cookie labels are pinned by name in the map above instead.
+  for (const [key, [n]] of Object.entries(expected)) {
+    const rendered = countLabel(pickPlural({ ...bases }, key, 'vi-VN', n), n);
+    const bare = rendered.replace(/^[+-]?\d+\s*/, '');
+    assert.ok(bare.length > 0, `${key}: a number with no noun: ${rendered}`);
+    assert.ok(!/^(items?|days?|members?|matches|calls|alerts|followers?|groups?|people)\b/i.test(bare), `${key}: the English noun is still there: ${rendered}`);
+  }
+});
+
+t('the Vietnamese count-label predicate can fail (negative control), and it is the one the traversal uses', () => {
+  // A negative control, so the traversal assertion (see the vi-VN block in tools/traverse-ui.cjs)
+  // cannot be an assertion that only ever prints [ok]. Vietnamese has no linker and no classifier to
+  // look for in these labels -- the shape to assert is "number, space, one of the pinned Vietnamese
+  // unit words", which is a predicate that says nothing about the language's grammar and everything
+  // about which wording this locale actually renders.
+  const count = /\d+ (?:mục|ngày|người|nhóm|thành viên|lượt gọi|kết quả khớp|cảnh báo|cookie)\b/;
+  const glued = /\d+(?:mục|ngày|người|nhóm|thành viên|lượt gọi|kết quả khớp|cảnh báo|cookie)\b/;
+  // No `cookies?` here either: `36 cookie` is the wording this locale intends (see the comment in the
+  // test above), so an English-fallback pattern that includes it would turn a correct label into a
+  // failure in the traversal, where the same pattern is reused.
+  const english = /\b\d+\s+(?:items?|days?|members?|matches|calls|alerts|followers?|groups?|people)\b/;
+  assert.ok(count.test('12 mục') && count.test('2 ngày'), 'the predicate rejects a correct Vietnamese count label');
+  assert.equal(count.test('12mục'), false, 'the predicate accepts a glued label');
+  assert.equal(count.test('12 items'), false, 'the predicate accepts the English fallback');
+  assert.ok(glued.test('12mục'), 'the glued-label control cannot fire');
+  assert.ok(english.test('12 items'), 'the English-fallback control cannot fire');
+  // And the real hand-layer wording satisfies it (the same values this test pins by name above).
+  for (const key of ['items', 'groupDays', 'groupPeopleUnit', 'vdbGroups', 'outsideRange', 'groupMembers', 'groupPeopleCount', 'costCalls', 'matches', 'alerts', 'cookieCount', 'cookieCountWithSession', 'followersCount']) {
+    const rendered = countLabel(HAND_COMMON['vi-VN'][key], 12);
+    assert.ok(count.test(rendered), `${key}: the rendered label does not read as "number space unit word": ${rendered}`);
+    assert.equal(english.test(rendered), false, `${key}: the rendered label contains an English count noun: ${rendered}`);
   }
 });
 

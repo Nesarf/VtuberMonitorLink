@@ -491,6 +491,91 @@ async function main() {
     } else {
       check('the Thai live tab was found', false, 'no tab button matched "ไลฟ์"');
     }
+
+    // Vietnamese: the same three failure modes as the Thai block above, plus a negative control for the
+    // predicate this locale's count labels are judged by.
+    //   1. registered in LOCALES but never rendering -- the chain is wrong or the layers did not land,
+    //      and the page silently shows English while every offline table still reports 100%;
+    //   2. a Chinese proper noun inside an otherwise Vietnamese sentence (the glossary strips pinned
+    //      terms before looksUntranslated() tests a value, so no offline tool can see it);
+    //   3. count labels: Vietnamese needs **no** plural table (one category, and the numeral stands
+    //      directly in front of the unit word -- see locales/plurals.js and tools/i18n-plural-test.mjs),
+    //      so the label comes from the base value in overlays.js. A label rendering as a bare numeral or
+    //      as the English noun would be a wiring failure nothing else in the suite would see.
+    await langSel.selectOption('vi-VN');
+    await page.waitForTimeout(400);
+    const viTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('html lang follows the Vietnamese selection', (await langIsHant.getAttribute('lang')) === 'vi-VN', String(await langIsHant.getAttribute('lang')));
+    check(
+      'the Vietnamese interface is in Vietnamese',
+      viTabs.includes('Thông tin') && viTabs.includes('Nguồn') && viTabs.includes('Cài đặt') && viTabs.includes('Theo dõi'),
+      viTabs,
+    );
+    // The anchor claim: the tab row must not still be the English fallback. `LLM` is deliberately not in
+    // the pattern -- every locale keeps that abbreviation (it is the same string in zh and en, so no
+    // locale ever translates it), and flagging it would make the check lie. The others are the English
+    // copy's own labels. `People` and `Calendar` are in here as well, because this locale writes both
+    // (Nguoi / Lich) and the machine pass had given the People tab the same label as the Watch tab.
+    check('no English fallback left in the Vietnamese tab row', !/Run|Settings|Reports|Search|Sources|Watch|People|Calendar|Live/.test(viTabs), viTabs);
+    const viLive = page.locator('nav.tabs button', { hasText: 'Phát trực tiếp' }).first();
+    if (await viLive.count()) {
+      await viLive.click();
+      await page.waitForTimeout(900);
+      // Same rule as the Korean, Indonesian, Filipino and Thai scans: only the interface's own copy
+      // (titles / hints / tabs), never the room titles that come from bilibili. Pinned proper nouns are
+      // stripped first, longest first.
+      const viChrome = [
+        ...(await page.locator('main h2').allInnerTexts()),
+        ...(await page.locator('main .hint').allInnerTexts()),
+        ...(await page.locator('nav.tabs button').allInnerTexts()),
+      ].join('\n');
+      const keepVi = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
+        .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
+        .map(([k]) => k)
+        .sort((a, b) => b.length - a.length);
+      let restVi = viChrome;
+      for (const term of keepVi) restVi = restVi.split(term).join('');
+      const viLeftover = [...new Set(restVi.match(/[\u4e00-\u9fff]/g) || [])];
+      check('no Chinese left in the Vietnamese live page', viLeftover.length === 0, viLeftover.length ? 'leftover Han characters: ' + viLeftover.join('') : '0 leftover Han characters');
+      const viHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
+      // These two phrases come from the hand-written liveHint, so this fails when the locale falls back
+      // to English rather than merely when a tab label is missing. `phat truc tiep` is the same phrase
+      // the tab label uses, and `trinh phat nhung` (embedded player) is not a borrowed English term.
+      check('the Vietnamese live hint is Vietnamese', viHints.includes('phát trực tiếp') && viHints.includes('trình phát nhúng'), viHints.slice(0, 160));
+      // The counter wiring: with no plural table the label is the hand layer's base value, so a count
+      // label on this page has to read "number, space, Vietnamese unit word". Which counts appear
+      // depends on the run (a follower count needs an enabled watch target, a room count needs something
+      // live), so the check is only made when a count label shape is actually on screen, and when it is
+      // not the skip is *named* instead of silent: a quietly skipped assertion is how a check count
+      // changes without anyone noticing which one left.
+      //
+      // The gate looks for one of the pinned unit words after a numeral (the same predicate
+      // tools/i18n-plural-test.mjs pins), not for any digit: a date, a uid or a calendar year would
+      // otherwise arm a check that can only fail. `cookie` is deliberately absent from the English
+      // pattern -- the loanword IS this locale's wording, so flagging it would make the check lie.
+      const viBody = await page.locator('main').innerText();
+      const viCountRe = /\d+ (?:mục|ngày|người|nhóm|thành viên|lượt gọi|kết quả khớp|cảnh báo|cookie)\b/;
+      const viGluedRe = /\d+(?:mục|ngày|người|nhóm|thành viên|lượt gọi|kết quả khớp|cảnh báo|cookie)\b/;
+      const viEnglishRe = /\b\d+\s+(?:items?|days?|members?|matches|calls|alerts|followers?|groups?|people)\b/;
+      const viCountish = (viBody.match(new RegExp(viCountRe.source, 'g')) || []).slice(0, 3);
+      const viEnglishish = (viBody.match(new RegExp(viEnglishRe.source, 'g')) || []).slice(0, 3);
+      const viArmed = viCountish.length > 0 || viEnglishish.length > 0;
+      check(
+        viArmed ? 'Vietnamese count labels read as number + space + Vietnamese unit word' : 'Vietnamese count labels: nothing to assert this run (no count label on the live page)',
+        !viArmed || (viCountish.length > 0 && viEnglishish.length === 0),
+        viArmed ? viCountish.join(' | ') + (viEnglishish.length ? ' | ENGLISH: ' + viEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+      );
+      // Negative control: the predicate above has to be able to FAIL, or it is an assertion that only
+      // ever prints [ok]. All four cases are pure string work on the same regexes, so they run even when
+      // the page had no count label to arm the real check.
+      check(
+        'the Vietnamese count-label predicate can fail (negative control)',
+        viCountRe.test('12 mục') && !viCountRe.test('12mục') && !viCountRe.test('12 items') && viGluedRe.test('12mục') && viEnglishRe.test('12 items'),
+        'accepts "12 muc"=' + viCountRe.test('12 mục') + ', rejects glued="' + !viCountRe.test('12mục') + '", rejects English="' + !viCountRe.test('12 items') + '", both controls fire="' + (viGluedRe.test('12mục') && viEnglishRe.test('12 items')) + '"',
+      );
+    } else {
+      check('the Vietnamese live tab was found', false, 'no tab button matched "Phát trực tiếp"');
+    }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();

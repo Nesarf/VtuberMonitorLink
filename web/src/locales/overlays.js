@@ -56,6 +56,11 @@ const LATE_KEYS = {
   // Thai: `คน` (people) rather than a transliteration of "people", and `ปฏิทิน` (calendar). Both are
   // the words the rest of the Thai copy uses (`คนที่ติดตาม` / the calendar hint below).
   'th-TH': { tab_people: 'คน', tab_calendar: 'ปฏิทิน' },
+  // Vietnamese: `Người` (people) and `Lịch` (calendar). They have to be written down here rather than
+  // left to the machine layer, because the machine pass gave the People tab the same value as the
+  // Watch tab (`Theo dõi`, from zh "关注" and zh "监视" respectively) -- two different tabs rendering english-logic:allow
+  // one label, which no gate would have caught.
+  'vi-VN': { tab_people: 'Người', tab_calendar: 'Lịch' },
   'es-ES': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'es-419': { tab_people: 'Personas', tab_calendar: 'Calendario' },
   'pt-PT': { tab_people: 'Pessoas', tab_calendar: 'Calendário' },
@@ -672,6 +677,234 @@ export const HAND_COMMON = {
     // followersCount is the one count key whose zh source puts the numeral *after* the noun, so the
     // Thai value does the same and the tested `{n}` rule for this key is unaffected.
     followersCount: 'ผู้ติดตาม {n}',
+  },
+  'vi-VN': {
+    // Vietnamese joined as the 29th locale, and its hand layer is written first for the same reason
+    // Filipino and Thai wrote theirs first: the machine layer may not override a hand entry (see
+    // humanKeys() in tools/i18n-translate.mjs), so the copy a user meets first is decided here
+    // rather than by the model. The tag is `vi-VN`, never the bare `vi` (see locales/index.js).
+    saveStateIdle: 'Chưa có thay đổi',
+    saveStateDirty: 'Có thay đổi chưa lưu',
+    cancel: 'Hủy',
+    refresh: 'Làm mới',
+    loading: 'Đang tải…',
+    error: 'Lỗi',
+    yes: 'Cần',
+    no: 'Không cần',
+    enabled: 'Bật định kỳ',
+    disabled: 'Tắt định kỳ',
+    date: 'Ngày',
+    source: 'Nguồn',
+    sources: 'Nguồn',
+    // The Search page title. The machine pass returned "Truy xuất thông tin" (retrieval, database
+    // jargon) while this page's own placeholder and every other row that mentions searching say
+    // "tìm kiếm" -- one concept rendered two ways inside one page, so the page title follows the
+    // wording the rest of the page uses.
+    searchTitle: 'Tìm kiếm thông tin',
+    reportsTitle: 'Báo cáo',
+    eventsTitle: 'Sự kiện đã hợp nhất',
+    chartsTitle: 'Biểu đồ xu hướng',
+    shareTitle: 'Chia sẻ',
+    shareDownload: 'Tạo và tải xuống',
+    shareCopy: 'Sao chép văn bản',
+    intelTitle: 'Dòng thẻ thông tin',
+    runTitle: 'Chạy',
+    done: 'Hoàn thành',
+    failed: 'Thất bại',
+    noItems: 'Chưa có thông tin',
+    onlyAlerts: 'Chỉ mục khớp từ khóa',
+    onlyStarred: 'Chỉ mục gắn sao',
+    onlyUnread: 'Chỉ mục chưa đọc',
+    mergeEvents: 'Gộp sự kiện trùng lặp',
+    packetLoss: 'Mất gói',
+    save: 'Lưu',
+    saving: 'Đang lưu…',
+    saved: 'Đã lưu',
+    add: 'Thêm',
+    delete: 'Xóa',
+    name: 'Tên',
+    time: 'Thời gian',
+    language: 'Ngôn ngữ',
+    latency: 'Độ trễ',
+    // The same reasoning the Korean, Indonesian, Filipino and Thai levels recorded for this one: it
+    // is a long prompt sentence, and a long sentence is exactly where a machine pass leaves the
+    // source language behind - it is also the first thing a user reads on the Live page. A hand
+    // entry always wins, so this sentence never depends on the model. The machine pass had produced
+    // a usable sentence that still carried English inside it (it called the rooms "phòng live" and
+    // wrapped the rerun note in the corner brackets the source uses), so this wording drops both.
+    liveHint:
+      'Phát trực tiếp là loại thông tin có tính thời sự nhất — đáng để biết ngay hơn bất kỳ từ khóa nào. ' +
+      'Trang này hiển thị trạng thái phát trực tiếp của các đối tượng theo dõi, và có thể xếp nhiều phòng ' +
+      'thành một lưới để xem cùng lúc (dùng trình phát nhúng chính thức của bilibili, không qua bất kỳ máy ' +
+      'chủ trung gian nào và không đụng đến trạng thái đăng nhập). Lưu ý: "phát lại" không phải là phát ' +
+      'trực tiếp thật, nên được đánh dấu riêng.',
+    // ── The count labels, and why Vietnamese needs **no** form table.
+    //
+    // docs/DESIGN.md section 11 describes the rule as three-tiered: a locale that inflects gets a
+    // `<key>_<category>` table, a locale that does not keeps the number in front of a bare noun, and
+    // a locale can need a table for a reason the form count cannot express (Filipino's `na` linker,
+    // Thai's classifier). Vietnamese is the *second* tier, and the measurement is what puts it there
+    // rather than the form count alone:
+    //
+    //   `Intl.PluralRules('vi').resolvedOptions().pluralCategories` is `["other"]` -- one category.
+    //   Measured over 0..2000, all 2001 integers select `other`; decimals (0.5 / 1.5 / 2.5 / 100.5)
+    //   select it too, and so do 0, 1 and 1e6. So nothing inflects, and a table could hold exactly
+    //   one form per key -- which is the same shape that puts zh / ja / ko / id in the second tier.
+    //
+    //   The half a category count cannot see is word order, and that is where Vietnamese parts
+    //   company with Thai and Filipino rather than resembling them. Thai needs its classifier as a
+    //   separate obligatory word (`3 รายการ`), Tagalog needs the linker `na` (`5 na item`); both are
+    //   words that are not the noun, so "number in front of a bare noun" renders a fragment.
+    //   Vietnamese puts the numeral directly in front of the unit word, and for every count key here
+    //   that unit word IS the head noun: `12 mục`, `2 ngày`, `4 người`, `4 nhóm`, `5 thành viên`,
+    //   `5 lượt gọi`, `3 kết quả khớp`, `6 cảnh báo`, `36 cookie`, `128 người theo dõi`. Where
+    //   Vietnamese does require a classifier (`3 con mèo`, `2 quyển sách`) it belongs to
+    //   individual-object nouns, which is a class none of these keys counts.
+    //
+    // So the wording lives in the base values below, `countLabel()` prepends the numeral, and
+    // tools/i18n-plural-test.mjs pins the measurement, these rendered labels and the absence of a
+    // table -- so the locale cannot be "simplified" into a table by analogy with Thai, and the
+    // classifier-bearing nouns cannot be dropped out of the base values either.
+    items: 'mục',
+    groupDays: 'ngày',
+    // The English value for this one is the abbreviation "p"; Vietnamese gets the word, like Thai and
+    // Filipino do.
+    groupPeopleUnit: 'người',
+    vdbGroups: 'nhóm',
+    outsideRange: 'mục bị loại bởi bộ lọc thời gian',
+    groupMembers: 'thành viên',
+    groupPeopleCount: 'người được theo dõi',
+    costCalls: 'lượt gọi',
+    matches: 'kết quả khớp',
+    // `alerts` is a count key as well as the copy for its row (zh "告警"): the panel label wants the english-logic:allow
+    // capitalised form, but `tn('alerts', n)` prepends a number to this value, so the base stays lower
+    // case -- "6 cảnh báo" is a count label, "6 Cảnh báo" is not. The label position is decided by the
+    // rows below instead.
+    alerts: 'cảnh báo',
+    // ── Corrections to the machine pass itself, all of them kept here rather than in machine.json,
+    //    which the pipeline regenerates and would happily overwrite. A hand entry wins over the
+    //    machine layer (see humanKeys() in tools/i18n-translate.mjs), so these are the values a user
+    //    actually sees. Every note quotes the machine's own `vi-VN` output and names the defect a
+    //    Vietnamese reader would notice; no style preference is encoded here.
+    //
+    // The Chinese source strings are quoted inside `english-logic:allow` markers: the guard reads one
+    // `//` line at a time, so every line carrying a Chinese character needs its own marker (see
+    // docs/ENGLISH-LOGIC.md section 3).
+    //
+    // 1. A meaning inversion. zh "出口" is the *egress route* (how a source is reached: direct or english-logic:allow
+    //    through the proxy) and the machine read it as the everyday "output" -- `proxyMode` came back
+    //    as "Đầu ra", so a settings row sitting next to "direct" / "proxy" named a pipe instead of a
+    //    route. English says "Egress". Filipino and Thai hit the same word.
+    proxyMode: 'Lối ra mạng',
+    // 2. A result label rendered as an instruction. zh "扫描条目" is the count of entries a VDB scan english-logic:allow
+    //    examined, shown after the scan, and the machine wrote "Quét mục" -- "scan entries" -- which is
+    //    an imperative. The same class Filipino and Thai recorded.
+    peopleScanned: 'Mục đã quét',
+    // 3. A glossary term glued to the token in front of it, plus Vietnamese word order thrown away.
+    //    zh "从 VDB 导入关注对象" came back as "Nhập từ VDB đối tượng theo dõi": the pinned term english-logic:allow
+    //    关注对象 (vi "đối tượng theo dõi") is appended straight after the platform name with no english-logic:allow
+    //    grammar between them, and the object of the sentence ends up after its source. It is the same
+    //    "VDBFollowed people" defect Filipino recorded, one locale later.
+    vdbTitle: 'Nhập đối tượng theo dõi từ VDB',
+    // 4. A half-translated parenthetical. zh "标识（英文/数字/短横线）" lists the *characters* an id may english-logic:allow
+    //    contain; the machine wrote "Định danh (chữ Anh/số/gạch ngang)", i.e. 英文 as "chữ Anh" -- the english-logic:allow
+    //    name of the English *language*, not Latin letters. The row accepts Latin letters. Filipino
+    //    and Thai hit the identical defect.
+    sourceId: 'Định danh (chữ Latinh/số/gạch ngang)',
+    // 5. A wrong word class on a column header. zh "星期" is the generic "day of week" header of the english-logic:allow
+    //    scheduled-task table, and the machine returned "Thứ" -- the ordinal prefix that opens the
+    //    weekday names (Thứ Hai = Monday) with no noun attached, so the header named a series of
+    //    ordinals rather than the column. Filipino's "Linggo" (Sunday) was this defect the other way
+    //    round.
+    dayOfWeek: 'Ngày trong tuần',
+    // 6. A label that collides with the privacy row next to it. zh "无头模式" is headless (the browser english-logic:allow
+    //    runs with no window); the machine wrote "Chế độ ẩn" ("hidden mode"), which reads as a stealth
+    //    switch -- and this settings page already has "Chế độ ẩn danh" for anonymous mode one row
+    //    away, so the two would be read as the same feature.
+    headless: 'Chế độ không cửa sổ',
+    // 7. Three buttons of one toolbar describing the wrong action, and one of them with no noun. The
+    //    machine produced "Thêm tất cả đang phát vào nhiều màn hình" for 在播的全部加入多屏 ("everything english-logic:allow
+    //    that is live", with nothing being counted), "Tham gia nhiều màn hình" for 加入多屏 ("join the english-logic:allow
+    //    multi-screen", as if joining a group) and "Xóa nhiều màn hình" for 清空多屏 ("delete several english-logic:allow
+    //    screens"). All three sit in the same row beside the grid, so they name the same object with
+    //    the same verb family -- the consistency decision Thai recorded for its grid buttons.
+    multiScreen: 'Nhiều màn hình',
+    addAllLive: 'Thêm mọi phòng đang phát vào nhiều màn hình',
+    addToGrid: 'Thêm vào nhiều màn hình',
+    clearGrid: 'Xóa hết khỏi nhiều màn hình',
+    // 8. Two sentences whose first word stayed lower case after the machine pass, because the pinned
+    //    term inside them is substituted in lower case (the rule recorded in glossary.json's
+    //    `_note_en`): "lưu trữ là SQLite ghi tăng dần ..." and "nguồn là 'đơn vị thu thập' ...".
+    //    Vietnamese capitalises the first word of a sentence, so both take a capital -- and the second
+    //    one also had English left inside it ("alias") in an otherwise Vietnamese sentence.
+    chartsHint:
+      'Lưu trữ là SQLite ghi tăng dần (mỗi ngày chạy sẽ thêm vào, bỏ qua mục đã tồn tại). Biểu đồ vẽ bằng ' +
+      'SVG nội tuyến, không dùng thư viện biểu đồ — bản di động không nên vì vài cột mà mang thêm vài trăm KB.',
+    peopleHint:
+      'Nguồn là "đơn vị thu thập", thứ bạn thực sự quan tâm là "người". Điền tên và tài khoản vào, chương ' +
+      'trình sẽ gán thông tin cho người ngay trên máy (khớp chuỗi thuần, không lên mạng, không dùng LLM), và ' +
+      'hiển thị mỗi lần khớp là bí danh nào khớp ở trường nào — phán đoán luôn có thể giải thích. Báo cáo ' +
+      'ngày và thông báo đẩy cũng sẽ tổng hợp theo người; đặt mức thông báo của một người thành urgent, tin ' +
+      'của họ sẽ được miễn giờ yên tĩnh.',
+    // 9. English left inside an otherwise Vietnamese sentence: the hint for zh "自定义来源" ends english-logic:allow
+    //    "... một trang cần trình duyệt render". "render" is a developer word; the sibling rows say
+    //    "kết xuất" (the proxy hint uses exactly that verb), so the hint follows them.
+    customSourcesHint:
+      'Với các trang mà nguồn tích hợp không bao phủ, bạn có thể tự thêm: một RSS, một MediaWiki API, một ' +
+      'UID bilibili, hoặc một trang cần trình duyệt kết xuất.',
+    // 10. Short labels whose only defect is the case rule from the glossary note: the substituted term
+    //     is lower case inside a sentence, but these keys render it as a standalone label, so they take
+    //     a capital. The machine rows are "nguồn", "lưu trữ", "giờ yên tĩnh", "thông tin gần nhất",
+    //     "nguồn ↗". (`sources` / `source` are in the batch above.) The machine rows also mean
+    //     "customSources" came back as "nguồn tùy chỉnh", i.e. head-final where Vietnamese puts the
+    //     head first.
+    sourcesTitle: 'Nguồn',
+    field_source: 'Nguồn',
+    eventsSources: 'Nguồn',
+    viewSource: 'Nguồn ↗',
+    chartsArchive: 'Lưu trữ',
+    shareScopeLatest: 'Thông tin gần nhất',
+    customSources: 'Nguồn tùy chỉnh',
+    // 11. A live-status chip, and a consistency decision of the same kind: zh "监测中" came back as english-logic:allow
+    //     "Trong Giám sát" -- a capitalised pinned term inside a phrase, plus a literal "inside" that
+    //     reads as a container. The chip says the target is being monitored, so it uses the wording
+    //     of `tab_watch` and `watchTitle`.
+    liveMonitored: 'Đang theo dõi',
+    // 12. Consistency rows rather than machine failures -- the machine agreed with the wording in
+    //     most cases, and what follows is the decision that one concept must have one Vietnamese value
+    //     in this file. `watchTitle` / `watchDigest` / `runWatchOnly` / `taskMode_watch` are the four
+    //     places the watch *target* appears; all four now say "đối tượng theo dõi" (the pinned term's
+    //     wording, lower case inside a phrase), and `watchDigest` also gained the "of" the machine left
+    //     out -- "Tóm tắt thay đổi theo dõi" reads as "summary of changes following", while its three
+    //     sibling rows do name the target.
+    watchTitle: 'Đối tượng theo dõi',
+    watchDigest: 'Tóm tắt thay đổi của đối tượng theo dõi',
+    runWatchOnly: 'Chỉ kiểm tra đối tượng theo dõi',
+    taskMode_watch: 'Chỉ kiểm tra đối tượng theo dõi',
+    // The same decision for the other repeated concepts: 来源 (sources) is "nguồn" everywhere, english-logic:allow
+    // 桌面通知 (desktop notification) is "Thông báo trên màn hình" as the machine translated both english-logic:allow
+    // rows, 静默时段 (quiet hours) is the glossary override's "giờ yên tĩnh" with a capital when it english-logic:allow
+    // stands alone as a title, and 通道 (channel) is "Kênh" as on every channel row of the english-logic:allow
+    // notification panel.
+    notify: 'Thông báo trên màn hình',
+    notifyQuiet: 'Giờ yên tĩnh',
+    quietTitle: 'Giờ yên tĩnh',
+    notifyKind: 'Kênh',
+    // 13. A panel title whose second half was capitalised after the slash ("Riêng tư / Ẩn danh"):
+    //     Vietnamese capitalises the first word of a sentence, not the second half of a title, and
+    //     "Quyền riêng tư" is the label a privacy panel carries.
+    privacyTitle: 'Quyền riêng tư / ẩn danh',
+    anonymousMode: 'Chế độ ẩn danh',
+    liveTitle: 'Giám sát phát trực tiếp và xem nhiều màn hình',
+    llmFeat_live: 'Giám sát phát trực tiếp và xem nhiều màn hình',
+    // The three keys whose zh source already embeds the numeral ("{n} 个" and "粉丝 {n}") keep a english-logic:allow
+    // value with `{n}` here, because that is what the source itself carries -- the guard's placeholder
+    // comparison is against the Chinese string, so a base value without it would be the mismatch
+    // instead. The machine's own count labels were "{n} cái" (the generic classifier with no noun at
+    // all) and "Người theo dõi {n}"; Vietnamese puts the numeral first and names what is counted.
+    cookieCount: '{n} cookie',
+    cookieCountWithSession: '{n} cookie (gồm SESSDATA)',
+    followersCount: '{n} người theo dõi',
   },
   'es-ES': {
     saveStateIdle: 'Sin cambios todavía',
@@ -1655,6 +1888,32 @@ export const HAND = {
     tab_reports: 'รายงาน',
     tab_live: 'ไลฟ์',
     tab_search: 'ค้นหา',
+    tab_llm: 'LLM',
+  },
+  'vi-VN': {
+    // Same reasoning again: Vietnamese is an independent language with its own chain
+    // (['vi-VN','en-US']), so this level stands alone and inherits nothing from another locale.
+    //
+    // These nine labels are the tab row, the first thing the Vietnamese UI shows, and they are the
+    // anchor the traversal check at the end of tools/traverse-ui.cjs asserts against: a locale that is
+    // registered in LOCALES but whose layers never landed still "works" -- it silently shows the
+    // English fallback -- and only reading the rendered page out reveals it. (The other two tabs,
+    // People and Calendar, are in LATE_KEYS above.)
+    //
+    // `tab_live` is the phrase Vietnamese actually says for a live stream (Phát trực tiếp), not a
+    // borrowed "Live"; the same phrase starts the hand-written liveHint above and appears in the
+    // traversal's hint assertion, so a regression to English cannot pass by matching a borrowed word.
+    // The nine labels carry a capital at the front, which is how a standalone Vietnamese label is
+    // written -- the count-label base values above are lower case for the opposite reason.
+    appSub: 'Trung tâm thông tin VTuber cục bộ',
+    tab_intel: 'Thông tin',
+    tab_run: 'Chạy',
+    tab_sources: 'Nguồn',
+    tab_watch: 'Theo dõi',
+    tab_settings: 'Cài đặt',
+    tab_reports: 'Báo cáo',
+    tab_live: 'Phát trực tiếp',
+    tab_search: 'Tìm kiếm',
     tab_llm: 'LLM',
   },
 };

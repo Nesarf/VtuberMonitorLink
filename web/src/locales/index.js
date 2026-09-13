@@ -71,6 +71,30 @@ export const LOCALES = [
   // number to a bare noun" of countLabel() cannot add one. See locales/plurals.js and
   // tools/i18n-plural-test.mjs.
   { code: 'th-TH', name: 'ไทย', chain: ['th-TH', 'en-US'], weekStart: 0 },
+  // Vietnamese: an independent language with its own chain, so this level stands on its own (same
+  // shape as ja-JP / ko-KR / id-ID / fil-PH / th-TH) and nothing here is inherited from another
+  // locale.
+  // The tag is `vi-VN`, never the bare `vi`: the region carries the formatting data this locale is
+  // judged on (`Intl.DateTimeFormat('vi-VN').resolvedOptions()` is calendar `gregory` /
+  // numberingSystem `latn` and `Intl.NumberFormat('vi-VN')` groups as `1.234.567,89`; a bare tag
+  // would lose the region for both).
+  // weekStart 1 (Monday) -- measured, not assumed: `new Intl.Locale('vi-VN').weekInfo.firstDay` is
+  // `1`. That API numbers days 1=Monday .. 7=Sunday, and this registry's field uses 0=Sunday /
+  // 1=Monday, so the measured 1 maps to weekStart 1 -- the same first day as zh-Hans / en-GB /
+  // ru-RU, and the one the Vietnamese calendar uses.
+  //
+  // Unlike Filipino and Thai it needs **no** plural table, and the reason is a measurement rather
+  // than an inference from the form count: `Intl.PluralRules('vi').resolvedOptions()
+  // .pluralCategories` is `["other"]` (one category), 0..2000 select `other` for all 2001 integers,
+  // and decimals select `other` too -- so nothing inflects, and the default "prepend the number" of
+  // countLabel() is already correct Vietnamese word order, because a Vietnamese count is a numeral
+  // directly in front of the unit word (`3 ngày`, `5 người`, `4 nhóm`, `5 lần`). The classifier
+  // question is what separates this from Thai and Filipino: `3 con mèo` (three cats) does need a
+  // classifier, but that class of individual-object noun is not what any count key here names --
+  // the unit those keys count IS the head noun (ngày / người / nhóm / lần / mục). See
+  // locales/plurals.js and tools/i18n-plural-test.mjs, which pins the measurement, the rendered
+  // labels and the absence of the table.
+  { code: 'vi-VN', name: 'Tiếng Việt', chain: ['vi-VN', 'en-US'], weekStart: 1 },
   { code: 'en-US', name: 'English (US)', chain: ['en-US', 'en'], weekStart: 0 },
   { code: 'en-GB', name: 'English (UK)', chain: ['en-GB', 'en-US'], weekStart: 1 },
   { code: 'en-AU', name: 'English (Australia)', chain: ['en-AU', 'en-GB', 'en-US'], weekStart: 1 },

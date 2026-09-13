@@ -297,6 +297,16 @@ A few rules taught by real incidents (details in `docs/BUGS.md` 41-52, 54, 64-66
   classifier inside the phrase, and the plural test pins the measurement so nobody can collapse it back into the
   bare-numeral tier. The general lesson: the decision is made by **measuring the rule and reading the language**,
   not by counting categories - a count can be right and still answer the wrong question.
+  Vietnamese (the 29th locale) is the second locale in the **bare-numeral** tier, and it had to earn it the same
+  way rather than by merely looking like Indonesian: `Intl.PluralRules('vi')` really does have one category
+  (`other` for all of 0..2000, decimals included), so nothing inflects - and the default "prepend the number" is
+  the idiomatic Vietnamese count (`12 mục`, `2 ngày`, `5 người`, `4 nhóm`), because the numeral stands directly in
+  front of the unit word. That is a measured difference from Thai and Filipino rather than a coincidence: the
+  classifier Vietnamese does require (`3 con mèo`, `2 quyển sách`) belongs to individual-object nouns, a class
+  none of the count keys names, while Thai's classifier and Tagalog's linker are words that are not the noun and
+  that a value without `{n}` cannot carry. `tools/i18n-plural-test.mjs` therefore pins the measurement *and* the
+  rendered labels, so this tier cannot be changed by analogy in either direction - adding a table, or dropping the
+  unit words out of the base values, fails the same assertion.
   These two key classes are looked up dynamically and never appear in literal calls, so the counting rules
   for coverage / proofread are unaffected (`usedKeys()` and `locale-coverage` also recognise `tn(...)`).
 - **A one-locale run must not edit other locales' machine layers**: `pruneMachine()` deletes entries the hand

@@ -24,6 +24,27 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
+      "label": "workers: conformance for one capability (narrow)",
+      "type": "shell",
+      "command": "node tools/workers.mjs --published-only --cap ${input:capability}",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: conformance for one worker (narrow)",
+      "type": "shell",
+      "command": "node tools/workers.mjs --published-only --no-build --only ${input:workerId} --cap ${input:capability}",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "workers: fuzz one capability (generated input, seeded)",
+      "type": "shell",
+      "command": "npm run workers:diff -- --cap ${input:capability} --n 60 --seed 7",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
       "label": "workers: re-record the reviewed snapshot",
       "type": "shell",
       "command": "npm run workers:update",
@@ -55,10 +76,41 @@
   ],
   "inputs": [
     {
+      "id": "capability",
+      "type": "pickString",
+      "description": "which capability",
+      "options": ["text.normalize", "text.extract", "text.fingerprint", "search.query", "fetch.plan", "llm.parse"],
+      "default": "text.extract"
+    },
+    {
+      "id": "workerId",
+      "type": "pickString",
+      "description": "which worker (the ids the registry uses, not the language)",
+      "options": [
+        "js-text",
+        "java-text",
+        "cpp-text",
+        "go-text",
+        "python-text",
+        "pwsh-text",
+        "r-text",
+        "bash-text",
+        "j-text",
+        "js-search",
+        "java-search",
+        "sql-search",
+        "js-fetch",
+        "go-fetch",
+        "js-llm",
+        "python-llm"
+      ],
+      "default": "go-text"
+    },
+    {
       "id": "workerLanguage",
       "type": "pickString",
       "description": "which implementation",
-      "options": ["js", "java", "cpp", "go", "python"],
+      "options": ["js", "java", "cpp", "go", "python", "pwsh", "r", "bash", "j"],
       "default": "js"
     },
     {

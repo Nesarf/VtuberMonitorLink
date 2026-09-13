@@ -238,6 +238,15 @@ function runWorker(w, capability, cases) {
       try {
         child.kill();
       } catch {}
+      // `child.kill()` sends a signal a console-subsystem process on Windows is free to ignore, and one
+      // did: a J interpreter probing its own version spun for four and a half hours and burned 12,600
+      // CPU-seconds after the run that started it had already finished. The signal is still sent first
+      // because it is the polite one everywhere, and the tree follows it down on Windows.
+      if (process.platform === 'win32' && child.pid) {
+        try {
+          spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        } catch {}
+      }
       resolve({ descriptor, answers, stderr: stderr.trim(), stderrTail: stderr.trim().split('\n').slice(-3).join(' | '), error: null });
     };
     const timer = setTimeout(() => {
@@ -287,6 +296,17 @@ function runWorker(w, capability, cases) {
     child.stdin.write(JSON.stringify({ id: 'describe', op: 'describe' }) + '\n');
     for (const c of cases) {
       child.stdin.write(JSON.stringify({ id: c.id, op: 'invoke', capability, input: c.input }) + '\n');
+    }
+    // A batch worker is one whose interpreter cannot read a live pipe: it sees everything at once and
+    // answers when stdin closes. Section 1.3 explains the language that forced this - J, where reading
+    // from a pipe means reading to end of input and the only non-blocking route is a foreign that the
+    // interpreter does not have. The flag lives in the registry entry rather than in the descriptor
+    // because the descriptor is itself an answer, and a worker in this mode cannot send one before stdin
+    // closes. Everything else about the run is unchanged: same cases, same comparison, same timeout.
+    if (w.batch) {
+      try {
+        child.stdin.end();
+      } catch {}
     }
   });
 }

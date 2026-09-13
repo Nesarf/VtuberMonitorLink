@@ -20,7 +20,7 @@
 // machine-local overlay and would report its own half-finished state as a divergence of the layer.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -238,6 +238,11 @@ function runWorker(worker, capability, cases) {
       settled = true;
       clearTimeout(timer);
       try { child.kill(); } catch { /* already gone */ }
+      // Same reason as the conformance runner: on Windows the polite signal can be ignored, and a
+      // worker that ignores it keeps burning a core after the run that started it is over.
+      if (process.platform === 'win32' && child.pid) {
+        try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
+      }
       resolve({ answers, stderr: stderr.trim(), descriptor });
     };
     let descriptor = null;

@@ -142,6 +142,35 @@ while still looking like it works, and the corpus then blames the wrong implemen
   cannot do X exactly" result rather than an approximation — and the rule for reporting one is the
   same as everywhere else here: write it down, in the README, with the evidence.
 
+### 1.3 When an interpreter cannot read a live pipe
+
+The protocol above assumes a worker can read one request, answer it, and read the next: that is what
+"flush every response before reading the next request" means. A language can fail that assumption without
+failing anything else, and the measurement belongs here because the symptom looks like a hung worker
+rather than like a property of the language.
+
+- J's `1!:1 ] 3` reads to end of input, and the same read *with a length* still blocks for the rest of the
+  pipe. The only non-blocking route is the DLL foreign `15!:0` (`PeekNamedPipe`), and in j9.6 it does not
+  exist: `4!:0 <'15!:0'` is empty. So a J worker answers only after stdin closes, and a harness that keeps
+  stdin open waits forever.
+
+A registry entry may therefore carry `"batch": true`, and the harness writes every case and then closes
+stdin. Nothing else changes: the same cases, the same comparison, the same thirty-second budget and the
+same verdict - a batch worker is one implementation among several, and wrong answers are still wrong. The
+flag is a registry property rather than something the worker declares, because the descriptor is itself an
+answer and a worker in this mode cannot send one before stdin closes.
+
+Two related traps, both measured here rather than imagined:
+
+- **A probe of the interpreter is not exempt from this.** Asking J for its version with
+  `jconsole -js "echo 9!:14''"` runs the sentence and then *waits for more input*: one such probe spun for
+  four and a half hours and burned 12,600 CPU-seconds before anybody looked at the process list. Close
+  stdin on every interpreter probe, and give it a timeout.
+- **A kill is not a guarantee on Windows.** `child.kill()` sends a signal a console-subsystem process is
+  free to ignore, which is how that process outlived the run that started it. The harness now sends the
+  polite signal and then takes the tree down with `taskkill /T /F`, in both the conformance runner and the
+  fuzzer.
+
 ## 2. Capability: `text.normalize`
 
 The normalizer is the base of the text pipeline (fetch -> extract -> normalize -> fingerprint), and
@@ -437,6 +466,18 @@ Deliberately not here yet:
   a worker that answers them exactly is not wrong, the difference is simply not compared. Neither case is
   reachable by generated input, and both were found by a second implementation disagreeing with the first
   - which is the argument for having one.
+- **The J worker is a documented experiment, not an implementation.** It cannot read a live pipe at all
+  (section 1.3), its request reader currently answers `unsupported: unknown op null` to every request, and
+  two of its twenty-one self-checks pass. It stays machine-local, so it can never make the published set
+  look broken, and it is not one of the implementations this layer counts on - the batch mode in section
+  1.3 is the durable result of having tried, and it is worth more than the worker.
+- **Text written without word spaces is one token.** Measured on Thai: a whole sentence normalizes to one
+  token and one shingle, so a two-word query matches nothing unless the query is the entire sentence, and
+  the shingle-based near-duplicate detection cannot fire - two versions of the same announcement differing
+  by one word share no shingles at all (simhash Hamming distance 11 of 64). Han and kana are handled
+  differently on purpose, by the bigram run rule in section 4; a script that rule does not mention is left
+  alone, which is right for the normalizer and wrong for search. Word segmentation for such a script
+  belongs in this layer and is not there.
 - **Known open items** in the contract's own rules. Malformed-request error *text* differs per language by
   design, which is why only the code is compared. The
   **removed-element pre-scan ends an opening tag at the first `>`**, so a quoted attribute containing

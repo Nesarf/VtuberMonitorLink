@@ -169,6 +169,11 @@ my $GROUND = {};
 
 my $DELETE = {};
 
+# Declared here, assigned in `build_direct_table`, and read by `normalize` further down: under
+# `use strict` a lexical has to be declared before the call that assigns it, which is the mistake
+# this line corrects.
+my $STEP12_CANDIDATE;
+
 sub build_direct_table {
     my %direct;
 
@@ -201,7 +206,14 @@ sub build_direct_table {
     # Every ground character this function knows about, for the "anything in the table" test. It is
     # built here rather than written out a second time so that a character added to the rules above
     # cannot be missing from the test that decides whether to run the rules at all.
-    $GROUND = join('', map { chr($_) } sort { $a <=> $b } keys %direct);
+    my @ground = sort { $a <=> $b } keys %direct;
+    $GROUND = join('', map { chr($_) } @ground);
+
+    # The per-string candidate test, derived from those same keys: every code point the two steps can
+    # touch, and nothing that they cannot. Deriving it is what keeps the fast path honest - as a
+    # hand-written class it silently omitted the combining marks (see the note where it is declared).
+    $STEP12_CANDIDATE = qr/[@{[ join('', map { sprintf('\\x{%X}', $_) } @ground) ]}]/;
+
     return \%direct;
 }
 
@@ -209,8 +221,14 @@ my $DIRECT = build_direct_table();
 
 # Does this string contain anything steps 1 and 2 would touch? If not, the two steps are a no-op
 # and the per-character pass is skipped entirely -- the common case, and 60 KB of CJK is not
-# indented to pay 60,000 hash lookups for a result that is identical to its input.
-my $STEP12_CANDIDATE = qr/[\x00-\x{20}\x{7F}\x{A0}\x{2000}-\x{2064}\x{3000}\x{FF01}-\x{FF5E}]/;
+# intended to pay 60,000 hash lookups for a result identical to its input.
+#
+# The test is built from the table itself, in `build_direct_table`, and `$STEP12_CANDIDATE` is only
+# declared up there. It used to be a hand-kept character class at this spot, and that class forgot the
+# combining marks: a string whose only interesting characters were accents skipped steps 1 and 2
+# completely, so `Cafe` + U+0301 came back as `café` while the reference deleted the mark. A test that
+# decides whether the rules run has to be derived from the rules, or it becomes a second, quieter copy
+# of them.
 
 # --------------------------------------------------------------------------------------------
 # Capability text.normalize (section 2)
@@ -1227,9 +1245,14 @@ my @SELFCHECK_CASES = (
     [ 'normalize: CJK, kana and Hangul pass through untouched',
       'text.normalize', { text => "\x{5DF2}\x{7ECF}\x{4E16}\x{754C} \x{3053}\x{3093} \x{D55C}\x{AD6D}" },
       { text => "\x{5DF2}\x{7ECF}\x{4E16}\x{754C} \x{3053}\x{3093} \x{D55C}\x{AD6D}" } ],
+    # The expectation here was wrong for a while and the worker was right: zero-width characters,
+    # bidi controls, the BOM, C0 controls and DEL are *deleted* (they do not become spaces), so the
+    # letters close up around them and only the tab survives as a separator. Checked against the
+    # reference implementation, which answers "abcde fg" for this input, and against the corpus case
+    # `zero-width-and-bom`, whose name says the same thing.
     [ 'normalize: zero-width, bidi control, BOM and C0 controls deleted; tab stays a separator',
       'text.normalize', { text => "a\x{200B}b\x{200F}\x{2060}c\x{FEFF}d\x{1}e\tf\x{7F}g" },
-      { text => 'ab cd e f g' } ],
+      { text => 'abcde fg' } ],
     [ 'normalize: U+3000, U+2028 and U+00A0 are spaces and collapse',
       'text.normalize', { text => "a\x{3000}\x{3000}b\x{2028}c\x{A0}d" }, { text => 'a b c d' } ],
     [ 'normalize: collapse is one space, trim removes both ends',

@@ -20,15 +20,15 @@ Measured, not asserted:
 | `node tools/workers.mjs --no-build --only perl-text --cap text.normalize` | **22/22** against the reviewed snapshot |
 | the same for `text.extract` | **31/31** |
 | the same for `text.fingerprint` | **16/16** |
-| `perl workers/perl/vmltext.pl --selfcheck` | **43/53**, and the same 43/53 in three consecutive runs |
+| `perl workers/perl/vmltext.pl --selfcheck` | **46/53**, and the same 46/53 in three consecutive runs |
 
 The last row matters as much as the first three: the self-check used to fail a *different* number
 of cases on every run, because it asked `keys %$hash` for a field order. A worker whose own test
 cannot agree with itself is a worker whose next reader learns nothing from a red run.
 
 What is still wrong is listed at the bottom rather than hidden, and it is all in the self-check's
-stricter cases rather than in the corpus: combining marks, the fingerprint token/shingle cases, a
-non-string `input.text`, and the JSON layer's astral round trip.
+stricter cases rather than in the corpus: the fingerprint hash, a non-string `input.text`, and the
+JSON layer's astral round trip.
 
 ## What this worker cost, in Perl
 
@@ -50,6 +50,14 @@ Each of these produced a plausible wrong answer first:
   stopped at the first `&` it could not decode (silent truncation), and the uninitialized-value
   warnings from that path filled 800,000 stderr lines and turned a 0.1-second self-check into 11
   seconds. Failure is an empty list now.
+- **A hand-written fast path drifts away from the rules it guards.** `normalize` skips its first two
+  steps when the input cannot contain anything they would touch, and that test was a character class
+  written out by hand next to the table - with the combining marks missing from it. A string whose only
+  interesting characters were accents therefore skipped the steps entirely, and `Cafe` + U+0301 came
+  back as `café` while the reference deleted the mark. The class is now built from the same table the
+  steps use, so the two cannot disagree. The self-check's own expectation for the zero-width case was
+  wrong in the same area (it expected the deleted characters to become spaces) and was corrected
+  against the reference implementation, which answers `abcde fg`.
 - **The self-check's summary line lied**: it printed `$n/$n checks passed` when there were failures.
   It prints `passed/total` and exits non-zero.
 - **In `handle`, one worker implements one capability** (a request for another one is `unsupported`),
@@ -58,10 +66,10 @@ Each of these produced a plausible wrong answer first:
 
 ## Limits and known failures
 
-- The self-check's 10 remaining failures: combining marks are not deleted (2 cases), zero-width and
-  C0/DEL handling in `text.normalize` (1), the `text.fingerprint` token/shingle cases (2), a
-  non-string `input.text` answering a result instead of `bad-input` (1, which also trips the two error
-  envelope order cases), and the JSON encoder's astral round trip (2).
+- The self-check's 7 remaining failures: the `text.fingerprint` hash (2 cases - the token and shingle
+  counts already match, so the difference is in the FNV/SimHash arithmetic), a non-string `input.text`
+  answering a result instead of `bad-input` (1, which also trips the two error envelope order cases),
+  and the JSON encoder's astral round trip (2).
 - The worker is registered in `workers/registry.local.json` (machine-local), not in the published
   registry: the interpreter is not guaranteed on every runner yet, and the entry moves when the
   self-check above is green.

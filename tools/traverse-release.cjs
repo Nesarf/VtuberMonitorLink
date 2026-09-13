@@ -238,7 +238,7 @@ async function main() {
     const ck = await api('POST', '/api/cookies/check', { domains: ['bilibili.com'] });
     check('POST /api/cookies/check answers with a contract', ck.status === 200 && typeof ck.json.ok === 'boolean' && Array.isArray(ck.json.names), ck.json.ok ? ck.json.cookieCount + ' cookies, SESSDATA=' + ck.json.hasSession : String(ck.json.error).slice(0, 60));
     check('the cookie endpoint never returns values', !JSON.stringify(ck.json).includes('SESSDATA='), 'names only');
-    const ckBad = await api('POST', '/api/cookies/check', { profileDir: 'C:\\No\\Such\\Profile', domains: ['bilibili.com'] });
+    const ckBad = await api('POST', '/api/cookies/check', { profileDir: 'C:\\No\\Such\\Profile', domains: ['bilibili.com'] }); // sanitize-allow: a synthetic path that must not exist
     check('a bogus profileDir fails cleanly', ckBad.status === 200 && ckBad.json.ok === false && !!ckBad.json.error, String(ckBad.json.error).slice(0, 60));
 
     // ---------------------------------------------------------- 5. llm + intel

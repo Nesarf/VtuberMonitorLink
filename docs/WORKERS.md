@@ -312,7 +312,12 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   Java, Go, R, J, an APL interpreter and three shells.
 - `--published-only` ignores `workers/registry.local.json`, so it answers the question a fresh clone
   asks: *what do the published implementations do?* A worker under development is machine-local by
-  construction and must not make the published set look broken.
+  construction and must not make the published set look broken. That overlay is also named in
+  `tools/make-release.mjs`'s exclusion list, and so are the build intermediates (`obj`, `bin`,
+  `__pycache__`): `.gitignore` keeps a file out of git, which is *not* the same as keeping it out of the
+  release copy, because that copy walks the filesystem and excludes by name. A machine path inside a
+  `.json` file is escaped, which is why both leak guards needed a second rule for it - see
+  `docs/BUGS.md` #78.
 - `--build-only` compiles everything that is missing and stops; `--cap` and `--only` narrow a run;
   `--update` re-records the snapshot from the reference.
 - The primary verdict is the **cross-implementation diff**, not "matches the reference": the tool

@@ -63,6 +63,16 @@ const NEVER_COPY = new Set([
   '.vite',
   '.cache',
   '.cache',
+  // The machine-local worker overlay holds this computer's interpreter paths (an R, J or shell binary
+  // that not every machine has). `.gitignore` keeps it out of git, which does *not* keep it out of this
+  // copy: the copy walks the filesystem, so a gitignored file ships unless it is named here. Found by
+  // probing the copy with the project's own scanner and getting "clean" for a directory containing it.
+  'registry.local.json',
+  // Build intermediates of the worker layer: Java's classes, C#'s obj/ and bin/ hold absolute SDK paths
+  // in their generated project files, and none of it belongs in a source release.
+  'obj',
+  'bin',
+  '__pycache__',
 ]);
 // The "example paths" allowed to appear (the kind the docs tell others to fill in); the scan lets them through
 const EXAMPLE_PATH_HINTS = [/E:\\\\YourCache/, /E:\\YourCache/];

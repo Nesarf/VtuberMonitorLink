@@ -223,7 +223,7 @@ t('every domain in the AGENCY_HOSTS list is recognized (guards against a typo in
 });
 
 t('reading rotation state: a missing file yields an empty state instead of throwing', () => {
-  const st = loadObservationState({ paths: { logsDir: 'E:\\No\\Such\\Dir\\vml-test' } });
+  const st = loadObservationState({ paths: { logsDir: 'E:\\No\\Such\\Dir\\vml-test' } }); // sanitize-allow: a synthetic path that must not exist
   assert.deepEqual(st, { rounds: 0, lastPicked: {} });
 });
 

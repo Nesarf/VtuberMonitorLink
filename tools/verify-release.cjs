@@ -63,6 +63,17 @@ const PERSONAL_PATTERNS = [
     /[A-Z]:\\(?!(Windows|Program Files|ProgramData|Users|temp|Temp|System32)\b)(?!(?:n|t|r|b|f|v|0|u|x)(?![A-Za-z0-9_.-]{2,}))[^\\"'\s]{2,}/i,
     'hard-coded absolute drive path',
   ],
+  // The same path inside a JSON or source file, where escaping doubles every backslash. For example,
+  // A path such as <drive>:\\cache\\tool.exe is how one exists in a .json file, and the rule above needs
+  // a single backslash followed by a non-backslash, so it walked past it - and past the pre-publish
+  // check too.
+  // The machine-local worker overlay proved it: a directory containing nothing but that overlay scanned
+  // as "clean". Same exemptions as above, plus the placeholder path the docs tell people to fill in,
+  // which reaches the locale files only in its escaped form.
+  [
+    /(?:^|[^A-Za-z\\])[A-Za-z]:\\\\(?!(Windows|Program Files|ProgramData|Users|temp|Temp|System32|YourCache)\b)(?!(?:n|t|r|b|f|v|0|u|x)(?![A-Za-z0-9_.-]{2,}))[^\\"'\s]{2,}/,
+    'hard-coded absolute drive path with escaped backslashes',
+  ],
 ];
 
 /**

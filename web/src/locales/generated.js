@@ -1,11 +1,18 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-13T08:46:44.501Z
+// 生成时间：2026-09-13T12:03:08.679Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
     "appSub": "本地 VTuber 情報監測",
+    "aboutTitle": "關於",
+    "aboutHint": "在界面裏直接讀這份說明（右上角打開，可即時切換中英文，不用另開頁面）",
+    "readmeLang": "這份文檔的語言",
+    "readmeLangZh": "中文",
+    "readmeLangEn": "English",
+    "readmeFail": "讀不到說明文件",
+    "readmeNote": "同一份文檔也在程序目錄裏",
     "tab_intel": "情報",
     "tab_run": "運行",
     "tab_sources": "來源",
@@ -685,6 +692,13 @@ export const GENERATED = {
   "zh-HK": {
     "appTitle": "Vtuber's Monitor Link",
     "appSub": "本地 VTuber 情報監測",
+    "aboutTitle": "關於",
+    "aboutHint": "在界面裏直接讀這份説明（右上角打開，可即時切換中英文，不用另開頁面）",
+    "readmeLang": "這份文檔的語言",
+    "readmeLangZh": "中文",
+    "readmeLangEn": "English",
+    "readmeFail": "讀不到説明文件",
+    "readmeNote": "同一份文檔也在程序目錄裏",
     "tab_intel": "情報",
     "tab_run": "運行",
     "tab_sources": "來源",
@@ -1364,6 +1378,13 @@ export const GENERATED = {
   "zh-TW": {
     "appTitle": "Vtuber's Monitor Link",
     "appSub": "本地 VTuber 情報監測",
+    "aboutTitle": "關於",
+    "aboutHint": "在介面裡直接讀這份說明（右上角開啟，可即時切換中英文，不用另開頁面）",
+    "readmeLang": "這份文件的語言",
+    "readmeLangZh": "中文",
+    "readmeLangEn": "English",
+    "readmeFail": "讀不到說明檔案",
+    "readmeNote": "同一份文件也在程式目錄裡",
     "tab_intel": "情報",
     "tab_run": "執行",
     "tab_sources": "來源",

@@ -587,7 +587,12 @@
     "loginRequiredTag": " · ログインが必要",
     "ignorePatternsPh": "1行に1つの正規表現、一致した行は無視されます",
     "viewSource": "ソース ↗",
-    "cookieCountWithSession": "{n} 個（SESSDATA を含む）"
+    "cookieCountWithSession": "{n} 個（SESSDATA を含む）",
+    "aboutTitle": "について",
+    "readmeLang": "このドキュメントの言語",
+    "readmeFail": "説明ファイルを読み込めません",
+    "readmeNote": "同じドキュメントはプログラムディレクトリにもあります",
+    "aboutHint": "この説明をインターフェース上で直接読む（右上から開き、中国語と英語を即時に切り替え可能。別ページを開く必要なし）"
   },
   "ko-KR": {
     "calRemindWindow": "알림 창 안",
@@ -1177,7 +1182,12 @@
     "egressTrial": "체험 중",
     "customNamePh": "모모의 블로그",
     "selfCheckHint": "자체 점검은 **매 실행의 마지막**에 수행됩니다: 먼저 수집을 끝내고, 먼저 보고서를 낸 뒤, 마지막에 이상이 발생한 소스만 진단합니다(연결되면 전혀 방해하지 않음). 위 행에서 언제든 수동으로 「자체 점검」을 클릭할 수도 있습니다.",
-    "cookieCountWithSession": "{n}개 (SESSDATA 포함)"
+    "cookieCountWithSession": "{n}개 (SESSDATA 포함)",
+    "aboutTitle": "정보",
+    "readmeLang": "이 문서의 언어",
+    "readmeFail": "설명 파일을 읽을 수 없음",
+    "readmeNote": "같은 문서가 프로그램 디렉터리에도 있습니다",
+    "aboutHint": "인터페이스에서 바로 이 설명을 읽으세요 (오른쪽 위에서 열기, 중국어/영어 즉시 전환 가능, 별도 페이지 필요 없음)"
   },
   "es-ES": {
     "calTotal": "Total",
@@ -1767,7 +1777,12 @@
     "egressTrial": "En prueba",
     "customNamePh": "El blog de Fulano",
     "selfCheckHint": "La autocomprobación se ejecuta **al final de cada ejecución**: primero se completa el rastreo y se genera el informe, y al final solo se diagnostican los Fuentes que presentaron anomalías (si hay conexión, no molesta en absoluto). También puedes pulsar manualmente «Autocomprobación» en la fila de arriba en cualquier momento.",
-    "cookieCountWithSession": "{n} (incluye SESSDATA)"
+    "cookieCountWithSession": "{n} (incluye SESSDATA)",
+    "aboutTitle": "Acerca de",
+    "readmeLang": "Idioma de este documento",
+    "readmeFail": "No se puede leer el archivo Léame",
+    "readmeNote": "El mismo documento también está en el directorio del programa",
+    "aboutHint": "Lee este Léame directamente en la interfaz (ábrelo en la esquina superior derecha; puedes cambiar entre chino e inglés al instante, sin abrir otra página)"
   },
   "es-419": {
     "calDetectTitle": "Buscar pistas en Información",
@@ -2357,7 +2372,12 @@
     "loginRequiredTag": " · Se requiere iniciar sesión",
     "ignorePatternsPh": "Una expresión regular por línea; las líneas coincidentes se ignorarán",
     "viewSource": "Fuentes ↗",
-    "cookieCountWithSession": "{n} (incluye SESSDATA)"
+    "cookieCountWithSession": "{n} (incluye SESSDATA)",
+    "aboutTitle": "Acerca de",
+    "readmeLang": "Idioma de este documento",
+    "readmeFail": "No se puede leer el archivo de instrucciones",
+    "readmeNote": "El mismo documento también está en el directorio del programa",
+    "aboutHint": "Lee estas instrucciones directamente en la interfaz (ábrelas en la esquina superior derecha; puedes cambiar entre chino e inglés al instante, sin abrir otra página)"
   },
   "pt-PT": {
     "tab_intel": "Informação",
@@ -2958,7 +2978,12 @@
     "loginRequiredTag": " · Início de sessão necessário",
     "ignorePatternsPh": "Uma expressão regular por linha; as linhas correspondentes serão ignoradas",
     "viewSource": "Fontes ↗",
-    "cookieCountWithSession": "{n} (inclui SESSDATA)"
+    "cookieCountWithSession": "{n} (inclui SESSDATA)",
+    "aboutTitle": "Sobre",
+    "readmeLang": "Idioma deste documento",
+    "readmeFail": "Não foi possível ler o ficheiro de instruções",
+    "readmeNote": "O mesmo documento também está no diretório do programa",
+    "aboutHint": "Leia estas instruções diretamente na interface (abra no canto superior direito, pode alternar entre chinês e inglês instantaneamente, sem abrir outra página)"
   },
   "pt-BR": {
     "tab_intel": "Informação",
@@ -3555,7 +3580,12 @@
     "egressTrial": "Em teste",
     "customNamePh": "Blog do Fulano",
     "selfCheckHint": "A autoverificação é executada **no final de cada execução**: primeiro coleta tudo, gera o relatório e, por último, diagnostica apenas os Fontes que apresentaram anomalias (se estiverem acessíveis, não incomoda em nada). Você também pode clicar manualmente em \"Autoverificação\" na linha acima a qualquer momento.",
-    "cookieCountWithSession": "{n} (incluindo SESSDATA)"
+    "cookieCountWithSession": "{n} (incluindo SESSDATA)",
+    "aboutTitle": "Sobre",
+    "readmeLang": "Idioma deste documento",
+    "readmeFail": "Não foi possível ler o arquivo de instruções",
+    "readmeNote": "O mesmo documento também está no diretório do programa",
+    "aboutHint": "Leia estas instruções diretamente na interface (abra no canto superior direito, alterne entre chinês e inglês instantaneamente, sem abrir outra página)"
   },
   "fr-FR": {
     "calAdded": "Ajouté au calendrier",
@@ -4146,7 +4176,12 @@
     "loginRequiredTag": " · Connexion requise",
     "ignorePatternsPh": "Une expression régulière par ligne ; les lignes correspondantes seront ignorées",
     "viewSource": "Sources ↗",
-    "cookieCountWithSession": "{n} éléments (SESSDATA inclus)"
+    "cookieCountWithSession": "{n} éléments (SESSDATA inclus)",
+    "aboutTitle": "À propos",
+    "readmeLang": "Langue de ce document",
+    "readmeFail": "Impossible de lire le fichier d'aide",
+    "readmeNote": "Le même document se trouve aussi dans le dossier du programme",
+    "aboutHint": "Lire cette aide directement dans l'interface (ouvrir en haut à droite, basculer instantanément entre le chinois et l'anglais, sans ouvrir une autre page)"
   },
   "de-DE": {
     "calTotal": "Insgesamt",
@@ -4737,7 +4772,12 @@
     "loginRequiredTag": " · Anmeldung erforderlich",
     "ignorePatternsPh": "Ein regulärer Ausdruck pro Zeile; übereinstimmende Zeilen werden ignoriert",
     "viewSource": "Quellen ↗",
-    "cookieCountWithSession": "{n} Stück (inkl. SESSDATA)"
+    "cookieCountWithSession": "{n} Stück (inkl. SESSDATA)",
+    "aboutTitle": "Über",
+    "readmeLang": "Sprache dieses Dokuments",
+    "readmeFail": "Infodatei kann nicht gelesen werden",
+    "readmeNote": "Dieselbe Datei befindet sich auch im Programmverzeichnis",
+    "aboutHint": "Diese Anleitung direkt in der Oberfläche lesen (oben rechts öffnen, Sprache sofort umschaltbar, ohne separate Seite)"
   },
   "it-IT": {
     "calTotal": "Totale",
@@ -5328,7 +5368,12 @@
     "egressTrial": "In prova",
     "customNamePh": "Il blog di Tizio",
     "selfCheckHint": "L'autodiagnosi viene eseguita **alla fine di ogni esecuzione**: prima raccoglie tutto, prima produce il report, e infine diagnostica solo i Fonti che presentano anomalie (se la connessione funziona, non disturba affatto). Puoi anche avviare manualmente l'«Autodiagnosi» dalla riga qui sopra in qualsiasi momento.",
-    "cookieCountWithSession": "{n} (SESSDATA incluso)"
+    "cookieCountWithSession": "{n} (SESSDATA incluso)",
+    "aboutTitle": "Informazioni",
+    "readmeLang": "Lingua di questo documento",
+    "readmeFail": "Impossibile leggere il file della guida",
+    "readmeNote": "Lo stesso documento è anche nella cartella del programma",
+    "aboutHint": "Leggi questa guida direttamente nell'interfaccia (apri in alto a destra, puoi passare subito tra cinese e inglese, senza aprire un'altra pagina)"
   },
   "ru-RU": {
     "calTotal": "Всего",
@@ -5919,7 +5964,12 @@
     "loginRequiredTag": " · Требуется вход",
     "ignorePatternsPh": "Одна регулярка на строку; совпавшие строки игнорируются",
     "viewSource": "Источники ↗",
-    "cookieCountWithSession": "{n} шт. (включая SESSDATA)"
+    "cookieCountWithSession": "{n} шт. (включая SESSDATA)",
+    "aboutTitle": "О программе",
+    "readmeLang": "Язык этого документа",
+    "readmeFail": "Не удалось прочитать файл справки",
+    "readmeNote": "Тот же документ также находится в папке программы",
+    "aboutHint": "Читайте эту справку прямо в интерфейсе (откройте в правом верхнем углу, можно мгновенно переключать китайский и английский, не открывая отдельную страницу)"
   },
   "uk-UA": {
     "appSub": "Локальні VTuber ЗведенняМоніторинг",
@@ -6512,7 +6562,12 @@
     "loginRequiredTag": " · Потрібен вхід",
     "ignorePatternsPh": "Один регулярний вираз на рядок; рядки, що збігаються, ігноруються",
     "viewSource": "Джерела ↗",
-    "cookieCountWithSession": "{n} шт. (включно з SESSDATA)"
+    "cookieCountWithSession": "{n} шт. (включно з SESSDATA)",
+    "aboutTitle": "Про",
+    "readmeLang": "Мова цього документа",
+    "readmeFail": "Не вдалося прочитати файл довідки",
+    "readmeNote": "Цей самий документ також є в каталозі програми",
+    "aboutHint": "Читайте цю довідку прямо в інтерфейсі (відкривається у верхньому правому куті, можна миттєво перемикати китайську та англійську без відкриття окремої сторінки)"
   },
   "pl-PL": {
     "calLeap": "Dzień przestępny przesunięty na 3/1",
@@ -7105,7 +7160,12 @@
     "loginRequiredTag": " · Wymagane logowanie",
     "ignorePatternsPh": "Jeden regex na linię; pasujące linie są ignorowane",
     "viewSource": "Źródła ↗",
-    "cookieCountWithSession": "{n} elementów (w tym SESSDATA)"
+    "cookieCountWithSession": "{n} elementów (w tym SESSDATA)",
+    "aboutTitle": "O programie",
+    "readmeLang": "Język tego dokumentu",
+    "readmeFail": "Nie można odczytać pliku pomocy",
+    "readmeNote": "Ten sam dokument znajduje się również w katalogu programu",
+    "aboutHint": "Przeczytaj tę pomoc bezpośrednio w interfejsie (otwórz w prawym górnym rogu, możesz natychmiast przełączać język chiński i angielski, bez otwierania osobnej strony)"
   },
   "sr-RS": {
     "tab_search": "Претрага",
@@ -7701,7 +7761,12 @@
     "egressSettled": "Одлучено",
     "egressTrial": "У пробном периоду",
     "selfCheckHint": "Само-провера се извршава **на крају сваког покретања**: прво се све преузме, прво се прикаже извештај, а на крају се дијагностикују само Извори који су пријавили грешку (ако су повезани, не ометају се уопште). Такође можете ручно кликнути на „Само-провера“ у горњем реду у било ком тренутку.",
-    "cookieCountWithSession": "{n} (укључујући SESSDATA)"
+    "cookieCountWithSession": "{n} (укључујући SESSDATA)",
+    "aboutTitle": "О",
+    "readmeLang": "Језик овог документа",
+    "readmeFail": "Није могуће прочитати датотеку упутства",
+    "readmeNote": "Исти документ се налази и у директоријуму програма",
+    "aboutHint": "Прочитајте ово упутство директно у интерфејсу (отворите у горњем десном углу, можете одмах да пребацујете између кинеског и енглеског, без потребе да отварате другу страницу)"
   },
   "ar-SA": {
     "calTotal": "إجمالي",
@@ -8291,6 +8356,11 @@
     "loginRequiredTag": " · تسجيل الدخول مطلوب",
     "ignorePatternsPh": "تعبير نمطي واحد في كل سطر، سيتم تجاهل الأسطر المطابقة",
     "viewSource": "المصادر ↗",
-    "cookieCountWithSession": "{n} عناصر (بما في ذلك SESSDATA)"
+    "cookieCountWithSession": "{n} عناصر (بما في ذلك SESSDATA)",
+    "aboutTitle": "حول",
+    "readmeLang": "لغة هذا المستند",
+    "readmeFail": "تعذّر قراءة ملف التعليمات",
+    "readmeNote": "توجد نسخة من المستند نفسه في مجلد البرنامج",
+    "aboutHint": "اقرأ هذه التعليمات مباشرة داخل الواجهة (افتحها من الزاوية العلوية اليمنى، ويمكنك التبديل الفوري بين الصينية والإنجليزية دون فتح صفحة أخرى)"
   }
 }

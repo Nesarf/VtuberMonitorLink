@@ -15,6 +15,7 @@ import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 import Calendar from './pages/Calendar.jsx';
 import People from './pages/People.jsx';
+import About from './About.jsx';
 
 const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
 
@@ -23,6 +24,7 @@ export default function App() {
   const [tab, setTab] = useState('run');
   const [alerts, setAlerts] = useState(0);
   const [layout, setLayout] = useState(null);
+  const [about, setAbout] = useState(false);
   const prevRun = useRef(null);
 
   useEffect(() => {
@@ -113,6 +115,10 @@ export default function App() {
             ⚠ {tn('alerts', alerts)}
           </span>
         )}
+        {/* The README, without leaving the page: opens over the current view and switches language in place */}
+        <button className="ghost" onClick={() => setAbout(true)} title={t('aboutHint')} data-testid="about-open">
+          {t('aboutTitle')}
+        </button>
         {/* 26 locales cannot be switched with a two-state "zh/en" button any more: it is a dropdown now, and each language name is written in its own script */}
         <select
           className="ghost lang"
@@ -148,6 +154,7 @@ export default function App() {
         {tab === 'calendar' && <Calendar />}
         {tab === 'people' && <People />}
       </main>
+      <About open={about} onClose={() => setAbout(false)} />
     </>
   );
 }

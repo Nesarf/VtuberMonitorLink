@@ -217,6 +217,10 @@ function main() {
     [path.join('app', 'server', 'package.json'), 'server manifest'],
     [path.join('app', 'web', 'dist', 'index.html'), 'built web UI'],
     [path.join('app', 'server', 'node_modules'), 'production dependencies'],
+    // The About panel reads these at runtime; without them the in-app language toggle has nothing
+    // to switch to, and the failure would only show up when a user opens the panel.
+    [path.join('app', 'README.md'), 'README for the About panel (English)'],
+    [path.join('app', 'README.zh-CN.md'), 'README for the About panel (Chinese)'],
   ];
   process.stdout.write('1. required files\n');
   for (const [rel, why] of required) {

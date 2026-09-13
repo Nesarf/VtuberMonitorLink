@@ -366,7 +366,10 @@ function main() {
   // Deliberately NOT copying the repo's package.json / package-lock.json:
   // it declares npm workspaces, which would make `npm install` hoist every
   // dependency (including the web toolchain) into app/node_modules.
-  for (const f of ['README.md', 'LICENSE']) {
+  // The About panel serves these files at runtime, so **both** READMEs have to be in the package:
+  // README.md (English) and README.zh-CN.md (Chinese) — otherwise the in-app language toggle has
+  // nothing to switch to.
+  for (const f of ['README.md', 'README.zh-CN.md', 'LICENSE']) {
     if (fs.existsSync(path.join(ROOT, f))) copyFile(path.join(ROOT, f), path.join(appDir, f));
   }
   if (fs.existsSync(path.join(ROOT, 'config.example.json'))) {

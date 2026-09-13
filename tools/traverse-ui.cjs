@@ -1145,6 +1145,44 @@ async function main() {
     check('the button is disabled while not ready (rather than doing nothing when clicked)', (await vBtn.first().isDisabled()) === true, 'disabled');
 
     // ------------------------------------------- office export & features & tor
+    // ------------------------------------------------- 9h. About panel (in-app README)
+    // The requirement this covers: the README must be readable **inside** the interface, with an
+    // instant language switch, and reading it must not navigate you away from the page you were on.
+    process.stdout.write('\n9h. About panel: README inside the app, language switched in place\n');
+    const tabBefore = await page.locator('nav.tabs button.active').innerText();
+    await page.locator('[data-testid="about-open"]').click();
+    await page.waitForSelector('.about-modal', { timeout: 5000 });
+    check('the About button opens the panel without leaving the page', await page.locator('.about-modal').isVisible(), 'panel visible');
+    const aboutBody = async () => (await page.locator('.modal-body').innerText()).trim();
+    const aboutShown = await aboutBody();
+    check('the panel renders the document (a heading, not escaped markup)', aboutShown.includes("Vtuber's Monitor Link") && !aboutShown.includes('## '), aboutShown.slice(0, 60).replace(/\n/g, ' '));
+    check('the document has real structure inside the panel (headings/tables)', (await page.locator('.readme-doc h2').count()) > 3, (await page.locator('.readme-doc h2').count()) + ' headings');
+    const zhSeg = page.locator('.seg button', { hasText: '中文' });
+    const enSeg = page.locator('.seg button', { hasText: 'English' });
+    check('both language choices are offered', (await zhSeg.count()) === 1 && (await enSeg.count()) === 1);
+    // switch to the other language and require the text to actually change
+    const wasZh = (await page.locator('.seg button.active').innerText()).includes('中文');
+    await (wasZh ? enSeg : zhSeg).click();
+    await page.waitForFunction(
+      (prev) => {
+        const el = document.querySelector('.modal-body');
+        return el && el.innerText.trim() !== prev && el.innerText.trim().length > 200;
+      },
+      aboutShown,
+      { timeout: 8000 }
+    );
+    const aboutAfter = await aboutBody();
+    check(
+      'switching language swaps the text in place',
+      wasZh ? !/[\u4e00-\u9fff]{4,}/.test(aboutAfter.split('\n')[0]) && aboutAfter !== aboutShown : /[\u4e00-\u9fff]{4,}/.test(aboutAfter),
+      `${aboutShown.length} → ${aboutAfter.length} chars`,
+    );
+    check('the switch did not navigate away from the page', (await page.locator('nav.tabs button.active').innerText()) === tabBefore, 'still on ' + tabBefore);
+    check('no full page reload happened (the panel is still open)', await page.locator('.about-modal').isVisible());
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    check('Escape closes the panel', (await page.locator('.about-modal').count()) === 0);
+
     process.stdout.write('\n10. Office export, feature extraction, Tor\n');
     const xlsx = await fetch(base + '/api/intel/export?format=xlsx');
     const xlsxBuf = Buffer.from(await xlsx.arrayBuffer());

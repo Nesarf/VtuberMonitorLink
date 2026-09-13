@@ -25,6 +25,14 @@ export const STRINGS = {
   zh: {
     appTitle: "Vtuber's Monitor Link",
     appSub: '本地 VTuber 情报监测',
+    // About / README panel: the document itself is bilingual, so these are only the chrome around it
+    aboutTitle: '关于',
+    aboutHint: '在界面里直接读这份说明（右上角打开，可即时切换中英文，不用另开页面）',
+    readmeLang: '这份文档的语言',
+    readmeLangZh: '中文',
+    readmeLangEn: 'English',
+    readmeFail: '读不到说明文件',
+    readmeNote: '同一份文档也在程序目录里',
     tab_intel: '情报',
     tab_run: '运行',
     tab_sources: '来源',
@@ -782,6 +790,13 @@ export const STRINGS = {
   en: {
     appTitle: "Vtuber's Monitor Link",
     appSub: 'Local VTuber intelligence monitor',
+    aboutTitle: 'About',
+    aboutHint: 'Read this document inside the app — it opens from the top bar and switches between Chinese and English instantly, with no separate page',
+    readmeLang: 'Language of this document',
+    readmeLangZh: '中文',
+    readmeLangEn: 'English',
+    readmeFail: 'Could not load the document',
+    readmeNote: 'The same document ships in the app directory',
     tab_intel: 'Intel',
     tab_run: 'Run',
     tab_sources: 'Sources',

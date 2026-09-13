@@ -121,6 +121,8 @@ export const api = {
   vdbSearch: (q, group) => j(`/api/vdb/search?q=${encodeURIComponent(q)}${group ? `&group=${encodeURIComponent(group)}` : ''}`),
   vdbGroups: () => j('/api/vdb/groups'),
   vdbImport: (keys) => post('/api/vdb/import', { keys }),
+  // README viewer (the About panel renders these; `lang=zh` → README.zh-CN.md)
+  readme: (lang) => j(`/api/readme?lang=${encodeURIComponent(lang ?? 'en')}`),
   archiveItems: (q = {}) =>
     j(`/api/archive/items?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== ''))}`),
   archiveIngest: (limit) => post('/api/archive/ingest', { limit }),

@@ -1356,6 +1356,46 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
+  // ── README (shown inside the app) ────────────────────────────────
+  // The UI has an "About" panel that renders these files and switches language instantly, so a
+  // reader never has to leave the app (and never has to find the file on disk). Two fixed file
+  // names, no user-controlled path: `lang=zh` → README.zh-CN.md, anything else → README.md.
+  // In a packaged build they sit next to app/ (build-portable copies them); from a source checkout
+  // they are at the repo root. Both candidates are tried, nothing else.
+  app.get('/api/readme', (req, res) => {
+    const lang = String(req.query.lang ?? '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+    const files = { en: 'README.md', zh: 'README.zh-CN.md' };
+    const roots = [APP_ROOT, path.join(APP_ROOT, '..'), process.cwd()];
+    const available = [];
+    let found = null;
+    for (const [code, name] of Object.entries(files)) {
+      for (const root of roots) {
+        const p = path.join(root, name);
+        if (!fs.existsSync(p)) continue;
+        if (!available.includes(code)) available.push(code);
+        if (code === lang && !found) found = { code, name, p };
+        break;
+      }
+    }
+    if (!found) {
+      return res.status(404).json({ ok: false, error: 'README not found next to the app', available });
+    }
+    let markdown = '';
+    try {
+      markdown = fs.readFileSync(found.p, 'utf8');
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: `could not read ${found.name}: ${e.message}`, available });
+    }
+    res.json({
+      ok: true,
+      lang: found.code,
+      file: found.name,
+      available,
+      bytes: Buffer.byteLength(markdown, 'utf8'),
+      markdown,
+    });
+  });
+
   // ── VDB roster (multi-platform) ──────────────────────────────────
   // Data source github.com/dd-center/vdb (the upstream of vtbs.moe), licensed CC BY-NC-SA 4.0:
   //   · fetched at runtime only and cached in app/vdb/, **never shipped in the release package** (see the exclusion list in tools/make-zip.mjs)

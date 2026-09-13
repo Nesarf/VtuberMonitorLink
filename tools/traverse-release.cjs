@@ -341,6 +341,35 @@ async function main() {
     const delSrc = await api('DELETE', '/api/sources/custom/traverse-feed');
     check('DELETE removes it again', delSrc.status === 200 && delSrc.json.removed === 1);
 
+    // ------------------------------------------------------------ 8c. README
+    // The About panel renders these two files; the endpoint must answer offline and hand back both
+    // languages, because the in-app toggle is the whole point of it.
+    process.stdout.write('\n8c. README (in-app About panel)\n');
+    const rdEn = await api('GET', '/api/readme?lang=en');
+    check(
+      'GET /api/readme?lang=en returns the English document',
+      rdEn.status === 200 && rdEn.json.ok === true && rdEn.json.lang === 'en' && /^# Vtuber's Monitor Link/m.test(rdEn.json.markdown ?? ''),
+      `${rdEn.json.lang} ${rdEn.json.file} ${rdEn.json.bytes}B`,
+    );
+    const rdZh = await api('GET', '/api/readme?lang=zh');
+    check(
+      'GET /api/readme?lang=zh returns the Chinese document (the toggle needs both)',
+      rdZh.status === 200 && rdZh.json.lang === 'zh' && rdZh.json.markdown !== rdEn.json.markdown && /[\u4e00-\u9fff]/.test(rdZh.json.markdown ?? ''),
+      `${rdZh.json.lang} ${rdZh.json.file} ${rdZh.json.bytes}B`,
+    );
+    check(
+      'the endpoint reports which languages are available',
+      Array.isArray(rdZh.json.available) && rdZh.json.available.includes('en') && rdZh.json.available.includes('zh'),
+      JSON.stringify(rdZh.json.available),
+    );
+    const rdOdd = await api('GET', '/api/readme?lang=klingon');
+    check('an unknown language falls back to English instead of failing', rdOdd.status === 200 && rdOdd.json.lang === 'en', 'lang=' + rdOdd.json.lang);
+    check(
+      'the document is served as text, not rendered inside a JSON error',
+      typeof rdEn.json.markdown === 'string' && rdEn.json.markdown.length > 2000,
+      String(rdEn.json.bytes) + ' bytes',
+    );
+
     // ------------------------------------------------------- 8b. VDB roster
     // Third-party data (CC BY-NC-SA 4.0): this deliberately **does not trigger a download**
     // (it does not call /sync); it only verifies "it answers offline, the licence is attributed,

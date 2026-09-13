@@ -40,6 +40,20 @@ export const LOCALES = [
   // category (`other`), and the default "prepend the number" of countLabel() is already correct
   // Indonesian word order (see locales/plurals.js and tools/i18n-plural-test.mjs).
   { code: 'id-ID', name: 'Bahasa Indonesia', chain: ['id-ID', 'en-US'], weekStart: 0 },
+  // Filipino: an independent language with its own chain, so this level stands on its own (same
+  // shape as ja-JP / ko-KR / id-ID). The tag is `fil-PH`, never `tl-PH`: `fil` is the CLDR/Intl
+  // standard code that carries the plural rules and the Intl formatting data, while `tl` is only a
+  // legacy alias (`Intl.PluralRules('tl')` happens to agree today, but nothing guarantees it, and a
+  // browser that resolves the tag itself would see a different locale). weekStart 0 (Sunday) --
+  // the Philippines follows the Sunday-first calendar, like the US and Indonesia.
+  //
+  // Unlike Indonesian it **does** need a plural table, but not for the reason the form count
+  // suggests: `Intl.PluralRules('fil')` reports two categories (`one`, `other`) and picks `other`
+  // exactly when the number's last digit is 4, 6 or 9 (measured over 0..2000; 30% of integers).
+  // Filipino does not inflect the noun for number -- what the table carries is the `na` linker that
+  // Tagalog requires between a numeral and the noun it counts (`5 na item`), which the default
+  // "prepend the number" cannot express. See locales/plurals.js and tools/i18n-plural-test.mjs.
+  { code: 'fil-PH', name: 'Filipino', chain: ['fil-PH', 'en-US'], weekStart: 0 },
   { code: 'en-US', name: 'English (US)', chain: ['en-US', 'en'], weekStart: 0 },
   { code: 'en-GB', name: 'English (UK)', chain: ['en-GB', 'en-US'], weekStart: 1 },
   { code: 'en-AU', name: 'English (Australia)', chain: ['en-AU', 'en-GB', 'en-US'], weekStart: 1 },

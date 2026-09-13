@@ -1,8 +1,9 @@
 {
-  "generatedAt": "2026-09-13T20:26:04.335Z",
+  "_note": "Suspect counts are a ratchet, not a score: they may only stop growing. Two of these numbers are\nexplained rather than fixed, and both are recorded here because a number nobody can account for\ngets --update'd blind.\n\n(1) fil-PH 14: all fourteen are the same false positive -- a Han glossary term whose default is a\nLatin brand name (B 站 -> \"bilibili\" 13 rows, 萌百 -> \"Moegirlpedia\" 1 row). That is the wording the\nproject intends to display in every locale that has no override: \"bilibili\" is the platform's own\nname and appears in the English source string too. The rule fires because the term is Han and the\ndefault is not Han, so it cannot tell \"a translation leaked into this locale\" from \"the pinned\nwording IS the brand name\". Adding a fil-PH override equal to the default would satisfy the rule\nwhile documenting nothing.\n\n(2) ko-KR 31 (was 29): adding a 27th locale moves the cross-locale *median* length that the\nlength-outlier rule compares against, and two existing, untouched Korean rows crossed the 0.3x\nthreshold (eventsItems: 8 chars against a median of 21; costOnExceed: 7 against 20). Nothing in\nko-KR changed -- the median gained one more sample, and a length heuristic has no way to know that.",
+  "generatedAt": "2026-09-13T21:20:13.900Z",
   "used": 644,
   "locales": {
-    "ko-KR": 29,
+    "ko-KR": 31,
     "es-419": 15,
     "es-AR": 15,
     "es-ES": 15,
@@ -15,6 +16,7 @@
     "ru-RU": 15,
     "ar-SA": 14,
     "de-DE": 14,
+    "fil-PH": 14,
     "id-ID": 14,
     "ja-JP": 14,
     "pl-PL": 14,

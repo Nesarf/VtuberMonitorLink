@@ -338,6 +338,75 @@ async function main() {
       const idHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
       check('the Indonesian live hint is Indonesian', idHints.includes('siaran'), idHints.slice(0, 140));
     }
+
+    // Filipino: same two failure modes as the Indonesian block above, plus a third one that is
+    // specific to how this locale counts.
+    //   1. registered in LOCALES but never rendering -- the chain is wrong or the layers did not land,
+    //      and the page silently shows English while every offline table still reports 100%;
+    //   2. a Chinese proper noun inside an otherwise Filipino sentence (the glossary strips pinned
+    //      terms before looksUntranslated() tests a value, so no offline tool can see it);
+    //   3. count labels: Filipino needs the `na` linker between a numeral and its noun, which lives in
+    //      the plural table rather than in the base values (see locales/plurals.js), so a label
+    //      rendering as "5 item" instead of "5 na item" is a wiring failure nothing else would see.
+    await langSel.selectOption('fil-PH');
+    await page.waitForTimeout(400);
+    const filTabs = (await page.locator('nav.tabs button').allInnerTexts()).join('|');
+    check('html lang follows the Filipino selection', (await langIsHant.getAttribute('lang')) === 'fil-PH', String(await langIsHant.getAttribute('lang')));
+    check(
+      'the Filipino interface is in Filipino',
+      filTabs.includes('Impormasyon') && filTabs.includes('Magpatakbo') && filTabs.includes('Mga setting') && filTabs.includes('Subaybayan'),
+      filTabs,
+    );
+    // The anchor claim: the tab row must not still be the English fallback. `Live` is deliberately not
+    // in the pattern -- Filipino keeps that word (it is what Filipino VTuber audiences say), so
+    // flagging it would make the check lie. The other five are the English copy's own labels.
+    check('no English fallback left in the Filipino tab row', !/Run|Settings|Reports|Search|Sources/.test(filTabs), filTabs);
+    const filLive = page.locator('nav.tabs button', { hasText: 'Live' }).first();
+    if (await filLive.count()) {
+      await filLive.click();
+      await page.waitForTimeout(900);
+      // Same rule as the Korean and Indonesian scans: only the interface's own copy (titles / hints /
+      // tabs), never the room titles that come from bilibili. Pinned proper nouns are stripped first,
+      // longest first.
+      const filChrome = [
+        ...(await page.locator('main h2').allInnerTexts()),
+        ...(await page.locator('main .hint').allInnerTexts()),
+        ...(await page.locator('nav.tabs button').allInnerTexts()),
+      ].join('\n');
+      const keepFil = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/glossary.json'), 'utf8')))
+        .filter(([k, v]) => !k.startsWith('_') && v?.default === k)
+        .map(([k]) => k)
+        .sort((a, b) => b.length - a.length);
+      let restFil = filChrome;
+      for (const term of keepFil) restFil = restFil.split(term).join('');
+      const filLeftover = [...new Set(restFil.match(/[\u4e00-\u9fff]/g) || [])];
+      check('no Chinese left in the Filipino live page', filLeftover.length === 0, filLeftover.length ? 'leftover Han characters: ' + filLeftover.join('') : '0 leftover Han characters');
+      const filHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
+      // These two words come from the hand-written liveHint, so this fails when the locale falls back
+      // to English rather than merely when a tab label is missing.
+      check('the Filipino live hint is Filipino', filHints.includes('pagsisimula') && filHints.includes('panoorin'), filHints.slice(0, 140));
+      // The counter wiring: the plural table is the only place the `na` linker can come from, so a
+      // count label on this page has to carry it -- "5 item" instead of "5 na item" would be a wiring
+      // failure nothing else in the suite can see. Which counts appear depends on the run (a follower
+      // count needs an enabled watch target, a room count needs something live), so the check is only
+      // made when a count label shape is actually on screen, and when it is not, the skip is *named*
+      // instead of silent: a quietly skipped assertion is how a check count changes without anyone
+      // noticing which one left.
+      //
+      // The gate deliberately looks for "number directly followed by a word" (or by the linker), not
+      // for any digit: a date, a uid or a revid would otherwise arm a check that can only fail.
+      const filBody = await page.locator('main').innerText();
+      const countish = (filBody.match(/\b\d+\s+na\s+[A-Za-z]+/g) || []).slice(0, 3);
+      const englishish = (filBody.match(/\b\d+\s+(items?|days?|members?|matches|calls|alerts|followers?|cookies?)\b/g) || []).slice(0, 3);
+      const armed = countish.length > 0 || englishish.length > 0;
+      check(
+        armed ? 'Filipino count labels carry the `na` linker from the plural table' : 'Filipino count labels: nothing to assert this run (no count label on the live page)',
+        !armed || (countish.length > 0 && englishish.length === 0),
+        armed ? countish.join(' | ') + (englishish.length ? ' | ENGLISH: ' + englishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+      );
+    } else {
+      check('the Filipino live tab was found', false, 'no tab button matched "Live"');
+    }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();

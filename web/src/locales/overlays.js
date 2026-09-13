@@ -283,6 +283,179 @@ export const HAND_COMMON = {
     eventsSources: 'sumber',
     chartsSources: 'Porsi sumber dan peringatan',
   },
+  'fil-PH': {
+    // Filipino joined one release after Indonesian, and its hand layer is written first for the same
+    // reason: the machine layer may not override a hand entry (see humanKeys() in
+    // tools/i18n-translate.mjs), so the copy a user meets first is decided here rather than by the
+    // model. The Filipino tag is `fil-PH`, not `tl-PH` (see locales/index.js).
+    saveStateIdle: 'Wala pang pagbabago',
+    saveStateDirty: 'May mga pagbabagong hindi pa naka-save',
+    cancel: 'Kanselahin',
+    refresh: 'I-refresh',
+    loading: 'Naglo-load…',
+    error: 'Error',
+    yes: 'Oo',
+    no: 'Hindi',
+    enabled: 'Naka-on',
+    disabled: 'Naka-off',
+    date: 'Petsa',
+    source: 'Pinagmulan',
+    sources: 'Pinagmulan',
+    searchTitle: 'Paghahanap ng impormasyon',
+    reportsTitle: 'Mga ulat',
+    eventsTitle: 'Pinagsamang mga kaganapan',
+    chartsTitle: 'Mga graph ng trend',
+    shareTitle: 'Ibahagi',
+    shareDownload: 'Gumawa at i-download',
+    shareCopy: 'Kopyahin ang teksto',
+    intelTitle: 'Daloy ng impormasyon',
+    runTitle: 'Magpatakbo',
+    done: 'Tapos na',
+    failed: 'Nabigo',
+    alerts: 'Mga babala',
+    noItems: 'Wala pang impormasyon',
+    onlyAlerts: 'Mga babala lang',
+    onlyStarred: 'Mga naka-star lang',
+    onlyUnread: 'Mga hindi pa nababasa lang',
+    mergeEvents: 'Pagsamahin ang magkatulad na kaganapan',
+    packetLoss: 'Pagkawala ng packet',
+    save: 'I-save',
+    saving: 'Nagse-save…',
+    saved: 'Naka-save',
+    add: 'Magdagdag',
+    delete: 'Tanggalin',
+    name: 'Pangalan',
+    time: 'Oras',
+    language: 'Wika',
+    latency: 'Latency',
+    // The same reasoning the Korean and Indonesian levels recorded for this one: it is a long prompt
+    // sentence, which is exactly where a machine pass leaves the source language behind, and it is
+    // the first thing a user reads on the Live page. A hand entry always wins, so this sentence never
+    // depends on the model.
+    liveHint:
+      'Ang pagsisimula ng live stream ang pinaka-sensitibo sa oras na impormasyon — mas mahalaga ' +
+      'pang malaman agad kaysa sa kahit anong keyword. Dito ipinapakita ang status ng live stream ng ' +
+      'mga sinusubaybayan, at puwede mong isaayos ang ilang silid sa isang grid para sabay na ' +
+      'panoorin (gamit ang opisyal na embed player ng bilibili, walang relay at walang paggamit ng ' +
+      'login). Tandaan na ang "replay" ay hindi tunay na pagsisimula ng live, kaya hiwalay itong ' +
+      'minarkahan.',
+    // ── The count labels, and why they are handled by a plural table rather than by the base values.
+    //
+    // docs/DESIGN.md section 11 and tools/i18n-plural-test.mjs both assume a two-tier world: a
+    // language either inflects (a `<key>_<category>` table in locales/plurals.js) or it does not
+    // (zh / ja / ko / id, where prepending the number is already correct). Filipino is in neither
+    // tier, and the measurement is the reason. `Intl.PluralRules('fil')` reports two categories
+    // (`one`, `other`) -- so the study's "28 plural forms" figure is arithmetically right -- and the
+    // split is by last digit: measured over 0..2000, `other` is selected exactly when `n % 10` is
+    // 4, 6 or 9 (30% of integers), `one` for everything else. (The first probe of this read its own
+    // evidence wrong -- it spot-checked 0/1/2/3/5/10/11/21/100, all of which are `one`, and concluded
+    // "every integer is `one`". The corrected numbers are in locales/plurals.js next to the table.)
+    //
+    // What Filipino requires is not inflection but the **linker**: Tagalog puts `na` (or the bound
+    // `-ng`) between a numeral and the noun it counts (`5 na item`, `2 na araw`), so the default
+    // "number in front of a bare noun" of countLabel() renders `2 item`, a fragment rather than a
+    // noun phrase. The wording therefore lives in the table (PLURALS['fil-PH'] in locales/plurals.js),
+    // where `{n}` sits inside the phrase, and the base values below stay bare nouns -- exactly the
+    // split the other inflecting locales use, and exactly what the "count label lost its noun" guard
+    // in tools/i18n-proofread.mjs expects of a count key.
+    //
+    // Cost of not doing this: Thai's classifier problem in a different form -- count labels that read
+    // as broken word order to a native speaker while every offline gate stays green.
+    items: 'item',
+    groupDays: 'araw',
+    // The English value for this one is the abbreviation "p"; Filipino gets the word.
+    groupPeopleUnit: 'tao',
+    vdbGroups: 'grupo',
+    outsideRange: 'hindi kasama ng filter ng oras',
+    groupMembers: 'miyembro',
+    groupPeopleCount: 'sinusubaybayang tao',
+    costCalls: 'tawag',
+    matches: 'tugma',
+    // `alerts` is a count key as well as the copy for its row (zh "告警"): the panel label wants the english-logic:allow
+    // plural marker, but `tn('alerts', n)` prepends a number to this value, so the base has to be the
+    // bare noun or the UI renders "1 Mga babala".
+    alerts: 'Babala',
+    // ── Corrections to the machine pass itself, all kept here rather than in machine.json, which the
+    //    pipeline regenerates and would happily overwrite. A hand entry wins over the machine layer
+    //    (see humanKeys() in tools/i18n-translate.mjs), so these are the values a user actually sees.
+    //
+    // 1. An English noun phrase in the two titles the machine left in English. The zh sources are
+    //    "监视对象" (the watch targets) and "来源" (sources); the pipeline returned the English words english-logic:allow
+    //    "Watch object" and "Sources", i.e. two of the eleven tab-row/panel titles a Filipino user
+    //    meets first were still English. The glossary has its own agreed wording for both terms, and
+    //    the tab labels above use it, so these follow the same words instead of the model's.
+    watchTitle: 'Subaybayan',
+    sourcesTitle: 'Pinagmulan',
+    // 2. The same failure in a sentence: zh "开播监测与多屏观看" (live monitoring and multi-screen english-logic:allow
+    //    viewing) came back as "Live monitoring at multi-screen viewing" -- English, and not even
+    //    grammatical English. Mixed-language chrome is the exact defect the whole locale chain exists
+    //    to avoid, so it is hand-written.
+    liveTitle: 'Katayuan ng live at multi-screen na panonood',
+    //
+    // 3. A meaning-inverting mistranslation. zh "出口" is the *egress route* (how a source is reached: english-logic:allow
+    //    direct or through the proxy), and the machine read it as 导出 / "export" -- `proxyMode` became english-logic:allow
+    //    "I-export", so the settings page told the user to export something. The English source says
+    //    "Egress". In a settings row next to "direct" / "proxy" the label has to keep that meaning.
+    proxyMode: 'Ruta ng labasan',
+    // 4. A wrong word class on a weekday label. zh "星期" is the generic "day of week" header of the english-logic:allow
+    //    scheduled-task table; the machine returned "Linggo", which is the proper noun **Sunday**, so
+    //    the column header named one day instead of the column.
+    dayOfWeek: 'Araw ng linggo',
+    // 5. A past-tense count rendered as an imperative. zh "扫描条目" is the result label "entries english-logic:allow
+    //    scanned" (shown after a VDB scan); the machine wrote "I-scan ang mga entry" -- "scan the
+    //    entries" -- which is an instruction, not a result.
+    peopleScanned: 'Mga na-scan na entry',
+    // 6. Two values glued together with no space: zh "从 VDB 导入关注对象" came back as english-logic:allow
+    //    "I-import mula sa VDBFollowed people", producing the nonsense token "VDBFollowed" where the
+    //    glossary term 关注对象 had been substituted. 关注对象 is a pinned term with a Filipino english-logic:allow
+    //    override ("Sinusubaybayan") that this row should have used.
+    vdbTitle: 'I-import ang mga sinusubaybayan mula sa VDB',
+    // 7. 通贩 (merch sales) rendered as "mail-order", which is not the word this UI uses anywhere english-logic:allow
+    //    else (every other row says merch). Also a possessive where the source has none.
+    onlyDaily: 'Regular lang (patay ang merch)',
+    // 8. A half-translated parenthetical: zh "标识（英文/数字/短横线）" describes the *characters* the id english-logic:allow
+    //    may contain, and the machine kept the English "Identifier" and translated 英文 as the language english-logic:allow
+    //    name "English". Latin letters, not the English language.
+    sourceId: 'Identifier (letra/numero/gitling)',
+    //
+    // 9. A systematic habit rather than a single row, and the largest part of this list: short labels
+    //    and enum values came back as the English string while their own hints were translated. Each
+    //    one is a label a user reads on its own, so "the hint explains it in Filipino" does not help.
+    //    The Chinese sources are ordinary words, not product names, which is why they are repaired here
+    //    instead of being left alone like bilibili / YouTube / VDB.
+    multiScreen: 'Sabay-sabay na screen', // zh 多屏 english-logic:allow
+    addAllLive: 'Idagdag lahat ng live sa sabay-sabay na screen', // zh 在播的全部加入多屏 english-logic:allow
+    addToGrid: 'Idagdag sa sabay-sabay na screen', // zh 加入多屏 english-logic:allow
+    clearGrid: 'I-clear ang sabay-sabay na screen', // zh 清空多屏 english-logic:allow
+    headless: 'Mode na walang window', // zh 无头模式 english-logic:allow
+    customSources: 'Mga sariling source', // zh 自定义来源 english-logic:allow
+    addCustomSource: 'Magdagdag ng sariling source', // zh 新增自定义来源 english-logic:allow
+    browserTitle: 'Browser na ginagamit', // zh 浏览器 english-logic:allow
+    proxyTitle: 'Proxy ng network', // zh 网络代理 english-logic:allow
+    notifyKind: 'Uri ng channel', // zh 通道 english-logic:allow
+    notifySecret: 'Susi ng pagpirma', // zh 加签密钥 english-logic:allow
+    notifyOn: 'Kondisyon na nag-trigger', // zh 触发条件 english-logic:allow
+    obsJitter: 'Agwat ng jitter', // zh 间隔抖动 english-logic:allow
+    anonymousMode: 'Anonymong mode', // zh 匿名模式 english-logic:allow
+    privacyTitle: 'Privacy / Inkognito', // zh 隐私 / 无痕 english-logic:allow
+    // 10. Consistency rows, not mistakes: the same concept had two Filipino values in the same file, so
+    //     one of them is wrong wherever the other is right. `notify` is the same zh/en string as
+    //     `desktopNotify` (which reads "Abiso sa desktop"), `notifyQuiet` is the pinned glossary term
+    //     静默时段 whose override is "Tahimik na oras", and `mode_tor` said "Walang bakas" ("no trace") english-logic:allow
+    //     while every other row for the same mode says Incognito/anon.
+    notify: 'Abiso sa desktop', // zh 桌面通知 english-logic:allow
+    notifyQuiet: 'Tahimik na oras', // zh 静默时段 english-logic:allow
+    mode_tor: 'Tor (Inkognito)', // zh Tor（无痕） english-logic:allow
+    // The three keys whose zh source already embeds the numeral ("{n} 个" and "粉丝 {n}") keep a english-logic:allow
+    // value with `{n}` here, because that is what the source itself carries -- the guard's
+    // placeholder comparison is against the Chinese string, so a base value without it would be the
+    // mismatch instead.
+    cookieCount: '{n} na cookie',
+    cookieCountWithSession: '{n} na cookie (kasama ang SESSDATA)',
+    // followersCount is the one count key whose zh source puts the numeral *after* the noun, so the
+    // Filipino value does the same and the tested `{n}` rule for this key is unaffected.
+    followersCount: 'tagasubaybay {n}',
+  },
   'es-ES': {
     saveStateIdle: 'Sin cambios todavía',
     saveStateDirty: 'Cambios sin guardar',
@@ -1229,6 +1402,20 @@ export const HAND = {
     auto: 'Otomatis',
     latency: 'Latensi',
     packetLoss: 'Kehilangan paket',
+  },
+  'fil-PH': {
+    // Same reasoning as the Indonesian level above: Filipino is an independent language with its own
+    // chain (['fil-PH','en-US']), so this level stands alone and inherits nothing from another locale.
+    appSub: 'Lokal na intelihensiya ng VTuber',
+    tab_intel: 'Impormasyon',
+    tab_run: 'Magpatakbo',
+    tab_sources: 'Pinagmulan',
+    tab_watch: 'Subaybayan',
+    tab_settings: 'Mga setting',
+    tab_reports: 'Mga ulat',
+    tab_live: 'Live',
+    tab_search: 'Maghanap',
+    tab_llm: 'LLM',
   },
 };
 

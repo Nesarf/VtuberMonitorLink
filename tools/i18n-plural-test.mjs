@@ -183,6 +183,52 @@ t('non-inflecting languages (zh / ja / ko / id) need no table - prepending the n
   }
 });
 
+t('fil-PH is NOT in that list, and the measured rule is by last digit rather than "all integers"', () => {
+  // Added with the Filipino locale. Filipino resolves to two categories, so it cannot join the
+  // non-inflecting group above -- and the split is real, not decorative: measured over 0..2000,
+  // `other` is selected exactly when `n % 10` is 4, 6 or 9 (600 of 2001, 30%), and `one` for every
+  // other integer including 0 and 1.
+  //
+  // The first version of this test asserted "every integer is `one`" because the probe that produced
+  // the numbers spot-checked 0/1/2/3/5/10/11/21/100 -- all of them `one` -- and its 0..2000 result was
+  // printed as a Set that nobody read. That is exactly the class of mistake a pinned measurement is
+  // supposed to prevent, so the assertion below spells the rule out instead of sampling it.
+  //
+  // The table Filipino needs is not about inflection: Tagalog puts the linker `na` between a numeral
+  // and the noun it counts (`5 na item`, `2 na araw`), which prepending a number to a bare noun cannot
+  // express. Both categories therefore carry the same wording -- the linker does not change with the
+  // number -- and this test pins that too, so nobody "optimises" one of them away.
+  const fil = new Intl.PluralRules('fil-PH');
+  assert.equal(fil.resolvedOptions().pluralCategories.sort().join(), 'one,other');
+  const wrong = [];
+  for (let n = 0; n <= 2000; n++) {
+    const wantOther = [4, 6, 9].includes(n % 10);
+    if (wantOther !== (fil.select(n) === 'other')) wrong.push(`${n}->${fil.select(n)}`);
+  }
+  assert.equal(wrong.length, 0, 'fil 的类别划分变了（应为末位 4/6/9 归 other）: ' + wrong.slice(0, 6).join(', '));
+  assert.equal(fil.select(1), 'one');
+  assert.equal(fil.select(21), 'one');
+  assert.equal(fil.select(4), 'other');
+  assert.equal(pluralCategory('fil-PH', Number.NaN), 'other', 'other 也是非数字回退');
+  // Both categories must exist (the completeness check above requires it) and must agree: there is
+  // nothing for the number to inflect here.
+  const table = PLURALS['fil-PH'];
+  assert.ok(table, 'fil-PH 缺少词形表');
+  for (const base of ['items', 'groupDays', 'groupMembers', 'alerts']) {
+    assert.equal(table[`${base}_one`], table[`${base}_other`], `${base}: fil 的两个类别本来就该一样`);
+    assert.ok(table[`${base}_one`].includes('{n}'), `${base}: 数词要留在短语里，才能带上 na 连接词`);
+  }
+  // The linker is the whole point of the table: without it the label is a fragment. Both a `one` and
+  // an `other` number have to come out right, since only 30% of counts are `one`.
+  assert.equal(countLabel(pickPlural(table, 'items', 'fil-PH', 5), 5), '5 na item');
+  assert.equal(countLabel(pickPlural(table, 'items', 'fil-PH', 4), 4), '4 na item');
+  assert.equal(countLabel(pickPlural(table, 'groupDays', 'fil-PH', 1), 1), '1 na araw');
+  assert.equal(countLabel(pickPlural(table, 'alerts', 'fil-PH', 6), 6), '6 na babala');
+  // `outsideRange` is the exception: its wording is a sentence, and the linker needs a noun after it.
+  assert.equal(countLabel(pickPlural(table, 'outsideRange', 'fil-PH', 3), 3), '3 hindi kasama ng filter ng oras');
+  assert.equal(countLabel(pickPlural(table, 'outsideRange', 'fil-PH', 9), 9), '9 hindi kasama ng filter ng oras');
+});
+
 process.stdout.write('\nplural: real-language spot checks\n');
 
 t('Russian 1 / 2 / 5 / 21 produce four distinct (and correct) forms', () => {

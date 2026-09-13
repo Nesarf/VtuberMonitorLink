@@ -402,6 +402,10 @@ if (!args.quiet) {
   show('suspect: short text with an absurd length', byKind('length'), (x) => `${x.code} ${x.key}\n      source: ${JSON.stringify(String(x.src).slice(0, 50))}\n      value: ${JSON.stringify(String(x.val).slice(0, 70))}`);
   show('suspect: ellipsis presence differs', byKind('ellipsis'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 70))}`);
   show('suspect: the glossary wording never took effect', byKind('glossary'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      value: ${JSON.stringify(String(x.val).slice(0, 80))}`);
+  // This kind was counted but never listed, so a locale whose only suspects were those rows (Filipino,
+  // when it landed: 14 of them) failed the ratchet with an empty report and no way to see why. A
+  // ratchet nobody can read is a ratchet that gets --update'd blind.
+  show('suspect: a glossary term fell back to its English default (a Latin brand default such as "bilibili" is the intended wording, so check what the default actually is before treating this as a defect)', byKind('glossary-default'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      value: ${JSON.stringify(String(x.val).slice(0, 80))}`);
   show('suspect: different source strings translated into the same value', byKind('duplicate'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
 }
 
@@ -409,7 +413,11 @@ const counts = Object.fromEntries(rows.map((r) => [r.code, r.suspect]));
 const totalSuspect = SUSPECT.length;
 
 if (args.update) {
-  fs.writeFileSync(BASELINE, JSON.stringify({ generatedAt: new Date().toISOString(), used: USED.length, locales: counts }, null, 2) + '\n', 'utf8');
+  // Keep any annotation a contributor added to the baseline file (a `_note` explaining why a count is
+  // what it is): the write below used to drop it, so the next person to run --update silently deleted
+  // the reasoning behind a number. The ratchet is only worth having while its numbers are explainable.
+  const keep = Object.fromEntries(Object.entries(readJson(BASELINE, {}) ?? {}).filter(([k]) => k.startsWith('_')));
+  fs.writeFileSync(BASELINE, JSON.stringify({ ...keep, generatedAt: new Date().toISOString(), used: USED.length, locales: counts }, null, 2) + '\n', 'utf8');
   process.stdout.write(`\nbaseline written: ${path.relative(ROOT, BASELINE)}\n`);
   process.exit(HARD.length ? 1 : 0);
 }

@@ -281,8 +281,23 @@ A few rules taught by real incidents (details in `docs/BUGS.md` 41-52, 54, 64-66
   `tn(key, n)` (`web/src/plural.js`) + a `<key>_<类别>` form table (`web/src/locales/plurals.js`, the suffix being the plural category):
   locales whose values contain `{n}` write the number into the phrase, the rest keep it in front as before - **existing locales are unchanged word for word**,
   while ru/uk/pl/sr/ar and en/es/pt/fr/de/it get the correct singular/plural. zh/ja/ko do not inflect, so they need no form table.
+  Filipino is the first locale that needs a table for a reason that is not inflection at all, so the rule is
+  **three-tiered, not two**: `Intl.PluralRules('fil')` really does report two categories, but the split is by
+  **last digit** (measured over 0..2000: `other` exactly when the number ends in 4, 6 or 9, `one` for everything
+  else including 0 and 1) and the noun never changes - what Tagalog requires is the **linker** between a numeral
+  and its noun (`5 na item`, never `5 item`). So the third tier is "needs a phrase for a reason the form count
+  cannot express": a table whose two categories are spelled identically and whose base values stay bare nouns.
+  A locale with one or two plural categories can still need a table, and a form count can overstate the cost
+  (28 forms predicted for an inflection that does not exist) exactly as it understates it; `tools/i18n-plural-test.mjs`
+  asserts the measured last-digit rule so this locale cannot be "simplified" back into the second tier.
   These two key classes are looked up dynamically and never appear in literal calls, so the counting rules
   for coverage / proofread are unaffected (`usedKeys()` and `locale-coverage` also recognise `tn(...)`).
+- **A one-locale run must not edit other locales' machine layers**: `pruneMachine()` deletes entries the hand
+  layer shadows, and the same shadowed rows exist in other locales, so adding one locale silently removed 22
+  rows from eleven others. Those deletions are reverted and the new locale is spliced in. The dead rows are
+  **kept on purpose**: they are invisible either way (the hand-layer repair overrides them), and if that repair
+  is ever removed they are a better fallback than English. Re-running the pipeline will propose the deletion
+  again - that is the decision to make then, for all eleven locales at once, not as a side effect.
 - **Product copy and engineering output are two different things**: hard-coded strings in the daily report
   body, the push body and UI tooltips/toasts **stay Chinese** (even when they have no `t()` key);
   only logs, diagnostic files and self-check output switch to English.

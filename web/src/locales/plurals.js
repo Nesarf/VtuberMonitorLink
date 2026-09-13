@@ -526,4 +526,61 @@ export const PLURALS = {
     followersCount_many: '{n} متابعًا',
     followersCount_other: '{n} متابع',
   },
+  // Filipino, added one release after Indonesian. It needs a table, but not for the reason the
+  // category count suggests -- and the first version of this note got the measurement wrong, so the
+  // numbers are written out here in full.
+  //
+  // `Intl.PluralRules('fil')` reports two categories (`one`, `other`), and the study's "28 plural
+  // forms" for fil-PH is arithmetically right. The split is by the **last digit**, not by number:
+  // measured over 0..2000, `other` is selected exactly when `n % 10` is 4, 6 or 9 (600 of 2001
+  // integers, 30%), and `one` for everything else including 0 and 1. Decimals (1.5, 2.5, 100.5)
+  // select `one`, and `other` is additionally the non-number fallback in web/src/plural.js.
+  //
+  // The first probe printed that 0..2000 loop's result and then spot-checked 0/1/2/3/5/10/11/21/100
+  // -- every one of which happens to be a `one` -- and I read it as "every integer is `one`". It is
+  // not. The lesson is in the table below rather than in a report: **both categories carry the same
+  // wording**, so the label is right whichever one is selected, and no claim rests on the split.
+  //
+  // What Filipino does require is the **linker**: Tagalog puts `na` (or the bound `-ng`) between a
+  // numeral and the noun it counts (`5 na item`, `2 na araw`), and the default "prepend the number to
+  // a bare noun" of countLabel() cannot produce it -- the UI would show the fragment `2 item`. So the
+  // wording lives here, with the numeral inside the phrase, and the base values in overlays.js stay
+  // bare nouns, which is the same split every other inflecting locale uses.
+  //
+  // The two categories are spelled identically on purpose: the linker does not change with the number
+  // (4 na item and 5 na item take the same one), and whether Filipino wants the plural marker `mga`
+  // on a counted noun is a question this table cannot answer from a machine -- the same shape already
+  // exists in this file for Italian (cookie / Cookie, follower / Follower) and German (matches_one ===
+  // matches_other). `followersCount` keeps `{n}`, because its zh source embeds the numeral and the
+  // plural test requires every locale with a table to keep it.
+  'fil-PH': {
+    items_one: '{n} na item',
+    items_other: '{n} na item',
+    groupDays_one: '{n} na araw',
+    groupDays_other: '{n} na araw',
+    groupPeopleUnit_one: '{n} na tao',
+    groupPeopleUnit_other: '{n} na tao',
+    vdbGroups_one: '{n} na grupo',
+    vdbGroups_other: '{n} na grupo',
+    // The one count key whose wording is a sentence, not a noun phrase: the linker needs a noun right
+    // after it, so this key appends the numeral without the stem ("12 hindi kasama ng filter ng oras").
+    outsideRange_one: '{n} hindi kasama ng filter ng oras',
+    outsideRange_other: '{n} hindi kasama ng filter ng oras',
+    groupMembers_one: '{n} na miyembro',
+    groupMembers_other: '{n} na miyembro',
+    groupPeopleCount_one: '{n} na sinusubaybayang tao',
+    groupPeopleCount_other: '{n} na sinusubaybayang tao',
+    costCalls_one: '{n} na tawag',
+    costCalls_other: '{n} na tawag',
+    matches_one: '{n} na tugma',
+    matches_other: '{n} na tugma',
+    alerts_one: '{n} na babala',
+    alerts_other: '{n} na babala',
+    cookieCount_one: '{n} na cookie',
+    cookieCount_other: '{n} na cookie',
+    cookieCountWithSession_one: '{n} na cookie (kasama ang SESSDATA)',
+    cookieCountWithSession_other: '{n} na cookie (kasama ang SESSDATA)',
+    followersCount_one: '{n} tagasubaybay',
+    followersCount_other: '{n} tagasubaybay',
+  },
 };

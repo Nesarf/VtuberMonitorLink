@@ -206,6 +206,7 @@ npm run traverse      # walk every HTTP endpoint, the SPA fallback and the error
 npm run traverse:ui   # walk all eleven pages in a real browser and do a real run against the mock LLM
 npm run brand         # naming: user-facing files keep the full name, internal identifiers use VML
 npm run english       # English coverage, for both the engineering layer and the UI
+npm run commit-msg    # every commit message in the history is English
 npm run release       # all of the above
 ```
 
@@ -215,6 +216,14 @@ product copy are out of scope, see `docs/ENGLISH-LOGIC.md`; `npm run english` pr
 `tools/vml-brand.mjs` (the two names must not swap roles), `tools/i18n-plural-test.mjs`
 (plural-form tables are complete per language) and `tools/hint-md-test.mjs`
 (any string carrying markdown must be rendered through `<Inline>`).
+
+Commit messages are English as well, on every branch and tag: the history is the part of a project
+a reader anywhere sees first, and a body only some readers can follow cannot be searched, quoted or
+reviewed. `npm run commit-msg` checks the whole history (`tools/commit-msg-check.mjs`, the rule is in
+`tools/lib/cjk-text.mjs`); `.githooks/commit-msg` blocks a Chinese message at commit time
+(`git config core.hooksPath .githooks`), and CI checks it with a full-history checkout, because a
+shallow clone can only judge its tip. Quoting another language as evidence — a Russian plural form,
+an Arabic date phrase — stays allowed: that is data about a translation, not Chinese prose.
 
 ## License
 

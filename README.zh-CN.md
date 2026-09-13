@@ -204,6 +204,7 @@ npm run traverse      # 遍历全部 HTTP 端点、SPA 兜底、错误路径
 npm run traverse:ui   # 真实浏览器里走完十一个页面，并用 mock LLM 真跑一次
 npm run brand         # 命名一致性：对外件用全名、内部标识用 VML
 npm run english       # 英文覆盖率（工程层 / 界面两侧的百分比）
+npm run commit-msg    # 整段历史里每条提交信息都是英文
 npm run release       # 上述全套
 ```
 
@@ -211,6 +212,13 @@ npm run release       # 上述全套
 `tools/english-logic.mjs`（工程层只许英文 —— 注释与日志，界面词条与产品文案不在此列，
 见 `docs/ENGLISH-LOGIC.md`；`npm run english` 会打印覆盖率）、`tools/vml-brand.mjs`（两条名字不许串用）、
 `tools/i18n-plural-test.mjs`（数词词形完整性）、`tools/hint-md-test.mjs`（带 markdown 记号的文案必须走 `<Inline>`）。
+
+**提交信息（commit）也是英文**，所有分支与 tag 上的每一条都算：历史是任何人打开仓库先看到的东西，
+只写中文的正文对读不懂中文的人就是搜不到、引用不了、review 无从判断。
+`npm run commit-msg` 扫整段历史（`tools/commit-msg-check.mjs`，判据在 `tools/lib/cjk-text.mjs`）；
+本地钩子 `.githooks/commit-msg` 在提交时挡一次（启用：`git config core.hooksPath .githooks`）；
+CI 用**完整历史**检出后再扫一遍，因为浅克隆只能看到末端。作为**证据**引用其他语种的原串
+（俄语复数、阿拉伯语日期短语）允许保留 —— 那是翻译的数据，不是中文散文。
 
 ## 第三方数据与署名
 

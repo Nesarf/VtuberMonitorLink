@@ -151,6 +151,30 @@ const SUSPECT = [];
 const lengthSamples = [];
 const addHard = (code, key, why, val, src) => HARD.push({ code, key, why, val, src });
 
+// BUGS #75, the part that stops it coming back. A glossary `default` is what the pipeline restores
+// when a locale has no override, so the invariant is not "the default must not be Latin" - it is
+// **"a default that can actually be displayed must not be a translation"**. With an override for every
+// locale the default is unreachable and its wording does not matter; without one it is displayed
+// verbatim in that locale forever. So the check is: a Han term with a Latin default must cover every
+// locale the project ships, and the report names the locales that would leak.
+const SHIPPED_LOCALES = Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/coverage.json'), 'utf8')).locales ?? {});
+const LATIN_DEFAULT_ALLOWED = new Set(['bilibili', 'ServerChan', 'DingTalk', 'WeCom', 'Feishu', 'Moegirlpedia', 'VTuber']);
+for (const [term, spec] of Object.entries(GLOSSARY)) {
+  if (term.startsWith('_') || !spec || typeof spec.default !== 'string') continue;
+  if (!/[\u4e00-\u9fff]/.test(term)) continue; // a Latin term: keeping it is the point
+  if (/[\u4e00-\u9fff]/.test(spec.default)) continue; // default is the source term: "keep as-is"
+  if (LATIN_DEFAULT_ALLOWED.has(spec.default)) continue;
+  const uncovered = SHIPPED_LOCALES.filter((code) => !spec[code]);
+  if (!uncovered.length) continue; // an override everywhere: the default is never displayed
+  addHard(
+    '(glossary)',
+    term,
+    `default "${spec.default}" is a translation and it is displayed wherever a locale has no override - ${uncovered.length} shipped locale(s) would show it: ${uncovered.slice(0, 8).join(', ')}${uncovered.length > 8 ? ', ...' : ''}. Either give every locale an override (the wording is then a decision, recorded per language) or add the Latin spelling to LATIN_DEFAULT_ALLOWED in this file if it really is the convention everywhere`,
+    spec.default,
+    term,
+  );
+}
+
 const rows = [];
 for (const loc of LOCALES) {
   if (args.locale && loc.code !== args.locale) continue;

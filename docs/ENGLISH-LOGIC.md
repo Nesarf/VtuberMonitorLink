@@ -116,19 +116,21 @@ the word form via `Intl.PluralRules` -- `21 элемент` rather than `21 эл
   record total length as a path length…). When you rewrite the wording and find the comment does not
   match the code, **flag it first**, and do not casually rewrite the comment to accommodate the code
   -- that turns a real problem into a smooth-sounding lie.
-- **A glossary `default` is not a translation** (added after BUGS #75). `web/src/locales/glossary.json`
-  substitutes each term into the source text *before* the model sees it, and the model is told to leave
-  substituted terms untouched — so whatever `default` says is what every locale without an override
-  displays **forever**. It must be the source term itself (`default: "来源"`), meaning "keep it as-is
-  in Chinese and translate it per language"; the only exception is a proper noun whose original
-  spelling *is* the convention (`bilibili`, `Feishu`, `Moegirlpedia`, `VTuber`). An English `default`
-  on a common noun is a translation smuggled into the glossary, and it cost 385 rows across 21 locales
-  — English noun phrases sitting inside French, Russian, Korean and Indonesian sentences, plus a
-  Chinese kept-term in two of them. Two guards now measure it: a term whose `default` is not the
-  source term is a suspect wherever a locale without an override displays it, and **a label
-  interpolating `{n}` must carry something besides the number** — a count label that had lost its noun
-  (`"{n}"`) passed every other gate the pipeline has, including the placeholder check, because the
-  placeholder was intact.
+- **A glossary entry pins a term; it does not translate it** (rewritten after BUGS #75, including a
+  correction to the first version of this very paragraph). `web/src/locales/glossary.json` replaces a
+  term with a sentinel before the model sees it and restores `glossary[term][locale] ?? default`
+  afterwards, so the restored string is displayed **verbatim** in every locale that has no override.
+  Two consequences, and the first version of this rule got the second one wrong:
+  - only a **proper noun or product name** belongs in the glossary, where one spelling really is the
+    convention everywhere (`bilibili`, `Feishu`, `Moegirlpedia`, `VTuber`);
+  - a **common noun must not be pinned at all**. An English default shows English to twelve locales
+    (that was the shipped defect: 385 rows); setting the default to the source term instead shows
+    *Chinese* to every locale without an override, which is worse - that was the first attempt at
+    fixing this, made and reverted the same afternoon.
+  A term that genuinely needs the same wording everywhere gets an **override for every locale**, not a
+  default. `tools/i18n-proofread.mjs` now fails the build when a Han term carries a Latin default that
+  is not in its documented brand list, and it counts a locale showing an English default as a suspect,
+  so the next contributor meets the rule before the defect instead of after it.
 
 ## 8. Commit messages are English too (added 2026-09-14)
 

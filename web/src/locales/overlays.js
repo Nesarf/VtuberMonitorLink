@@ -1237,3 +1237,37 @@ export const HAND = {
 for (const [code, dict] of Object.entries(LATE_KEYS)) {
   HAND_COMMON[code] = { ...(HAND_COMMON[code] ?? {}), ...dict };
 }
+
+/**
+ * A one-time repair of a translation defect the guards now catch (BUGS #75).
+ *
+ * `cookieCount` is "{n} 个" and the machine pass returned a bare "{n}" in fourteen locales: the noun
+ * was dropped, and every gate the pipeline had passed it - the placeholder was intact, there were no
+ * Han characters left, and no length rule fires on something that short. The UI rendered a number with
+ * nothing after it. It was found by hand in the Indonesian locale, and then by the new count-label
+ * guard in the other thirteen. (english-logic:allow - the Chinese source string is the subject of the
+ * sentence; that is what the escape hatch is for, see docs/ENGLISH-LOGIC.md section 3.)
+ *
+ * Hand-written rather than sent through the pipeline again, for the reason this file exists at all:
+ * this is a wording decision, and a machine pass that dropped the noun once can drop it again.
+ */
+const COUNT_LABEL_REPAIR = {
+  'es-ES': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'es-419': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'es-MX': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'es-AR': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'pt-PT': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'pt-BR': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (incl. SESSDATA)' },
+  'fr-FR': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (SESSDATA incluse)' },
+  'fr-CA': { cookieCount: '{n} cookies', cookieCountWithSession: '{n} cookies (SESSDATA incluse)' },
+  'de-DE': { cookieCount: '{n} Cookies', cookieCountWithSession: '{n} Cookies (inkl. SESSDATA)' },
+  'it-IT': { cookieCount: '{n} cookie', cookieCountWithSession: '{n} cookie (incl. SESSDATA)' },
+  'uk-UA': { cookieCount: '{n} кукі', cookieCountWithSession: '{n} кукі (разом із SESSDATA)' },
+  'sr-RS': { cookieCount: '{n} колачића', cookieCountWithSession: '{n} колачића (укључујући SESSDATA)' },
+  'pl-PL': { cookieCount: '{n} ciasteczek', cookieCountWithSession: '{n} ciasteczek (w tym SESSDATA)' },
+  'ar-SA': { cookieCount: '{n} ملفات تعريف الارتباط', cookieCountWithSession: '{n} ملفات تعريف الارتباط (بما في ذلك SESSDATA)' },
+};
+
+for (const [code, dict] of Object.entries(COUNT_LABEL_REPAIR)) {
+  HAND_COMMON[code] = { ...(HAND_COMMON[code] ?? {}), ...dict };
+}

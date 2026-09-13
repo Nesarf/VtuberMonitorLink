@@ -203,10 +203,10 @@ await t('no torrc next to the exe: falls back to the standalone tor branch', asy
 fs.rmSync(tbRoot, { recursive: true, force: true });
 
 await t('standalone tor: the data directory sits under the app directory and never touches the C drive', async () => {
-  const plan = torLaunchPlan({ exe: 'X:\\tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9050', appRoot: 'E:\\App' });
+  const plan = torLaunchPlan({ exe: 'X:\\tor\\tor.exe', socksUrl: 'socks5://127.0.0.1:9050', appRoot: 'E:\\App' }); // sanitize-allow: synthetic drive paths in a test fixture, not this machine's
   assert.equal(plan.kind, 'standalone');
   const dataDir = plan.args[plan.args.indexOf('--DataDirectory') + 1];
-  assert.ok(dataDir && dataDir.startsWith('E:\\App'), 'the data directory should sit under the app directory, got ' + dataDir);
+  assert.ok(dataDir && dataDir.startsWith('E:\\App'), 'the data directory should sit under the app directory, got ' + dataDir); // sanitize-allow: same fixture
   assert.ok(!/^[Cc]:/.test(dataDir), 'it must not land on the C drive');
   assert.equal(plan.args[plan.args.indexOf('--SocksPort') + 1], '127.0.0.1:9050');
 });

@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    workers/csharp/VmlText.csproj - the C# worker of the multilingual text layer.
+
+    Plain console application, .NET BCL only: no PackageReference anywhere, so a build needs no
+    network and no NuGet feed. The build script (workers/csharp/build.mjs) runs
+    `dotnet publish -c Release -o dist`, which is why the artifact properties below live here rather
+    than on its command line: the project decides what its artifact is, the script only drives it.
+
+    TargetFramework is net8.0 - the lowest currently supported LTS - so the worker builds on any
+    installed .NET SDK from 8 up. It is framework-dependent (SelfContained false) on purpose: the
+    worker is launched on the machine that built it, by the host that knows `dotnet` is there, and a
+    self-contained bundle would be ~70 MB of runtime duplicating an installation that already exists.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>vmltext</AssemblyName>
+    <RootNamespace>Vml</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!--
+      InvariantGlobalization stays FALSE, and that is a contract decision rather than an oversight.
+      Turning it on makes every culture the invariant one, which would make this worker immune to the
+      very trap it is meant to demonstrate - and the self-check runs cases under tr-TR and de-DE to
+      prove that the *answer* does not move with the machine's culture. It cannot prove that if the
+      runtime refuses to have a culture at all. The worker itself never consults a culture: it passes
+      CultureInfo.InvariantCulture explicitly wherever a BCL call could reach one.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <UseAppHost>true</UseAppHost>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <DebugType>none</DebugType>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!--
+    Warning-free is part of the deliverable, so the compiler is asked for more than the default set
+    and told that a warning is an error. TreatWarningsAsErrors is what makes "it built" mean "it built
+    clean": without it a stray culture-aware overload would compile with a suggestion and ship.
+
+    CA1305/CA1304/CA1310/CA1311 are the globalization analyzers that exist for exactly this worker's
+    subject matter (culture-sensitive ToString/Compare/ToLower overloads). They are enabled rather
+    than suppressed, and the code they flag is fixed by passing an explicit culture.
+  -->
+  <PropertyGroup>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <NoWarn>CA1303</NoWarn>
+  </PropertyGroup>
+
+</Project>

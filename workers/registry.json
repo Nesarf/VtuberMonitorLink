@@ -267,6 +267,32 @@
         "workers/sql/vmlsearch.mjs"
       ],
       "notes": "search.query expressed in SQLite through node:sqlite: the filters, the integer score, the ordering and the facets are SQL; no build step, no third-party packages"
+    },
+    {
+      "id": "csharp-text",
+      "language": "csharp",
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/csharp/build.mjs"
+      ],
+      "artifact": {
+        "win32": "workers/csharp/dist/vmltext.exe",
+        "default": "workers/csharp/dist/vmltext"
+      },
+      "launch": {
+        "win32": [
+          "workers/csharp/dist/vmltext.exe"
+        ],
+        "default": [
+          "workers/csharp/dist/vmltext"
+        ]
+      },
+      "notes": ".NET 8+, BCL only, no packages: the shared tables are read from workers/spec at startup, and every comparison is ordinal or explicitly invariant because .NET's case and trim defaults are culture-aware"
     }
   ],
   "_planned": [

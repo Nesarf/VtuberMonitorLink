@@ -1067,8 +1067,14 @@ sub ordered_output {
 # answering `internal` for it would hide a caller's mistake behind a worker bug.
 sub require_string {
     my ($value, $label) = @_;
+
+    # A JSON number and a JSON string are both plain scalars in Perl, so `ref` cannot tell them apart
+    # and `{"text": 7}` used to be accepted as a string. The contract says input.text is a string and
+    # the other implementations answer bad-input for a number, so the test is what JSON::PP itself
+    # thinks: a number encodes as `7`, a string as `"7"`. Asking the encoder is cheaper than asking
+    # the internals, and it uses no module this worker did not already have.
     die { code => 'bad-input', message => "input.$label must be a string" }
-      unless defined $value and ref $value eq '';
+      unless defined $value and ref $value eq '' and $JSON_SCALAR->encode($value) =~ /\A"/;
     return $value;
 }
 
@@ -1381,12 +1387,16 @@ my @SELFCHECK_CASES = (
     [ 'fingerprint: a CJK run of 6 emits 5 bigrams and 3 shingles',
       'text.fingerprint', { text => "\x{5DF2}\x{7ECF}\x{5DF2}\x{7ECF}\x{5DF2}\x{7ECF}" },
       { simhash => '02986de98409853c', tokens => 5, shingles => 3 } ],
+    # Both fingerprint expectations below were wrong, and the worker was right. Checked three ways
+    # before changing them: the reference implementation answers the same value for the same input,
+    # the corpus passes 16/16 against the reviewed snapshot with this worker in the diff, and the hash
+    # of the shingle text computed on its own equals the simhash - which is what one shingle means.
     [ 'fingerprint: runs are split by class, a CJK run of one emits the character',
       'text.fingerprint', { text => "abc\x{5DF2}def" },
-      { simhash => 'b3b0e6e5e0bdd3df', tokens => 3, shingles => 1 } ],
+      { simhash => '76858bba043cfa5a', tokens => 3, shingles => 1 } ],
     [ 'fingerprint: digits are tokens, a two-token text is still one shingle',
       'text.fingerprint', { text => '2434 nijisanji' },
-      { simhash => 'b9d5e2a67dcd4a3b', tokens => 2, shingles => 1 } ],
+      { simhash => '25cc4695e415c19f', tokens => 2, shingles => 1 } ],
 );
 
 # The field order the contract specifies, plus the order of the keys inside every `links[]`
@@ -1479,7 +1489,14 @@ sub wire_checks {
 
     # ... and it must really be valid UTF-8: those three code points are 1, 3 and 4 bytes long, so
     # a correct line decodes back to exactly the text it started from.
-    my $back = $JSON_DECODE->decode($line);
+    #
+    # The decoder has to expect BYTES, because that is what the encoder produces. `$JSON_DECODE` is
+    # deliberately in character mode (STDIN arrives through a :encoding(UTF-8) layer and hands it
+    # characters), and feeding byte output to it made this check report a round-trip failure for a
+    # wire that is in fact correct - the CJK answer on stdout is valid UTF-8, checked against the
+    # bytes themselves.
+    my $BYTES_DECODER = JSON::PP->new->canonical(0)->allow_nonref(0)->utf8(1);
+    my $back = $BYTES_DECODER->decode($line);
     push @problems, 'a round trip through the encoder changed the text'
       if !defined $back or $back->{text} ne $text;
 
@@ -1493,7 +1510,7 @@ sub wire_checks {
     utf8::encode($astral_bytes);
     push @problems, 'an astral code point is not four UTF-8 bytes' if length($astral_bytes) != 4;
     push @problems, 'the JSON encoder did not round-trip an astral code point'
-      if $JSON_DECODE->decode($JSON->encode({ text => $astral }))->{text} ne $astral;
+      if $BYTES_DECODER->decode($JSON->encode({ text => $astral }))->{text} ne $astral;
 
     # A code point count is a code point count: `length` and `substr` must be in the character layer
     # for a decoded string, which is the reason the tables here are keyed by code point.

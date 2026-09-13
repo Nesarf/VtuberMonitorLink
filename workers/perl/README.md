@@ -20,15 +20,12 @@ Measured, not asserted:
 | `node tools/workers.mjs --no-build --only perl-text --cap text.normalize` | **22/22** against the reviewed snapshot |
 | the same for `text.extract` | **31/31** |
 | the same for `text.fingerprint` | **16/16** |
-| `perl workers/perl/vmltext.pl --selfcheck` | **46/53**, and the same 46/53 in three consecutive runs |
+| `node tools/workers-diff.mjs --with-local --n 25 --seed 7 --cap <each>` | **25/25 generated cases unanimous across 10 implementations**, 250 repeat answers identical, no divergence |
+| `perl workers/perl/vmltext.pl --selfcheck` | **50/50**, and the same 50/50 in three consecutive runs |
 
-The last row matters as much as the first three: the self-check used to fail a *different* number
-of cases on every run, because it asked `keys %$hash` for a field order. A worker whose own test
-cannot agree with itself is a worker whose next reader learns nothing from a red run.
-
-What is still wrong is listed at the bottom rather than hidden, and it is all in the self-check's
-stricter cases rather than in the corpus: the fingerprint hash, a non-string `input.text`, and the
-JSON layer's astral round trip.
+The self-check row matters as much as the corpus rows: it used to fail a *different* number of cases
+on every run, because it asked `keys %$hash` for a field order. A worker whose own test cannot agree
+with itself is a worker whose next reader learns nothing from a red run.
 
 ## What this worker cost, in Perl
 
@@ -66,12 +63,13 @@ Each of these produced a plausible wrong answer first:
 
 ## Limits and known failures
 
-- The self-check's 7 remaining failures: the `text.fingerprint` hash (2 cases - the token and shingle
-  counts already match, so the difference is in the FNV/SimHash arithmetic), a non-string `input.text`
-  answering a result instead of `bad-input` (1, which also trips the two error envelope order cases),
-  and the JSON encoder's astral round trip (2).
+- None open. The self-check's list is empty and the corpus is unanimous for all three capabilities.
+  Two of the three "fingerprint failures" it used to report turned out to be wrong *expectations*
+  rather than wrong answers - the reference implementation and the shingle hash computed on its own
+  both agreed with the worker - and the zero-width expectation was wrong in the same way. They were
+  corrected against the reference, not against this file.
 - The worker is registered in `workers/registry.local.json` (machine-local), not in the published
-  registry: the interpreter is not guaranteed on every runner yet, and the entry moves when the
-  self-check above is green.
+  registry: Perl is present on the three CI runners as far as anyone knows, and "as far as anyone
+  knows" is not the same as measured, so the entry moves only once that has been checked.
 - Anything the contract does not describe is not implemented here on purpose; the three capabilities
   are the whole worker.

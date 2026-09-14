@@ -195,7 +195,7 @@ check(
   [
     missingFromCopy.length ? `missing: ${missingFromCopy.slice(0, 3).join(', ')}` : '',
     differingInCopy.length ? `differing: ${differingInCopy.slice(0, 3).join(', ')}` : '',
-  ].filter(Boolean).join(' | ') || `identical apart from ${EXCLUDED_FROM_COPY.map((re) => String(re).replace(/^\/\^|\/$/g, '')).join(' ')}`,
+  ].filter(Boolean).join(' | ') || `identical apart from the exclusion list: ${EXCLUDED_FROM_COPY.map((re) => re.source.replace(/^\^/, '').replace(/\\\/$/, '/')).join(', ')}`,
 );
 
 console.log('');

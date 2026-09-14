@@ -477,6 +477,14 @@ Deliberately not here yet:
   neither the linux nor the macos runner image, and the `bash` there is 3.2.57 on macOS against 5.2 on
   linux and 5.3 on Windows - 3.2 being the version the shell worker has never been tested against, in
   its own README's words. Both stay out until a run rather than a hope says they can come in.
+- **An HTML/CSS implementation is a considered no, not an omission.** HTML/CSS was on the list of
+  languages this layer might grow into, and it is the one candidate that cannot arrive honestly here:
+  section 3 specifies a state machine, not a renderer, and the Java worker's own header records why the
+  JDK's HTML parser is unusable for `text.extract` - it is not that state machine, and it would decode
+  entities by its own table. A browser would answer a different question (what this markup renders as)
+  and would therefore agree with nobody's contract. The same test is what makes SQL a good fit for
+  `search.query` - there the query *is* the implementation - and what rules HTML/CSS out of every
+  capability in this layer.
 - **Every capability has at least two implementations, and the text ones have eight.** `search.query` is
   implemented three times - the JavaScript reference, a Java inverted index and a SQL one - `fetch.plan`
   twice, JavaScript and Go, because concurrency and per-egress limits are what Go is here for, and

@@ -36,6 +36,12 @@ const COUNT = Number(value('--n', 200));
 const ONLY = value('--cap', null);
 const WITH_LOCAL = flag('--with-local');
 const VERBOSE = flag('--verbose');
+// One budget for every worker here, and it is a *total*, not a per-request limit. A slow interpreter
+// can spend it and be cut off mid-run, and the cases it never answered would otherwise be reported as
+// disagreements: a run against ten implementations where the shell ran out of budget printed "80
+// divergence(s)" and every one of them was a missing answer from the same worker. So the report names
+// the budget when it bites, and an incomplete run still fails - an incomplete run is not a pass.
+const WORKER_BUDGET_MS = Number(value('--budget-ms', 180000));
 
 // ── input generation ────────────────────────────────────────────────────────────────────────
 
@@ -221,6 +227,27 @@ function resolveLaunch(worker) {
   return null;
 }
 
+// Is the launch's program actually on this machine? The conformance runner has asked this question for
+// a while (`resolveCommand`, same shape), and the fuzzer did not - which was invisible until a published
+// worker had an interpreter that is not on every runner: `spawn Rscript` emitted an unhandled 'error',
+// and the fuzz step died with ENOENT on the two legs that do not have R while the third passed. A
+// worker that cannot start is not a worker that is wrong; it is a [skip], and now it is one here too.
+function resolveCommand(cmd) {
+  if (!cmd) return null;
+  if (cmd.includes('/') || cmd.includes('\\')) {
+    return fs.existsSync(path.resolve(ROOT, cmd)) || fs.existsSync(cmd) ? cmd : null;
+  }
+  const exts = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : [''];
+  for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, cmd + ext);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 function runWorker(worker, capability, cases) {
   return new Promise((resolve) => {
     const launch = resolveLaunch(worker);
@@ -243,10 +270,14 @@ function runWorker(worker, capability, cases) {
       if (process.platform === 'win32' && child.pid) {
         try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
       }
-      resolve({ answers, stderr: stderr.trim(), descriptor });
+      resolve({ answers, stderr: stderr.trim(), descriptor, cutOff });
     };
     let descriptor = null;
-    const timer = setTimeout(finish, 180000);
+    let cutOff = false;
+    const timer = setTimeout(() => {
+      cutOff = true;
+      finish();
+    }, WORKER_BUDGET_MS);
     for (const stream of [child.stdin, child.stdout, child.stderr]) stream.on('error', () => {});
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -266,6 +297,13 @@ function runWorker(worker, capability, cases) {
       if (answers.size >= cases.length * 2 && descriptor) finish();
     });
     child.on('close', finish);
+    // Belt and braces with the resolveCommand check above: a launch that resolves but cannot exec - a
+    // file without the execute bit, an interpreter that removes itself between the check and the spawn -
+    // must be a skipped worker rather than an unhandled 'error' that ends the run.
+    child.on('error', (err) => {
+      stderr += `\n(spawn failed: ${err.code ?? err.message})`;
+      finish();
+    });
     child.stdin.write(JSON.stringify({ id: 'describe', op: 'describe' }) + '\n');
     for (let i = 0; i < cases.length; i++) {
       child.stdin.write(JSON.stringify({ id: 'c' + i, op: 'invoke', capability, input: cases[i] }) + '\n');
@@ -314,6 +352,7 @@ console.log(`  cases      : ${COUNT} per capability`);
 console.log(`  workers    : ${workers.map((w) => w.id).join(', ')}`);
 
 let divergences = 0;
+let budgetDivergences = 0;
 for (const capability of capabilities) {
   const rnd = mulberry32(SEED);
   const cases = [];
@@ -322,22 +361,39 @@ for (const capability of capabilities) {
   const active = workers.filter((w) => w.capabilities.includes(capability));
   const answers = new Map();
   const skipped = [];
+  const budgeted = [];
+  const budgetedIds = new Set();
   for (const worker of active) {
     const launch = resolveLaunch(worker);
+    const argv0 = Array.isArray(launch) ? launch[0] : launch;
+    if (!resolveCommand(argv0)) {
+      // Same sentence the conformance runner prints, because it is the same fact: the interpreter is not
+      // on this machine, so there is nothing to diff and nothing to blame.
+      skipped.push(`${worker.id} (interpreter not on this machine: ${argv0})`);
+      continue;
+    }
     const r = await runWorker(worker, capability, cases);
     answers.set(worker.id, r.answers);
     const answered = [...r.answers.keys()].filter((k) => k.startsWith('c')).length;
     if (answered === 0) {
       skipped.push(`${worker.id} (${r.stderr.split('\n').slice(-1)[0]?.slice(0, 100) || 'said nothing'})`);
       answers.delete(worker.id);
-    } else if (VERBOSE) {
-      console.log(`  ${worker.id}: ${answered}/${cases.length} answered, implementation ${r.descriptor?.impl ?? '?'}`);
+    } else if (r.cutOff) {
+      budgeted.push(`${worker.id} answered ${answered}/${cases.length} case(s) before the ${WORKER_BUDGET_MS / 1000} s budget`);
+      budgetedIds.add(worker.id);
+    }
+    if (VERBOSE) {
+      console.log(`  ${worker.id}: ${answered}/${cases.length} answered, implementation ${r.descriptor?.impl ?? '?'}${r.cutOff ? ' (cut off by the budget)' : ''}`);
     }
     void launch;
   }
-
   console.log(`\n== ${capability}  (${COUNT} generated cases x ${answers.size} implementation(s): ${[...answers.keys()].join(', ')})`);
   if (skipped.length) console.log(`   skipped    : ${skipped.join(', ')}`);
+  if (budgeted.length) {
+    console.log(`   budget     : ${budgeted.join('; ')}`);
+    console.log(`                the case(s) it never answered are reported below as MISSING - that is a budget,`);
+    console.log(`                not a disagreement. Raise --budget-ms for a slow interpreter, or lower --n.`);
+  }
   const canDiff = answers.size >= 2;
   if (!canDiff) {
     console.log('   [note] one implementation answered: there is no cross-implementation diff to make, and the');
@@ -383,6 +439,14 @@ for (const capability of capabilities) {
     if (!canDiff) continue; // with one implementation there is no disagreement to report
     divergences++;
     console.log(`   DIVERGES   : case ${i} (seed ${SEED})`);
+    const budgetMissing = [...byKey.keys()].filter((k) => k.startsWith('MISSING:') && budgetedIds.has(k.slice('MISSING:'.length)));
+    // Only when the implementations that *did* answer are unanimous: if they also disagreed among
+    // themselves, this case has a real divergence in it and labelling it as a budget would hide it.
+    const answering = [...byKey.keys()].filter((k) => !k.startsWith('MISSING:'));
+    if (budgetMissing.length && answering.length <= 1) {
+      budgetDivergences++;
+      console.log(`       budget     : this case has no answer from ${budgetMissing.map((k) => k.slice('MISSING:'.length)).join(', ')}, which ran out of its budget - not a disagreement`);
+    }
     for (const [key, who] of byKey) console.log(`       ${who.join(', ').padEnd(28)} ${key.slice(0, 220)}`);
     const entry = { id: `fuzz-${SEED}-${i}`, note: `found by tools/workers-diff.mjs --seed ${SEED} --n ${COUNT}`, input: cases[i] };
     console.log(`       promote as: ${JSON.stringify(entry).slice(0, 900)}`);
@@ -398,4 +462,7 @@ for (const capability of capabilities) {
 }
 
 console.log(`\n${divergences === 0 ? 'no divergence found' : divergences + ' divergence(s) found'} over ${COUNT} generated case(s) per capability, seed ${SEED}`);
+if (budgetDivergences > 0) {
+  console.log(`note       : ${budgetDivergences} of those case(s) are a worker running out of its ${WORKER_BUDGET_MS / 1000} s budget rather than a worker disagreeing - the run still fails, because an incomplete run is not a pass`);
+}
 process.exit(divergences === 0 ? 0 : 1);

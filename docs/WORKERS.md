@@ -401,6 +401,15 @@ All integer arithmetic, so "byte-identical across languages" is achievable rathe
   leaking into an answer, a random seed a runtime picked for itself, and state a worker kept between
   requests - and it is the one check that still means something for a capability with a single
   implementation, which is what the newest capability has today.
+  Two ways a worker can produce no answer are reported as cost rather than as disagreement, because
+  that difference decides whether anybody should read the code: an interpreter that is not on this
+  machine is a `[skip]` - the fuzzer asks the same question the conformance runner has always asked,
+  after a published worker with a Windows-only interpreter made `spawn` fail with `ENOENT` on the other
+  two legs and took the tool down with it - and a worker that runs out of its **total** budget
+  (`--budget-ms`, 180 seconds by default) is named with the number of cases it did answer, with the
+  cases it did not still counted against the run but labelled as a budget. An incomplete run is not a
+  pass, and it should not read like a disagreement either. A slow interpreter is why the machine-local
+  shell gets fuzzed with a smaller `--n` than the published set, or with a raised budget.
 - A second implementation is also how a *contract* gets tested, not only an implementation. The Go
   worker found a hole in section 10 on its first run: for an `egress` of `5` it answered `bad-input`
   while the JavaScript reference reported `no-egress`, and both readings followed from the text - the

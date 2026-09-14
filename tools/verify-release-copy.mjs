@@ -162,6 +162,42 @@ if (!zips.length) {
   check('the package has a manifest with files', files > 100, files >= 0 ? `${files} entries` : 'manifest missing');
 }
 
+// 6. Correspondence: the copy *is* this tree, minus what make-release excludes. This is the question the
+//    tool is named after and the one a scan cannot answer, and it is worth running for real: on the day it
+//    was added it showed that the copy had been refreshed twice since the commit a summary still named -
+//    162 tracked files identical, none differing, and 123 absent, every one of them under workers/.
+//
+//    Exclusions are listed here rather than tolerating "whatever happens to be missing", so that both
+//    sides of the line are somebody's decision. A new exclusion has to be added on purpose.
+const EXCLUDED_FROM_COPY = [/^workers\//];
+const hashFile = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const tracked = spawnSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' })
+  .stdout.split('\n')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const missingFromCopy = [];
+const differingInCopy = [];
+let compared = 0;
+for (const rel of tracked) {
+  if (EXCLUDED_FROM_COPY.some((re) => re.test(rel))) continue;
+  const from = path.join(ROOT, rel);
+  const to = path.join(SRC, rel);
+  if (!fs.existsSync(to)) {
+    missingFromCopy.push(rel);
+    continue;
+  }
+  compared++;
+  if (hashFile(from) !== hashFile(to)) differingInCopy.push(rel);
+}
+check(
+  `the copy is this tree (${compared} tracked files, byte for byte)`,
+  missingFromCopy.length === 0 && differingInCopy.length === 0,
+  [
+    missingFromCopy.length ? `missing: ${missingFromCopy.slice(0, 3).join(', ')}` : '',
+    differingInCopy.length ? `differing: ${differingInCopy.slice(0, 3).join(', ')}` : '',
+  ].filter(Boolean).join(' | ') || `identical apart from ${EXCLUDED_FROM_COPY.map((re) => String(re).replace(/^\/\^|\/$/g, '')).join(' ')}`,
+);
+
 console.log('');
 if (failures === 0) {
   console.log('verify-release-copy: every check passed');

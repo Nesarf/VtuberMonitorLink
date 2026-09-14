@@ -17,10 +17,11 @@ name: workers
 #   macos   - the reference, java, cpp (clang++), go, python3, pwsh, csharp, perl 5.44, bash 3.2.57
 #   no Rscript on the linux or macos image (measured, not assumed)
 #
-# macOS was informational while nobody had run this layer there. It has since run the whole corpus and
-# the fuzzer green twice (8fd1d74, which moved the C# worker onto `dotnet <dll>`, and fb730ea), so the
-# next step is promoting it to a gating leg. That is a decision about how much flake that runner is
-# allowed to cost, not about this code, and it has deliberately not been taken here.
+# macOS is a gating leg as of this commit. It earned that by running the whole corpus and the fuzzer
+# green twice while it was only informational - 8fd1d74, the commit that moved the C# worker onto
+# `dotnet <dll>`, and fb730ea, the commit that fixed the Perl worker - so the promotion is a decision
+# made on evidence rather than on optimism. If that runner turns out to flake, the flag is one word to
+# put back, and putting it back is a change to a gate: it belongs in docs/BUGS.md like any other.
 on:
   push:
     branches: ['**']
@@ -42,7 +43,7 @@ jobs:
           - os: windows-latest
             experimental: false
           - os: macos-latest
-            experimental: true
+            experimental: false
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     steps:

@@ -7,6 +7,7 @@
 // en-US automatically, so the UI never goes blank.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { LOCALES, byCode, negotiate } from './locales/index.js';
+import { dateFormat, monthLabel } from './locales/date-format.js';
 import { GENERATED } from './locales/generated.js';
 // The machine-translation layer: produced by tools/i18n-translate.mjs, and the lowest priority
 // layer (hand-written entries always beat it).
@@ -1726,9 +1727,14 @@ export function I18nProvider({ children }) {
       // that are already stored onto a different day.
       weekdaysSunFirst: weekdaysFor(loc.code, 0),
       weekdaysLong: weekdaysFor(loc.code, loc.weekStart, 'long'),
-      fmtDate: (d, opts) => new Intl.DateTimeFormat(loc.code, opts ?? { dateStyle: 'medium' }).format(new Date(d)),
-      fmtTime: (d, opts) => new Intl.DateTimeFormat(loc.code, opts ?? { timeStyle: 'medium' }).format(new Date(d)),
-      fmtDateTime: (d) => new Intl.DateTimeFormat(loc.code, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(d)),
+      // Every one of these goes through locales/date-format.js, which is where the calendar decision
+      // lives: `Intl.DateTimeFormat('th-TH')` defaults to the Buddhist calendar, and leaving that to each
+      // call site is how one page came to show 2569 in its timestamps and 2026 in its calendar grid
+      // (docs/BUGS.md #79).
+      fmtDate: (d, opts) => dateFormat(loc.code, opts ?? { dateStyle: 'medium' }).format(new Date(d)),
+      fmtTime: (d, opts) => dateFormat(loc.code, opts ?? { timeStyle: 'medium' }).format(new Date(d)),
+      fmtDateTime: (d) => dateFormat(loc.code, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(d)),
+      fmtMonth: (year, month) => monthLabel(year, month),
       fmtNumber: (n, opts) => new Intl.NumberFormat(loc.code, opts).format(n),
       fmtRelative: (d) => {
         const diff = (new Date(d).getTime() - Date.now()) / 1000;

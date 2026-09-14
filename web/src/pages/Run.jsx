@@ -4,7 +4,7 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 
 export default function Run() {
-  const { t } = useI18n();
+  const { t, fmtDateTime } = useI18n();
   const [state, setState] = useState(null);
   const [err, setErr] = useState('');
   const timer = useRef(null);
@@ -86,7 +86,7 @@ export default function Run() {
           {state.nextFire && (
             <>
               {' '}
-              · {t('nextFire')}: {new Date(state.nextFire).toLocaleString()}
+              · {t('nextFire')}: {fmtDateTime(state.nextFire)}
             </>
           )}
         </p>

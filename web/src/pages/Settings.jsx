@@ -9,7 +9,7 @@ import Collapsible from '../Collapsible.jsx';
 import { Inline } from '../markdown.jsx';
 
 export default function Settings({ onLayout }) {
-  const { t, tn, lang, weekdaysSunFirst: WEEKDAYS } = useI18n();
+  const { t, tn, lang, weekdaysSunFirst: WEEKDAYS, fmtTime, fmtDateTime } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [browsers, setBrowsers] = useState([]);
   const [presets, setPresets] = useState([]);
@@ -87,7 +87,7 @@ export default function Settings({ onLayout }) {
       setCfg(next);
       applyTheme(next.ui?.theme);
       st.saved();
-      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 4000, 'ok');
+      flash(`${t('saved')} · ${fmtTime(Date.now())}`, 4000, 'ok');
     } catch (e) {
       st.failed(e.message);
       flash(e.message, 0, 'err');
@@ -187,7 +187,7 @@ export default function Settings({ onLayout }) {
       await api.putConfig({ ...cfg, schedule: { ...cfg.schedule, tasks } });
       await loadSched();
       st.saved();
-      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 3000, 'ok');
+      flash(`${t('saved')} · ${fmtTime(Date.now())}`, 3000, 'ok');
     } catch (e) {
       st.failed(e.message);
       flash(e.message, 0, 'err');
@@ -763,14 +763,14 @@ export default function Settings({ onLayout }) {
                     />
                     {live?.nextFire && (
                       <div className="muted small">
-                        {t('nextFireAt')}: {new Date(live.nextFire).toLocaleString()}
-                        {live.lastFire ? ` · ${t('lastFire')}: ${new Date(live.lastFire).toLocaleString()}` : ''}
+                        {t('nextFireAt')}: {fmtDateTime(live.nextFire)}
+                        {live.lastFire ? ` · ${t('lastFire')}: ${fmtDateTime(live.lastFire)}` : ''}
                       </div>
                     )}
                     {live?.preview?.length ? (
                       <ul className="preview-list">
                         {live.preview.slice(0, 3).map((p, i) => (
-                          <li key={i}>{new Date(p).toLocaleString()}</li>
+                          <li key={i}>{fmtDateTime(p)}</li>
                         ))}
                       </ul>
                     ) : null}
@@ -848,7 +848,7 @@ export default function Settings({ onLayout }) {
           <ul className="muted small" style={{ paddingLeft: 18 }}>
             {sched.history.slice(0, 10).map((h, i) => (
               <li key={i}>
-                {new Date(h.at).toLocaleString()} · {h.name ?? h.taskId} · {h.mode ?? ''} {h.catchUp ? t('catchUpTag') : ''}{' '}
+                {fmtDateTime(h.at)} · {h.name ?? h.taskId} · {h.mode ?? ''} {h.catchUp ? t('catchUpTag') : ''}{' '}
                 {h.ok ? '✅' : `❌ ${h.error ?? ''}`}
                 {h.items != null ? ` · ${tn('items', h.items)}` : ''}
               </li>

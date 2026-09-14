@@ -24,7 +24,7 @@ function iso(d) {
 }
 
 export default function Search({ layout }) {
-  const { t, tn, lang } = useI18n();
+  const { t, tn, lang, fmtDate } = useI18n();
   const L = normalizeLayout(layout);
 
   const [q, setQ] = useState('');
@@ -356,7 +356,7 @@ export default function Search({ layout }) {
             <header>
               {L.showSource && <span className="chip">{it.sourceName?.[lang] ?? it.sourceId}</span>}
               {L.showTime && it.time ? <span className="muted small">{it.time}</span> : null}
-              {it.ts ? <span className="muted small">{new Date(it.ts).toLocaleDateString()}</span> : null}
+              {it.ts ? <span className="muted small">{fmtDate(it.ts)}</span> : null}
               {it.keywords?.length ? <span className="chip alert">⚠ {it.keywords.join('/')}</span> : null}
             </header>
             {it.title ? <h3>{it.title}</h3> : null}

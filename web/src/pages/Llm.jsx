@@ -23,7 +23,7 @@ const NEEDS = [
 ];
 
 export default function Llm() {
-  const { t, tn } = useI18n();
+  const { t, tn, fmtTime } = useI18n();
   const [cfg, setCfg] = useState(null);
   const [presets, setPresets] = useState([]);
   const [msg, setMsg] = useState('');
@@ -92,7 +92,7 @@ export default function Llm() {
       const next = await api.putConfig(cfg);
       setCfg(next);
       st.saved();
-      flash(`${t('saved')} · ${new Date().toLocaleTimeString()}`, 4000, 'ok');
+      flash(`${t('saved')} · ${fmtTime(Date.now())}`, 4000, 'ok');
     } catch (e) {
       st.failed(e.message);
       flash(e.message, 0, 'err');

@@ -21,6 +21,7 @@ import {
   detectFromItems,
 } from '../server/src/calendar.js';
 import { LOCALES, byCode } from '../web/src/locales/index.js';
+import { dateFormat, monthLabel } from '../web/src/locales/date-format.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -268,6 +269,94 @@ t('the page asks for the region week start instead of a constant', () => {
   assert.ok(/weekStart[,\s}]/.test(src), 'the page should take weekStart from the i18n context');
   assert.ok(/getCalendar\(\{[^}]*weekStart\b/s.test(src), 'the calendar request should carry weekStart');
   assert.ok(!/getCalendar\(\{[^}]*\? 1 : 1/s.test(src), 'the request must not send a constant week start');
+});
+
+process.stdout.write('\ncalendar: one calendar for every date on the page\n');
+
+// BUGS #79: `Intl.DateTimeFormat('th-TH')` resolves to the Buddhist calendar, so every timestamp the UI
+// formatted read 2569 while the month grid above it - built on the server from a Gregorian year and month,
+// and filled with a Gregorian month's day numbers - read 2026-09. Two elements of one page disagreed
+// about the year by 543, and the same class of mismatch was waiting for any locale whose default calendar
+// is not Gregorian.
+//
+// The repair lives in web/src/locales/date-format.js: one module decides the calendar for every date the
+// UI shows. The checks run that module directly rather than reading the provider's source, which is why
+// the decision was moved out of i18n.jsx - a source assertion cannot tell "pinned" from "pinned and then
+// not used by the formatter that renders".
+
+t('every locale the UI can render dates in is pinned to the Gregorian calendar', () => {
+  for (const loc of LOCALES) {
+    const resolved = dateFormat(loc.code).resolvedOptions();
+    assert.equal(resolved.calendar, 'gregory', `${loc.code} resolves to ${resolved.calendar}`);
+  }
+});
+
+t('a th-TH timestamp and the th-TH grid header are the same year', () => {
+  const instant = new Date('2026-09-14T00:00:00Z');
+  const rendered = dateFormat('th-TH', { dateStyle: 'medium', timeZone: 'UTC' }).format(instant);
+  assert.ok(rendered.includes('2026'), `th-TH rendered ${rendered}, which should carry the Gregorian year`);
+  assert.ok(!rendered.includes('2569'), `th-TH rendered ${rendered}, which is the Buddhist era`);
+  assert.equal(monthLabel(2026, 9), '2026-09');
+  // What the locale does keep: the month name, the order and the digits. The pin is about the era only.
+  assert.ok(rendered.includes('ก.ย.'), `th-TH rendered ${rendered}, which should still name the Thai month`);
+});
+
+t('the pin is load-bearing here, or this runtime has changed its mind', () => {
+  const unpinned = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'UTC' });
+  const calendar = unpinned.resolvedOptions().calendar;
+  if (calendar === 'gregory') {
+    // Not a failure: the pin is then a guarantee rather than a repair, and saying so is more useful than
+    // a check that cannot fail on this machine.
+    process.stdout.write('         note: this runtime resolves th-TH to gregory by default\n');
+    return;
+  }
+  const rendered = unpinned.format(new Date('2026-09-14T00:00:00Z'));
+  assert.ok(!rendered.includes('2026'), `the unpinned th-TH formatter rendered ${rendered}: ${calendar} should not show the Gregorian year`);
+});
+
+t('no page formats a date with the browser locale', () => {
+  // The other half of #79, and the half that reaches beyond Thai: `new Date(x).toLocaleString()` with no
+  // argument follows the *browser's* language and calendar, so the UI's own language setting changed
+  // nothing about its dates. Comment lines are skipped on purpose - this file and the two pages explain
+  // the bug by naming the call.
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.(jsx?|mjs)$/.test(entry.name)) continue;
+      fs.readFileSync(full, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          const code = line.trim();
+          if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+          if (/toLocale(String|DateString|TimeString)\s*\(/.test(line)) offenders.push(`${path.relative(ROOT, full)}:${i + 1}`);
+        });
+    }
+  };
+  walk(path.join(ROOT, 'web/src'));
+  assert.deepEqual(offenders, [], `these follow the browser's locale instead of the application's: ${offenders.join(', ')}`);
+});
+
+t('the grid header comes from the i18n layer rather than from hand-assembly', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'web/src/pages/Calendar.jsx'), 'utf8');
+  assert.ok(/fmtMonth\(year, month\)/.test(src), 'the header should be produced by the i18n month label');
+  assert.ok(!/\{year\}-\{String\(month\)/.test(src), 'the header must not be assembled by hand again');
+  // The destructure, not the first line that mentions the hook: the file also names useI18n() in a
+  // comment, and `find` would have settled for that one.
+  const destructure = src.split('\n').find((l) => /\}\s*=\s*useI18n\(\)/.test(l)) ?? '';
+  assert.ok(/fmtMonth/.test(destructure), 'the page should take fmtMonth from the i18n context');
+});
+
+t('the provider takes its date formatters from that module', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'web/src/i18n.jsx'), 'utf8');
+  assert.ok(/from '\.\/locales\/date-format\.js'/.test(src), 'i18n.jsx should import the date-format module');
+  assert.ok(!/new Intl\.DateTimeFormat\(loc\.code/.test(src), 'the provider must not build date formatters of its own');
+  // The weekday-name formatter is deliberately left alone: a weekday does not depend on the calendar.
+  assert.ok(/new Intl\.DateTimeFormat\(code, \{ weekday: style/.test(src), 'the weekday formatter still derives names from Intl');
 });
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);

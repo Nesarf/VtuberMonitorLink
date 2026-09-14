@@ -12,14 +12,17 @@ const EMPTY = {
   'bili-opus': { uid: '' },
 };
 
-function hsDate(iso) {
+function hsDateOf(iso, format) {
   if (!iso) return '';
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? iso : format(d);
 }
 
 export default function Watch() {
-  const { t, tn, lang } = useI18n();
+  const { t, tn, lang, fmtDateTime } = useI18n();
+  // The application's locale decides this, not the browser: a bare `toLocaleString()` follows the
+  // browser's language, which is how a Thai UI rendered English dates and vice versa (docs/BUGS.md #79).
+  const hsDate = (iso) => hsDateOf(iso, fmtDateTime);
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');

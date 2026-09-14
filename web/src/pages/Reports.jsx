@@ -7,7 +7,7 @@ import Charts from './Charts.jsx';
 import Share from './Share.jsx';
 
 export default function Reports() {
-  const { t, tn } = useI18n();
+  const { t, tn, fmtDateTime } = useI18n();
   const [list, setList] = useState(null);
   const [cur, setCur] = useState(null);
   const [content, setContent] = useState('');
@@ -164,7 +164,7 @@ export default function Reports() {
                     </button>
                   </td>
                   <td className="muted">{(r.bytes / 1024).toFixed(1)} KB</td>
-                  <td className="muted">{new Date(r.mtime).toLocaleString()}</td>
+                  <td className="muted">{fmtDateTime(r.mtime)}</td>
                   <td>
                     <a className="ghost tiny" href={api.exportUrl(r.name, 'html')}>
                       {t('exportHtml')}

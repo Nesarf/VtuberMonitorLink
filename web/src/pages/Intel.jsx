@@ -19,14 +19,19 @@ const IMAGE_KIND_ICON = {
   other: '🖼',
 };
 
-function fmtTime(t) {
-  if (!t) return '';
-  const d = new Date(t);
-  return Number.isNaN(d.getTime()) ? t : d.toLocaleString();
+function fmtTimeOf(value, format) {
+  if (!value) return '';
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : format(d);
 }
 
 export default function Intel({ layout }) {
-  const { t, tn, lang } = useI18n();
+  const { t, tn, lang, fmtDateTime } = useI18n();
+  // The formatter comes from the application's locale rather than from the browser: a bare
+  // `toLocaleString()` follows the *browser's* language, so a reader using the Thai UI in an en-US
+  // browser saw English dates while the page around them was Thai (docs/BUGS.md #79). Binding it here
+  // keeps the four call sites below unchanged.
+  const fmtTime = (value) => fmtTimeOf(value, fmtDateTime);
   const L = normalizeLayout(layout);
   const [data, setData] = useState(null);
   const [diffData, setDiffData] = useState(null);

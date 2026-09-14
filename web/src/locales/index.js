@@ -20,6 +20,10 @@
 // 3. **Regional differences are not only in the copy**: date order, first day of the week and
 //    number/currency formats all differ.
 //    Leave those to Intl + the weekStart field; do not assemble strings by hand.
+//    The **calendar** is the exception that proves it, and it is decided in one place instead:
+//    `locales/date-format.js` pins every date the UI shows to the Gregorian calendar, because
+//    `Intl.DateTimeFormat('th-TH')` defaults to the Buddhist one and the data here (a Gregorian month
+//    grid, ISO entry dates, source timestamps) is Gregorian everywhere. See docs/BUGS.md #79.
 //
 // 4. RTL languages such as Arabic drive <html dir> through dir:'rtl'.
 //

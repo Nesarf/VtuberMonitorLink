@@ -62,7 +62,7 @@ function statusOf(s) {
 }
 
 export default function Live() {
-  const { t, tn, lang } = useI18n();
+  const { t, tn, lang, fmtTime, fmtDateTime } = useI18n();
   const [data, setData] = useState(null);
   const [grid, setGrid] = useState(() => {
     try {
@@ -292,7 +292,7 @@ export default function Live() {
             <div className="hint" style={{ margin: 0 }}>
               {(data?.live ?? []).length} {t('liveNow')} · {(data?.round ?? []).length} {t('liveRound')} ·{' '}
               {(data?.off ?? []).length} {t('liveOff')} · {t('liveMonitored')} {data?.monitored ?? all.length}
-              {data?.at ? ` · ${new Date(data.at).toLocaleTimeString()}` : ''}
+              {data?.at ? ` · ${fmtTime(data.at)}` : ''}
             </div>
           </div>
         </div>
@@ -504,7 +504,7 @@ export default function Live() {
             <ul className="muted small" style={{ paddingLeft: 18 }}>
               {audit.slice(0, 10).map((a, i) => (
                 <li key={i}>
-                  {new Date(a.at).toLocaleString()} · {a.uname ?? a.mid} → {t('auditRoom')} {a.roomId} · 「{a.text}」 ·{' '}
+                  {fmtDateTime(a.at)} · {a.uname ?? a.mid} → {t('auditRoom')} {a.roomId} · 「{a.text}」 ·{' '}
                   {a.ok ? '✅' : `❌ ${a.code ?? ''} ${a.error ?? ''}`}
                 </li>
               ))}

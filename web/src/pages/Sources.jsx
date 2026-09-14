@@ -21,7 +21,7 @@ function Lat({ p, label, t }) {
 }
 
 export default function Sources() {
-  const { t, tn, lang } = useI18n();
+  const { t, tn, lang, fmtDateTime } = useI18n();
   const [data, setData] = useState(null);
   const [health, setHealth] = useState(null);
   const [advice, setAdvice] = useState([]);
@@ -233,7 +233,7 @@ export default function Sources() {
                 <a href={a.url} target="_blank" rel="noreferrer noopener">
                   {a.file}
                 </a>
-                <span className="muted small"> · {new Date(a.mtime).toLocaleString()} · {(a.bytes / 1024).toFixed(1)} KB</span>{' '}
+                <span className="muted small"> · {fmtDateTime(a.mtime)} · {(a.bytes / 1024).toFixed(1)} KB</span>{' '}
                 <button
                   className="ghost tiny danger"
                   onClick={async () => {

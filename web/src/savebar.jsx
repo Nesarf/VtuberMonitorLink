@@ -33,14 +33,14 @@ export function useSaveState() {
 }
 
 export function SaveBar({ st, onSave, busy, children }) {
-  const { t } = useI18n();
+  const { t, fmtTime } = useI18n();
   const cls =
     st.state === 'saved' ? 'ok' : st.state === 'error' ? 'err' : st.state === 'dirty' ? 'dirty' : st.state === 'saving' ? 'busy' : 'idle';
 
   let label = t('saveStateIdle');
   if (st.state === 'dirty') label = t('saveStateDirty');
   else if (st.state === 'saving') label = t('saving');
-  else if (st.state === 'saved') label = `${t('saved')} · ${st.at ? st.at.toLocaleTimeString() : ''}`;
+  else if (st.state === 'saved') label = `${t('saved')} · ${st.at ? fmtTime(st.at) : ''}`;
   else if (st.state === 'error') label = `❌ ${st.error}`;
 
   return (

@@ -21,7 +21,7 @@ const blankForm = { name: '', kind: 'birthday', date: '', since: '', note: '', r
 const blankGridForm = { name: '', kind: 'event', date: '', since: '', note: '', remindDaysBefore: 3 };
 
 export default function Calendar() {
-  const { t, weekdays, weekdaysSunFirst, weekStart, fmtDateTime } = useI18n();
+  const { t, weekdays, weekdaysSunFirst, weekStart, fmtDateTime, fmtMonth } = useI18n();
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
@@ -210,7 +210,11 @@ export default function Calendar() {
             ◀
           </button>
           <b style={{ minWidth: 120, textAlign: 'center' }}>
-            {year}-{String(month).padStart(2, '0')}
+            {/* The label comes from the i18n layer, not from `getFullYear()`: this was the element that
+                read 2026-09 while the timestamps below it read 2569 in Thai, because those went through Intl
+                and picked up the Buddhist era. locales/date-format.js now pins the calendar in one place,
+                and this label is produced by it. See docs/BUGS.md #79. */}
+            {fmtMonth(year, month)}
           </b>
           <button className="ghost tiny" onClick={nextMonth}>
             ▶

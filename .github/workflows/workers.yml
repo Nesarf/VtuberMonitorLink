@@ -75,6 +75,19 @@ jobs:
         run: |
           perl -e 'print "perl $^V on $^O\n"' 2>/dev/null || echo "perl: absent on this runner"
 
+      # The next two promotion candidates out of the machine-local overlay, asked the same way and in
+      # the same place. R is the case where the answer is genuinely open; the shell is the case where
+      # presence is certain and the *version* is the question - macOS runner images ship bash 3.2, and
+      # workers/bash/README.md says in as many words that the file has not been tested on Linux or
+      # macOS bash. That worker's own self-check is deliberately NOT run here: it belongs under the
+      # harness, which enforces a per-worker budget and kills a worker that overruns, whereas this step
+      # has no timeout of its own and a hang here would be a hung job. Versions first, verdict later.
+      - name: Do these runners have R and the shell the worker would need? (measured, not assumed)
+        shell: bash
+        run: |
+          Rscript --vanilla -e 'cat(R.version.string, "\n")' 2>/dev/null || echo "Rscript: absent on this runner"
+          bash --version 2>/dev/null | head -1 || echo "bash: absent on this runner"
+
       # The corpus is a floor, not a ceiling: this points the same diff at generated input, seeded so a
       # divergence is reproducible. It is what found the PowerShell worker rejecting every astral code
       # point, which the hand-written corpus had missed.

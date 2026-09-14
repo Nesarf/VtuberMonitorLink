@@ -472,7 +472,11 @@ Deliberately not here yet:
 - **The machine-local workers are not in the published registry.** Some implementations depend on
   interpreters or launch commands that are not portable facts - R and the POSIX shell ones today; they
   live in `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]`
-  elsewhere rather than failing. A worker that cannot start is not a worker that is wrong.
+  elsewhere rather than failing. A worker that cannot start is not a worker that is wrong. The reasons
+  are measured rather than assumed, by a probe step in the workflow that never fails: `Rscript` is on
+  neither the linux nor the macos runner image, and the `bash` there is 3.2.57 on macOS against 5.2 on
+  linux and 5.3 on Windows - 3.2 being the version the shell worker has never been tested against, in
+  its own README's words. Both stay out until a run rather than a hope says they can come in.
 - **Every capability has at least two implementations, and the text ones have eight.** `search.query` is
   implemented three times - the JavaScript reference, a Java inverted index and a SQL one - `fetch.plan`
   twice, JavaScript and Go, because concurrency and per-egress limits are what Go is here for, and

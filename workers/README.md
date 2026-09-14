@@ -75,10 +75,12 @@ these was found by an implementation disagreeing with another, not by a test the
 ## Machine-local implementations
 
 `r-text` and `bash-text` live in the overlay rather than the published registry, because neither launch
-command is a portable fact: `bash` means three different programs on the three platforms (`/bin/bash`,
-the bash that ships with Git for Windows, WSL) with three different ideas of what a path is, and
-`Rscript` is only there if somebody installed R. Both run here, where their interpreters were measured
-rather than assumed. Their entries live in
+command is a portable fact. `bash` means three different programs on the three platforms (`/bin/bash`,
+the bash that ships with Git for Windows, WSL) with three different ideas of what a path is - and the
+three CI runners measured 5.2.21, 5.3.15 and **3.2.57**, which is the version this worker has never been
+tested against. `Rscript` is a smaller question: the linux and macos runner images do not have it at all
+(measured by the workflow's own probe step, which never fails). Both run here, where their interpreters
+were measured rather than assumed. Their entries live in
 `workers/registry.local.json` (gitignored, merged over the published registry by the harness) so that the
 published registry stays portable and a run elsewhere reports them as `[skip]`. The PowerShell worker is
 **not** in that list: PowerShell 7 is present on every CI runner, so `pwsh-text` is registered in

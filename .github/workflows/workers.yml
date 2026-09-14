@@ -7,12 +7,20 @@ name: workers
 # nothing here is packaged into the release artifact yet and a red run must not be confused with a
 # red release.
 #
-# What each platform is expected to run (everything absent is reported as [skip], never as a failure):
-#   linux   - the reference (node), java (setup-java), cpp (g++), go, python3
-#   windows - the reference, java, go, python            (no g++ on the runner; cpp-text is skipped)
-#   macos   - the reference, java, cpp (clang++), go, python3 - and nobody has run this layer on
-#             macOS yet, so the job is informational until someone does: a red macOS job is data,
-#             not a broken build.
+# What each platform runs, measured rather than assumed (anything absent is a [skip], never a
+# failure). The interpreter list comes from the `--list` table each leg prints, and the versions from
+# the probe step below:
+#   linux   - the reference (node), java, cpp (g++), go, python3, pwsh, csharp (dotnet), perl 5.38,
+#             bash 5.2
+#   windows - the reference, java, cpp (g++ - this runner does have it, contrary to an earlier note
+#             here), go, python, pwsh, csharp, perl 5.42 on cygwin, bash 5.3
+#   macos   - the reference, java, cpp (clang++), go, python3, pwsh, csharp, perl 5.44, bash 3.2.57
+#   no Rscript on the linux or macos image (measured, not assumed)
+#
+# macOS was informational while nobody had run this layer there. It has since run the whole corpus and
+# the fuzzer green twice (8fd1d74, which moved the C# worker onto `dotnet <dll>`, and fb730ea), so the
+# next step is promoting it to a gating leg. That is a decision about how much flake that runner is
+# allowed to cost, not about this code, and it has deliberately not been taken here.
 on:
   push:
     branches: ['**']
@@ -85,8 +93,8 @@ jobs:
       - name: Do these runners have R and the shell the worker would need? (measured, not assumed)
         shell: bash
         run: |
-          Rscript --vanilla -e 'cat(R.version.string, "\n")' 2>/dev/null || echo "Rscript: absent on this runner"
-          bash --version 2>/dev/null | head -1 || echo "bash: absent on this runner"
+          if command -v Rscript >/dev/null 2>&1; then Rscript --version 2>&1 | head -1; else echo "Rscript: absent on this runner"; fi
+          if command -v bash >/dev/null 2>&1; then bash --version | head -1; else echo "bash: absent on this runner"; fi
 
       # The corpus is a floor, not a ceiling: this points the same diff at generated input, seeded so a
       # divergence is reproducible. It is what found the PowerShell worker rejecting every astral code

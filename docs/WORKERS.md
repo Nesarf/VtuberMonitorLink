@@ -453,9 +453,9 @@ another copy of anything:
 
 Landed: the contract, the two shared tables, the reference implementation, 158 corpus cases across six
 capabilities with a reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
-(`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, C#, Perl,
-PowerShell and SQL - nine languages in the published registry, plus R and the POSIX shell in the
-machine-local overlay described in section 1.1.
+(`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, C#, Perl, PowerShell,
+R and SQL - ten languages in the published registry, plus the POSIX shell in the machine-local overlay
+described in section 1.1.
 Editor tasks live in `.vscode/tasks.json`, and a CI job builds, diffs and fuzzes the layer on Linux and
 Windows (macOS informationally). The state of agreement is not a number to keep in this paragraph: the
 runner prints it, section 5 says how to read it, and `docs/BUGS.md` records what is currently open.
@@ -469,14 +469,19 @@ Deliberately not here yet:
   that is the strict one - a source tree carrying a worker that answers nothing, or one whose cost is a
   documented timeout, is worse than a source tree without the layer at all. Promoting it is deliberate and
   cheap; the alternative - shipping a worker layer of half-proven code to users by accident - is neither.
-- **The machine-local workers are not in the published registry.** Some implementations depend on
-  interpreters or launch commands that are not portable facts - R and the POSIX shell ones today; they
-  live in `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]`
-  elsewhere rather than failing. A worker that cannot start is not a worker that is wrong. The reasons
-  are measured rather than assumed, by a probe step in the workflow that never fails: `Rscript` is on
-  neither the linux nor the macos runner image, and the `bash` there is 3.2.57 on macOS against 5.2 on
-  linux and 5.3 on Windows - 3.2 being the version the shell worker has never been tested against, in
-  its own README's words. Both stay out until a run rather than a hope says they can come in.
+- **What the machine-local overlay is for, now that R is published too.** `workers/registry.local.json`
+  (gitignored, merged by id over the published registry) holds either a worker that should not be
+  published, or a machine-specific value for one that is - and the second use is the newer of the two.
+  `r-text` is published with a portable `Rscript` launch because the workflow's probe measured that
+  interpreter on the runners; this machine overrides that one field with the path R is installed at
+  here, because the entry itself may not carry an absolute path. The POSIX shell is the case that is
+  genuinely unpublished, for a measured reason: the macOS runner ships bash 3.2.57, and
+  `workers/bash/README.md` says in as many words that the file has never been tested on macOS or Linux
+  bash. R's own measurement is the other half of the same discipline - `Rscript` is on the Windows
+  runner (4.6.1) and on neither the linux nor the macos one, so two legs report it as `[skip]` while
+  Windows diffs it against the other eight implementations. Publishing an interpreter that is not
+  everywhere costs a skip, never a failure, and the harness says so out loud; that is what makes it
+  acceptable at all, and it is why the same reasoning rules the shell out instead of in.
 - **An HTML/CSS implementation is a considered no, not an omission.** HTML/CSS was on the list of
   languages this layer might grow into, and it is the one candidate that cannot arrive honestly here:
   section 3 specifies a state machine, not a renderer, and the Java worker's own header records why the
@@ -485,7 +490,7 @@ Deliberately not here yet:
   and would therefore agree with nobody's contract. The same test is what makes SQL a good fit for
   `search.query` - there the query *is* the implementation - and what rules HTML/CSS out of every
   capability in this layer.
-- **Every capability has at least two implementations, and the text ones have eight.** `search.query` is
+- **Every capability has at least two implementations, and the text ones have nine.** `search.query` is
   implemented three times - the JavaScript reference, a Java inverted index and a SQL one - `fetch.plan`
   twice, JavaScript and Go, because concurrency and per-egress limits are what Go is here for, and
   `llm.parse` twice, JavaScript and Python, which are the two halves of the LLM glue. Nothing on the

@@ -25,7 +25,8 @@ workers/
   perl/     vmltext.pl       Perl 5, core modules only, with its own ordered serialization
   pwsh/     vmltext.ps1      PowerShell 7, present on every CI runner
   sql/      vmlsearch.mjs    SQLite answering the search capability, behind a thin node host
-  r/ bash/                   machine-local implementations (see below)
+  r/        vmltext.R        R, base only, no packages; published, with a launch override here
+  bash/     vmltext.sh       the POSIX shell; machine-local, because macOS runners ship bash 3.2
   j/                         a documented experiment that stalled, not registered (see its README)
 ```
 
@@ -72,26 +73,33 @@ these was found by an implementation disagreeing with another, not by a test the
 | A worker that answered correctly and never flushed looked like a broken worker | the C++ implementation (stdout buffering), then stdin buffering in the same worker |
 | A machine-specific Go path and a Windows-only artifact name in published build scripts | the release-path review, before either shipped |
 
-## Machine-local implementations
+## The overlay: two uses, one file
 
-`r-text` and `bash-text` live in the overlay rather than the published registry, because neither launch
-command is a portable fact. `bash` means three different programs on the three platforms (`/bin/bash`,
-the bash that ships with Git for Windows, WSL) with three different ideas of what a path is - and the
-three CI runners measured 5.2.21, 5.3.15 and **3.2.57**, which is the version this worker has never been
-tested against. `Rscript` is a smaller question: the linux and macos runner images do not have it at all
-(measured by the workflow's own probe step, which never fails). Both run here, where their interpreters
-were measured rather than assumed. Their entries live in
-`workers/registry.local.json` (gitignored, merged over the published registry by the harness) so that the
-published registry stays portable and a run elsewhere reports them as `[skip]`. The PowerShell worker is
-**not** in that list: PowerShell 7 is present on every CI runner, so `pwsh-text` is registered in
-`registry.json` like any other, and the same is true of Java, Go, Python, node, SQLite, C# and Perl - for
-Perl the workflow measures the version on each runner rather than assuming it.
-Copy `registry.local.example.json` and fill in your own paths; never put an absolute path from your
-machine into `registry.json` — the release checks reject machine-specific paths, and a registry that
-only works on one computer is not a registry. A language whose interpreter cannot read a live pipe at all
-is a third case, handled by `"batch": true` in the same entry (contract section 1.3).
+`workers/registry.local.json` (gitignored, merged by id over the published registry) carries either a
+worker that should not be published, or a machine-specific value for one that is. The POSIX shell is the
+first kind and R is now the second:
 
-The machine-local implementations are not decoration. R agrees with everyone on `text.normalize`,
+- **`bash-text` is genuinely unpublished**, because its launch is not a portable fact. `bash` means
+  three different programs on the three platforms (`/bin/bash`, the bash that ships with Git for
+  Windows, WSL) with three different ideas of what a path is, and the three CI runners measured 5.2.21,
+  5.3.15 and **3.2.57** - the last of which is the version this worker has never been tested against.
+- **`r-text` is published, and this machine overrides one field of it.** The entry in `registry.json`
+  launches `Rscript`, which the workflow's probe measured on the runners: it is on the Windows image
+  (4.6.1) and on neither the linux nor the macos one, so two legs report the worker as `[skip]` while
+  Windows diffs it against the other eight implementations. Here, R is installed off `PATH`, and the
+  published entry may not carry an absolute path - so the overlay carries the launch and nothing else,
+  and the rest of the worker still comes from `registry.json`. That distinction is the reason an
+  override like this one is not a reason to leave a worker unpublished.
+
+The PowerShell worker is **not** in either list: PowerShell 7 is present on every CI runner, so
+`pwsh-text` is registered in `registry.json` like any other, and the same is true of Java, Go, Python,
+node, SQLite, C#, Perl and now R - for Perl and R the workflow measures the interpreters rather than
+assuming them. Copy `registry.local.example.json` and fill in your own paths; never put an absolute path
+from your machine into `registry.json`, because the release checks reject machine-specific paths and a
+registry that only works on one computer is not a registry. A language whose interpreter cannot read a
+live pipe at all is a third case, handled by `"batch": true` in the same entry (contract section 1.3).
+
+The overlay is not decoration, and R is the proof of that: it agrees with everyone on `text.normalize`,
 `text.extract` and `text.fingerprint` case for case, which took fixing a 64-bit arithmetic problem in a
 language where `integer` is 32-bit and `double` loses precision above 2^53: forming a 64-bit intermediate
 and taking its residue recomputes a correct answer as a wrong one. An earlier version of this paragraph

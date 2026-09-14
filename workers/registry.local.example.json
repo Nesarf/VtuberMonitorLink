@@ -1,6 +1,6 @@
 {
-  "_doc": "Copy to workers/registry.local.json (gitignored) on a machine where a worker's tool lives somewhere unusual, or where a worker exists that should not be published. What is here wins over workers/registry.json. Keep absolute paths OUT of the published registry: the release checks reject machine-specific paths.",
-  "_example": {
+  "_doc": "Copy to workers/registry.local.json (gitignored) on a machine where a worker's tool lives somewhere unusual, where a worker exists that should not be published, or where one *field* of a published worker needs a machine-specific value. The overlay merges by id over workers/registry.json, so an entry may carry only the fields it overrides. Keep absolute paths OUT of the published registry: the release checks reject machine-specific paths.",
+  "_example_unpublished_worker": {
     "workers": [
       {
         "id": "apl-text",
@@ -9,6 +9,15 @@
         "artifact": "workers/apl/vmltext.apl",
         "launch": ["<absolute path to this machine's interpreter>", "workers/apl/vmltext.apl"],
         "notes": "machine-local: the interpreter is installed here only"
+      }
+    ]
+  },
+  "_example_launch_override": {
+    "workers": [
+      {
+        "id": "r-text",
+        "launch": ["<absolute path to this machine's Rscript>", "--vanilla", "workers/r/vmltext.R"],
+        "notes": "launch override: r-text is published with a portable `Rscript` launch; this machine has R installed off PATH, so only the launch is overridden here"
       }
     ]
   }

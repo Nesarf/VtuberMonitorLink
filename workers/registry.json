@@ -320,6 +320,26 @@
         ]
       ],
       "notes": "Perl 5, core modules only (JSON::PP): the script is the artifact, with no build step. Published after measuring rather than assuming that the interpreter is on every runner - workers.yml asks and prints the answer on each platform, and it came back v5.38.2 on ubuntu, v5.42.3 (cygwin) on windows and v5.44.0 on darwin."
+    },
+    {
+      "id": "r-text",
+      "language": "r",
+      "capabilities": [
+        "text.normalize",
+        "text.extract",
+        "text.fingerprint"
+      ],
+      "build": [
+        "node",
+        "workers/r/build.mjs"
+      ],
+      "artifact": "workers/r/tables.generated.R",
+      "launch": [
+        "Rscript",
+        "--vanilla",
+        "workers/r/vmltext.R"
+      ],
+      "notes": "R, base only, no packages: the tables are generated into workers/r/tables.generated.R and read at run time. Published after measuring rather than assuming, by the same workflow probe that published Perl - and the measurement was not the answer Perl got: Rscript is on the windows image (4.6.1) and on neither the linux nor the macos one, so the linux and macos legs report this worker as [skip] while the windows leg diffs it against the other eight. A machine whose Rscript is not on PATH overrides this launch in the machine-local overlay, which is what that file is for; this entry deliberately carries no absolute path."
     }
   ],
   "_planned": [

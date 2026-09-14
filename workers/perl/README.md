@@ -19,9 +19,10 @@ Measured, not asserted:
 | --- | --- |
 | `node tools/workers.mjs --no-build --only perl-text --cap text.normalize` | **22/22** against the reviewed snapshot |
 | the same for `text.extract` | **31/31** |
-| the same for `text.fingerprint` | **16/16** |
-| `node tools/workers-diff.mjs --with-local --n 25 --seed 7 --cap <each>` | **25/25 generated cases unanimous across 10 implementations**, 250 repeat answers identical, no divergence |
-| `perl workers/perl/vmltext.pl --selfcheck` | **50/50**, and the same 50/50 in three consecutive runs |
+| the same for `text.fingerprint` | **22/22** (the corpus gained six cases after the bug in the next section) |
+| `node tools/workers-diff.mjs --published-only --n 150 --seed 20260101 --cap text.fingerprint` | **150/150 generated cases unanimous across 8 implementations**, 1200 repeat answers identical, no divergence - this is the command CI runs, and it is the run that found the bug |
+| `node tools/workers-diff.mjs --with-local --n 25 --seed 7 --cap <each>` | **25/25 generated cases unanimous across 10 implementations**, 250 repeat answers identical, no divergence - the same property at a smaller sample, which is all an earlier version of this table had |
+| `perl workers/perl/vmltext.pl --selfcheck` | **52/52**, and the same 52/52 in three consecutive runs |
 
 The self-check row matters as much as the corpus rows: it used to fail a *different* number of cases
 on every run, because it asked `keys %$hash` for a field order. A worker whose own test cannot agree
@@ -31,6 +32,19 @@ with itself is a worker whose next reader learns nothing from a red run.
 
 Each of these produced a plausible wrong answer first:
 
+- **`$%` inside a pattern is not two characters.** The edge-trimming class was written out by hand as
+  `qr/[]!?,.;:'"()[{}<>_\/\\|*+=~`\@#$%^&+-]+/`, and Perl read `$%` as the page-number variable, whose
+  value is `0` by default: the class silently became "punctuation, plus `0`, minus `$` and `%`". An
+  ASCII zero at the edge of a token was therefore trimmed as punctuation (`a0` hashed as `a`, and a lone
+  `0` vanished entirely), while a token of `$` or `%` was kept as a token instead of emitting nothing.
+  Nothing in the corpus had either shape, so eight implementations agreed all the way to CI, and the
+  fuzzer found it there on all three platforms at once - four divergences in `text.fingerprint` at
+  `--n 150 --seed 20260101`. The sample matters as much as the bug: the earlier local run that called
+  this clean used `--n 25`, and a smaller sample is not evidence about a larger one. The set is now one
+  list of characters built into both the string and the pattern with `quotemeta` per character, so no
+  character in it can be special by accident, and the two halves are pinned by corpus cases
+  (`edge-digit-is-not-punctuation`, `dollar-and-percent-are-punctuation`), by the four generated inputs
+  promoted into the corpus, and by two self-checks that fail if it comes back.
 - **A numeric literal has no line continuation** in this file's generated tables (that trap belongs to
   another implementation in this layer, and the same class of mistake is easy here: the shared tables
   are read at run time rather than transcribed, precisely so that they cannot drift).

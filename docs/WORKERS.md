@@ -451,7 +451,7 @@ another copy of anything:
 
 ## 8. Where this stands, and what is deliberately not here yet
 
-Landed: the contract, the two shared tables, the reference implementation, 152 corpus cases across six
+Landed: the contract, the two shared tables, the reference implementation, 158 corpus cases across six
 capabilities with a reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
 (`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, C#, Perl,
 PowerShell and SQL - nine languages in the published registry, plus R and the POSIX shell in the

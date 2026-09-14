@@ -769,12 +769,18 @@ my @CJK_RANGES = (
 
 # ASCII punctuation: the trimming set for step 1 and the "nothing but punctuation" set for step 3
 # are the same set, and it is ASCII only -- a Unicode class like \p{Punct} would trim far more.
-my $PUNCT_ONLY = q{!?,.;:'"()[]{}<>-_/\\|*+=~`\@#$\%^&};
-
-# The trimming pattern is written out in full rather than built with \Q...\E: the set contains
-# both `\` and `-`, and a class built from a quoted string is one careless edit away from either a
-# range or a broken escape, which is a silent change of meaning. `]` is first so it is a literal.
-my $PUNCT_EDGE = qr/[]!?,.;:'"()[{}<>_\/\\|*+=~`\@#$%^&+-]+/;
+#
+# One list of characters, built into both the string and the pattern, because typing the set twice is
+# exactly how this worker came to lose `$` and `%` and gain `0`: `$%` inside a pattern is not two
+# characters, it is Perl's page-number variable, whose value is 0 by default, so `@#$%^&` quietly became
+# `@#0^&`. The class then trimmed edge zeros off tokens (`a0` hashed as `a`, and a lone `0` vanished)
+# while refusing to treat `$` or `%` as punctuation - and the hand-written corpus, which contains no
+# token with an edge zero, stayed green through all of it. quotemeta per character is what makes the
+# set safe: nothing in it can be special by accident, including `-`, `]`, `^` and `\`.
+my @PUNCT_LIST = split //, '!?,.;:\'"()[]{}<>-_/\\|*+=~`@#$%^&';
+my %IS_PUNCT = map { $_ => 1 } @PUNCT_LIST;
+my $PUNCT_CHARS = join '', map {quotemeta} @PUNCT_LIST;
+my $PUNCT_EDGE = qr/[$PUNCT_CHARS]+/;
 
 sub is_cjk {
     my ($cp) = @_;
@@ -797,7 +803,7 @@ sub tokenize_token {
     my @chars = split //, $token;
     my $all_punct = 1;
     for my $c (@chars) {
-        if (index($PUNCT_ONLY, $c) < 0) { $all_punct = 0; last }
+        if (!$IS_PUNCT{$c}) { $all_punct = 0; last }
     }
     return () if $all_punct;
 
@@ -1389,7 +1395,7 @@ my @SELFCHECK_CASES = (
       { simhash => '02986de98409853c', tokens => 5, shingles => 3 } ],
     # Both fingerprint expectations below were wrong, and the worker was right. Checked three ways
     # before changing them: the reference implementation answers the same value for the same input,
-    # the corpus passes 16/16 against the reviewed snapshot with this worker in the diff, and the hash
+    # the corpus passes against the reviewed snapshot with this worker in the diff, and the hash
     # of the shingle text computed on its own equals the simhash - which is what one shingle means.
     [ 'fingerprint: runs are split by class, a CJK run of one emits the character',
       'text.fingerprint', { text => "abc\x{5DF2}def" },
@@ -1397,6 +1403,16 @@ my @SELFCHECK_CASES = (
     [ 'fingerprint: digits are tokens, a two-token text is still one shingle',
       'text.fingerprint', { text => '2434 nijisanji' },
       { simhash => '25cc4695e415c19f', tokens => 2, shingles => 1 } ],
+    # The regression for what the CI fuzzer found and the hand-written corpus could not see. `$%`
+    # inside a character class is Perl's page-number variable, so the punctuation set had quietly
+    # become "punctuation, plus 0, minus $ and %": the first case expects edge zeros to stay in the
+    # token, the second expects `$` and `%` to behave as punctuation rather than as tokens.
+    [ 'fingerprint: an edge zero is part of the token, not punctuation',
+      'text.fingerprint', { text => '0 a0 00' },
+      { simhash => 'ab97987d262795e4', tokens => 3, shingles => 1 } ],
+    [ 'fingerprint: a token that is nothing but $ or % emits nothing',
+      'text.fingerprint', { text => '$ % a0 0' },
+      { simhash => '4bda6b82f972f2e4', tokens => 2, shingles => 1 } ],
 );
 
 # The field order the contract specifies, plus the order of the keys inside every `links[]`

@@ -1,7 +1,7 @@
 {
  "capability": "text.fingerprint",
  "generatedBy": "js-text (workers/js/vmltext.js)",
- "generatedAt": "2026-09-13T19:57:34.760Z",
+ "generatedAt": "2026-09-14T00:28:58.691Z",
  "note": "Reviewed snapshot. Regenerate only on purpose, with npm run workers -- --update, and say in the commit message why it changed.",
  "cases": {
   "single-token": {
@@ -83,6 +83,36 @@
    "simhash": "4070422882fb3800",
    "tokens": 4,
    "shingles": 2
+  },
+  "fuzz-20260101-61": {
+   "simhash": "19cae59b7ff6cecd",
+   "tokens": 1,
+   "shingles": 1
+  },
+  "fuzz-20260101-98": {
+   "simhash": "800daebbc68aef64",
+   "tokens": 5,
+   "shingles": 3
+  },
+  "fuzz-20260101-121": {
+   "simhash": "560220b57258e9b5",
+   "tokens": 3,
+   "shingles": 1
+  },
+  "fuzz-20260101-127": {
+   "simhash": "45753490130ce284",
+   "tokens": 6,
+   "shingles": 4
+  },
+  "edge-digit-is-not-punctuation": {
+   "simhash": "ab97987d262795e4",
+   "tokens": 3,
+   "shingles": 1
+  },
+  "dollar-and-percent-are-punctuation": {
+   "simhash": "4bda6b82f972f2e4",
+   "tokens": 2,
+   "shingles": 1
   }
  }
 }

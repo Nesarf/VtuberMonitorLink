@@ -14,7 +14,7 @@ workers/
     latin-lower.json         shared case table  (generated, do not hand-edit)
     latin-fold.json          shared fold table  (generated, do not hand-edit)
     generate-tables.py       regenerates both from Python's unicodedata
-    cases/*.json             152 hand-written cases, the inputs
+    cases/*.json             158 hand-written cases, the inputs
     expected/*.json          the reviewed snapshot, the answers
   js/       vmltext.js       the reference implementation, and a worker like the others
   java/     vmltext.jar      JDK 17, no dependencies, tables read at run time

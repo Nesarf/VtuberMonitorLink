@@ -17,6 +17,12 @@
     { "id": "kana-and-hangul", "note": "kana and Hangul are CJK runs too", "input": { "text": "\u30c6\u30b9\u30c8 \ubc29\uc1a1 \uc548\ub155" } },
     { "id": "realistic-title", "note": "the shape of a real feed title: CJK brackets, a full-width prefix, latin words", "input": { "text": "\u30103d\u62ab\u9732\u3011\u65b0\u8863\u88c5\u304a\u62ab\u9732\u76ee live now" } },
     { "id": "long-latin-text", "note": "over 300 tokens, to catch accumulator bugs that only show on longer input", "input": { "text": "the quick brown fox jumps over the lazy dog while the diligent vtuber monitor watches every source it was told to watch and writes a dated report about everything it saw and everything it could not see because the network refused to cooperate again today" } },
-    { "id": "digits-and-symbols", "note": "digits are tokens, a lone punctuation token is not", "input": { "text": "2434 = nijisanji 10035 entries" } }
+    { "id": "digits-and-symbols", "note": "digits are tokens, a lone punctuation token is not", "input": { "text": "2434 = nijisanji 10035 entries" } },
+    {"id":"fuzz-20260101-61","note":"found by tools/workers-diff.mjs --seed 20260101 --n 150","input":{"text":"alpha!Ａ&#65;၀0\\"}},
+    {"id":"fuzz-20260101-98","note":"found by tools/workers-diff.mjs --seed 20260101 --n 150","input":{"text":"news&@-'ａ&#x;]ﬁǄnews၀0openaißgpt\"经&#x41;!openai\t\t>  openai*  ẞgptgpt၀0၀0gptstream　newsͅᵀ0"}},
+    {"id":"fuzz-20260101-121","note":"found by tools/workers-diff.mjs --seed 20260101 --n 150","input":{"text":" [ 3D\\|</news@openainewśNijisanji၀0!  ​开"}},
+    {"id":"fuzz-20260101-127","note":"found by tools/workers-diff.mjs --seed 20260101 --n 150","input":{"text":"~#.—已၀0?  —Ａ&amp\n&gt;#&#x;~[&#;beta၂8ﾞ\ndebutཷ经,ꭰ"}},
+    {"id":"edge-digit-is-not-punctuation","note":"a lone zero, a zero at the edge of a token and a run of zeros are all part of the token: only the ASCII punctuation set trims","input":{"text":"0 a0 00"}},
+    {"id":"dollar-and-percent-are-punctuation","note":"a token that is nothing but $ or % emits nothing - both are punctuation, and both are special inside a Perl character class","input":{"text":"$ % a0 0"}}
   ]
 }

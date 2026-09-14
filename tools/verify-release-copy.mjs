@@ -66,26 +66,51 @@ walk(SRC, (full, name) => {
 });
 check('no machine-local overlay or scratch names', strayOverlay.length === 0, strayOverlay.length ? strayOverlay.slice(0, 3).join('; ') : 'clean');
 
-// 3. The last source-level fix must be inside the copy, and the packaged UI must be newer than it.
-//    Both files are read from the *repository*, because a copy's mtimes are copy times and would make
-//    this comparison meaningless.
+// 3. The last source-level fix must be inside the copy, and the packaged bundle must actually carry it.
+//
+//    The content check is the one that decides, because it asks the question that matters: is the fix in
+//    the artifact? The mtime comparison is printed but does not fail, and the reason is a lesson from
+//    this check's own first run: writing a file back unchanged - a control experiment restoring what it
+//    planted - makes a source file look newer than a bundle that already contains it, so a hard mtime
+//    gate cries wolf. Content cannot.
 const FIX_FILE = path.join('web', 'src', 'pages', 'Calendar.jsx');
 const copiedFix = path.join(SRC, FIX_FILE);
 const repoFix = path.join(ROOT, FIX_FILE);
 if (fs.existsSync(copiedFix) && fs.existsSync(repoFix)) {
   const text = fs.readFileSync(copiedFix, 'utf8');
   check('the calendar fix is in the copy', /weekStart/.test(text) && /useI18n/.test(text), FIX_FILE);
-  const newestBuilt = fs.existsSync(BUILT)
-    ? fs.readdirSync(BUILT, { withFileTypes: true, recursive: true })
-        .filter((e) => e.isFile())
-        .map((e) => fs.statSync(path.join(e.parentPath ?? BUILT, e.name)).mtimeMs)
-        .sort((a, b) => b - a)[0] ?? 0
-    : 0;
-  const fixTime = fs.statSync(repoFix).mtimeMs;
+
+  // The calendar decision, compiled into whatever the build produced: `calendar: 'gregory'` survives
+  // minification because it is a string value, so its absence means the bundle predates the fix.
+  const bundles = fs.existsSync(BUILT)
+    ? fs.readdirSync(BUILT, { withFileTypes: true, recursive: true }).filter((e) => e.isFile() && /\.js$/.test(e.name))
+    : [];
+  const withPin = bundles.filter((e) => fs.readFileSync(path.join(e.parentPath ?? BUILT, e.name), 'utf8').includes('gregory'));
   check(
-    'packaged UI is newer than that fix',
-    newestBuilt > 0 && newestBuilt >= fixTime,
-    newestBuilt ? `${new Date(newestBuilt).toISOString()} vs fix ${new Date(fixTime).toISOString()}` : `no build output at ${BUILT}`,
+    'the packaged bundle carries the calendar decision',
+    withPin.length > 0,
+    withPin.length ? `${withPin.map((e) => e.name).join(', ')} contains "gregory"` : `no .js under ${BUILT} contains it`,
+  );
+
+  const newestBuilt = bundles.length
+    ? Math.max(...bundles.map((e) => fs.statSync(path.join(e.parentPath ?? BUILT, e.name)).mtimeMs))
+    : 0;
+  const newestSource = (() => {
+    let newest = 0;
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(jsx?|css|html)$/.test(entry.name)) newest = Math.max(newest, fs.statSync(full).mtimeMs);
+      }
+    };
+    walk(path.join(ROOT, 'web', 'src'));
+    return newest;
+  })();
+  info(
+    newestBuilt >= newestSource
+      ? `bundle ${new Date(newestBuilt).toISOString()} is newer than the newest web/src file (${new Date(newestSource).toISOString()})`
+      : `note: the newest web/src file is newer than the bundle (${new Date(newestSource).toISOString()} vs ${new Date(newestBuilt).toISOString()}) - rebuilding the UI would settle it, and a file written back unchanged also lands here`,
   );
 } else {
   check('the calendar fix is in the copy', false, `${FIX_FILE} missing on one side (copy: ${fs.existsSync(copiedFix)}, repo: ${fs.existsSync(repoFix)})`);

@@ -359,6 +359,36 @@ t('the provider takes its date formatters from that module', () => {
   assert.ok(/new Intl\.DateTimeFormat\(code, \{ weekday: style/.test(src), 'the weekday formatter still derives names from Intl');
 });
 
+t('no component builds a date formatter of its own', () => {
+  // The pin only holds while every formatter comes from the module that carries it. A component that
+  // reaches for Intl directly is the same bug in a new place, and it is invisible to the check above
+  // because it never mentions the browser locale - it mentions Intl, with whatever calendar the runtime
+  // resolves for that tag.
+  const allowed = new Set([path.join('web', 'src', 'locales', 'date-format.js'), path.join('web', 'src', 'i18n.jsx')]);
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.(jsx?|mjs)$/.test(entry.name)) continue;
+      const rel = path.relative(ROOT, full);
+      if (allowed.has(rel)) continue;
+      fs.readFileSync(full, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          const code = line.trim();
+          if (code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return;
+          if (/new Intl\.DateTimeFormat\(/.test(line)) offenders.push(`${rel}:${i + 1}`);
+        });
+    }
+  };
+  walk(path.join(ROOT, 'web/src'));
+  assert.deepEqual(offenders, [], `these build their own date formatter, bypassing the calendar pin: ${offenders.join(', ')}`);
+});
+
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);
 if (fail) {
   process.stdout.write('  ' + fail + ' FAILED\n');

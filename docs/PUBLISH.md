@@ -91,10 +91,12 @@ npm run verify:release-copy -- --root ../VML-release   # does that copy actually
 The last two are the release *directory* rather than the repository, and they answer different
 questions: `make-release` builds and copies, the project's own scanner runs inside it and reports on
 content, and `verify-release-copy` then checks correspondence - that the development-only worker layer
-and the machine-local overlay are absent, that the last source fix is inside the copy and inside a
-packaged UI built after it, that the README's locale count agrees with the registry in the copy, and
-that the zip still hashes to the value its own `SHA256SUMS.txt` records. A scan cannot tell you any of
-those, because none of them is about the text of a file.
+and the machine-local overlay are absent, that the last source fix is inside the copy *and inside the
+packaged bundle* (checked by looking for the fix's own constant in the built JavaScript, because a
+timestamp comparison cannot tell a fresh build from a file that was written back unchanged), that the
+README's locale count agrees with the registry in the copy, and that the zip still hashes to the value
+its own `SHA256SUMS.txt` records. A scan cannot tell you any of those, because none of them is about the
+text of a file in the way a scan means it.
 
 `npm run verify:fast` already gates the first two of those (`vml-brand`, `english-logic`) together
 with the proofread pass for every shipped locale, so "it builds" and "naming/language/proofread have not

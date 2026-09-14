@@ -108,7 +108,7 @@ the corpus's accents come from.
    Where they differ: for a removed element with a `>` inside a quoted attribute value
    (`<style data-x="a>b">y</style>`), the reference's `[^>]*` stops the opening tag at the `a>` and
    leaves `b">y` as text, while this scanner finds the real end of the tag and removes the element.
-   This is the browser's answer, it agrees with the other eight implementations' *intent*, and the
+   This is the browser's answer, it agrees with every other implementation's *intent*, and the
    corpus contains no such document — but it is a divergence from the reference implementation, so it
    is written down rather than left to be discovered.
 3. **The punctuation set of section 4 is transcribed by hand.** `PUNCT_ONLY` is copied from

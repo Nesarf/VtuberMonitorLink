@@ -453,7 +453,9 @@ another copy of anything:
 
 Landed: the contract, the two shared tables, the reference implementation, 152 corpus cases across six
 capabilities with a reviewed snapshot, the conformance runner (`npm run workers`), the differential fuzzer
-(`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, PowerShell and SQL.
+(`npm run workers:diff`), and implementations in JavaScript, Java, C++, Go, Python, C#, Perl,
+PowerShell and SQL - nine languages in the published registry, plus R and the POSIX shell in the
+machine-local overlay described in section 1.1.
 Editor tasks live in `.vscode/tasks.json`, and a CI job builds, diffs and fuzzes the layer on Linux and
 Windows (macOS informationally). The state of agreement is not a number to keep in this paragraph: the
 runner prints it, section 5 says how to read it, and `docs/BUGS.md` records what is currently open.
@@ -466,15 +468,17 @@ Deliberately not here yet:
   requirement it was built under was "prove it in the development tree first", and the honest reading of
   that is the strict one - a source tree carrying a worker that answers nothing, or one whose cost is a
   documented timeout, is worse than a source tree without the layer at all. Promoting it is deliberate and
-  cheap; the alternative, shipping eight languages of half-proven code to users by accident, is neither.
+  cheap; the alternative - shipping a worker layer of half-proven code to users by accident - is neither.
 - **The machine-local workers are not in the published registry.** Some implementations depend on
-  interpreters that not every machine has - R, J and the POSIX shell ones today; they live in
-  `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]` elsewhere
-  rather than failing. A worker that cannot start is not a worker that is wrong.
-- **`search.query` is implemented by three workers now** - the JavaScript reference, a Java inverted
-  index and a SQL one - and `fetch.plan` is specified in section 10 with a JavaScript reference and a Go
-  implementation on the way, because concurrency and per-egress limits are what Go is here for. What is
-  left after that is the LLM/vision glue (Python).
+  interpreters or launch commands that are not portable facts - R and the POSIX shell ones today; they
+  live in `workers/registry.local.json`, which is gitignored, and the harness reports them as `[skip]`
+  elsewhere rather than failing. A worker that cannot start is not a worker that is wrong.
+- **Every capability has at least two implementations, and the text ones have eight.** `search.query` is
+  implemented three times - the JavaScript reference, a Java inverted index and a SQL one - `fetch.plan`
+  twice, JavaScript and Go, because concurrency and per-egress limits are what Go is here for, and
+  `llm.parse` twice, JavaScript and Python, which are the two halves of the LLM glue. Nothing on the
+  capability list is specified-but-unimplemented any more; what remains specified and unwritten is listed
+  under open items below.
 - **No float-scored capability.** Scores across languages are a precision trap, so anything that ranks
   will specify integer arithmetic or an explicit tolerance, and the choice will be written down here
   before the first implementation of it exists.
@@ -494,9 +498,10 @@ Deliberately not here yet:
   - which is the argument for having one.
 - **The J worker is a documented experiment, not an implementation.** It cannot read a live pipe at all
   (section 1.3), its request reader currently answers `unsupported: unknown op null` to every request, and
-  two of its twenty-one self-checks pass. It stays machine-local, so it can never make the published set
-  look broken, and it is not one of the implementations this layer counts on - the batch mode in section
-  1.3 is the durable result of having tried, and it is worth more than the worker.
+  two of its twenty-one self-checks pass. It is not registered anywhere, published or machine-local, so it
+  can never make the published set look broken, and it is not one of the implementations this layer counts
+  on - the batch mode in section 1.3 is the durable result of having tried, and it is worth more than the
+  worker.
 - **Text written without word spaces is one token.** Measured on Thai: a whole sentence normalizes to one
   token and one shingle, so a two-word query matches nothing unless the query is the entire sentence, and
   the shingle-based near-duplicate detection cannot fire - two versions of the same announcement differing
@@ -510,13 +515,13 @@ Deliberately not here yet:
   `>` (`<script src="a>b">`) is mis-scanned and the whole element may not be removed; the main tag
   scanner *is* quote-aware, so this is an inconsistency between two passes of the same function. No
   corpus case covers it, and it is recorded here rather than fixed because fixing it means changing
-  six implementations for a malformed-input edge — the honest sequence is to pin it first, then fix
-  it, and nobody has needed it yet. The corpus is a
+  every implementation of `text.extract` for a malformed-input edge — the honest sequence is to pin it
+  first, then fix it, and nobody has needed it yet. The corpus is a
   floor, not a ceiling: two of the four bugs the reference had were found by an implementation
   diffing itself against the reference over inputs the corpus did not contain, which is the strongest
   argument yet for keeping more than one implementation around.
 
-## 9. Next capability, specified before it exists: `search.query`
+## 9. Capability: `search.query` (specified before it existed)
 
 Written down first on purpose. A ranked capability is the one place where four languages can quietly
 disagree forever: a floating-point score computed in a different order is a different number, and
@@ -602,17 +607,17 @@ Output:
 - Both facet objects are emitted with keys sorted ascending by UTF-8 bytes, so an unordered map cannot
   leak into the answer. The same rule applies to `hits`: it is an array, so it cannot.
 
-Planned implementations, in the order they will be attempted: the JavaScript scan (the reference, and
-the project's own `server/src/search.js` semantics adapted to this shape), the **Java inverted index**
-(which is what a JVM brings to this problem), SQLite through `node:sqlite` as the **SQL** implementation (the SQL
-language, not a library: the query *is* the implementation), and then whichever of C++, Go or Python
-wants a turn. When two of them agree on a corpus with no floats and a total ordering, the agreement
-means something.
+Implementations, in the order they were attempted: the JavaScript scan (the reference, and the project's
+own `server/src/search.js` semantics adapted to this shape), the **Java inverted index** (which is what a
+JVM brings to this problem), and SQLite through `node:sqlite` as the **SQL** implementation (the SQL
+language, not a library: the query *is* the implementation). Three implementations of a capability with no
+floats and a total ordering is a diff that means something; a fourth - C++, Go or Python - is welcome and
+has a slot.
 
-## 10. Next capability, specified before it exists: `fetch.plan`
+## 10. Capability: `fetch.plan` (specified before it existed)
 
-The fourth capability, and the first one that is about *when* rather than *what*. It is written down
-before an implementation exists for the same reason section 9 was: a scheduler is a pile of rules that
+The fourth capability, and the first one that is about *when* rather than *what*. It was written down
+before an implementation existed, for the same reason section 9 was: a scheduler is a pile of rules that
 each look obvious alone and produce different answers in different languages.
 
 Only the **planning** is in this capability - deciding which sources to fetch now, on which egress, in
@@ -691,11 +696,12 @@ Rules, in the order they are applied:
    merged nor rejected.
 
 Determinism: no clock is read (`now` is an input), no randomness, no floats, and every list has a
-specified order. That is what makes a scheduler comparable across languages at all - and Go is the
-first implementation planned for it, because concurrency and scheduling are what Go is for in this
-project, with the JavaScript reference alongside it so the corpus has something to diff against.
+specified order. That is what makes a scheduler comparable across languages at all - and it is why Go
+carries the second implementation of it, because concurrency and scheduling are what Go is for in this
+project, with the JavaScript reference alongside it so the corpus has something to diff against rather
+than something to trust.
 
-## 11. Next capability, specified before it exists: `llm.parse`
+## 11. Capability: `llm.parse` (specified before it existed)
 
 The LLM and vision glue the project planned for Python is two problems wearing one name: **asking** a
 model (HTTP, retries, a key, a budget) and **believing** what it answered. Only the second one is a
@@ -801,6 +807,6 @@ Determinism: no clock, no randomness, no network, no floats, and every list has 
 model call is the application's business; this is the part where two languages can be compared, and
 where a wrong answer is a wrong tag in the user's face.
 
-The first implementation of it is planned for **Python**, because that is the half of the project the
-LLM glue was planned in - with the JavaScript reference beside it, as with every other capability, so
-the corpus has something to diff against rather than something to trust.
+**Python** carries the second implementation of it, because that is the half of the project the LLM glue
+was written in - with the JavaScript reference beside it, as with every other capability, so the corpus
+has something to diff against rather than something to trust.

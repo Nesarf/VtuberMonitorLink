@@ -63,10 +63,10 @@ machine-specific path belongs, and it is never copied into `workers/registry.jso
   "launch": ["<absolute path to this machine's Rscript>", "--vanilla", "workers/r/vmltext.R"] }
 ```
 
-Conformance (this machine, all six implementations):
+Conformance (this machine, every implementation it has — ten for the text capabilities today):
 
 ```
-node tools/workers.mjs                     # js, java, cpp, go, python, r
+node tools/workers.mjs                     # every registered worker, published and machine-local
 node tools/workers.mjs --only r-text       # this worker alone
 ```
 
@@ -196,17 +196,19 @@ output instead of producing invalid UTF-8.
 
 * `node workers/r/build.mjs` → tables written, `31/31 checks passed`, artifact path last.
 * `Rscript workers/r/vmltext.R --selfcheck` → 31/31, exit 0, no protocol traffic on stdout.
-* `node tools/workers.mjs --only r-text --no-build` → 31/31 extract, 16/16 fingerprint, 20/20
+* `node tools/workers.mjs --only r-text --no-build` → 31/31 extract, 16/16 fingerprint, 22/22
   normalize, no DIVERGES.
-* `node tools/workers.mjs` (all six implementations, 67 cases) → **every capability unanimous**:
-  31/31, 16/16 and 20/20 across js-text, java-text, cpp-text, go-text, python-text and r-text, exit
-  0, no `DIVERGES`, no `ORDER` and no `SNAPSHOT` lines. (An earlier run of the same command had one
-  disagreement, `cdata-inside-removed-element`, where `r-text` sat with js/java/cpp/python and
-  `go-text` was the outlier; that worker has since been fixed.)
+* `node tools/workers.mjs --no-build` (every implementation this machine has - ten of them for the text
+  capabilities) → **every capability unanimous**: 31/31, 16/16 and 22/22 across js-text, java-text,
+  cpp-text, go-text, python-text, pwsh-text, csharp-text, perl-text, r-text and bash-text, exit 0, no
+  `DIVERGES`, no `ORDER` and no `SNAPSHOT` lines. When this file was written the same run covered six
+  implementations and 67 cases, and had one disagreement, `cdata-inside-removed-element`, where `r-text`
+  sat with js/java/cpp/python and `go-text` was the outlier; that worker has since been fixed, and the
+  numbers above are the ones the run prints today.
 * Determinism and locale independence, checked by re-running each capability twice and once with
   `LC_ALL=C`: the raw response bytes are identical in all three runs for all three capabilities, and
   every stdout line parses as JSON — 21, 32 and 17 protocol lines for normalize, extract and
-  fingerprint.
+  fingerprint as the corpus stood when that was measured.
 * Argument handling: no arguments, an unknown argument, an unknown capability and a valueless
   `--capability` all exit 2 with an English message on stderr and nothing on stdout. A `shutdown`
   request is answered with `{"id":9,"ok":true}` and exits 0; an `invoke` naming a capability this

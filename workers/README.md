@@ -1,9 +1,10 @@
 # workers — one capability, several languages
 
-This directory holds the project's multilingual layer: the same three text capabilities implemented
-in several languages, driven through one corpus, and **diffed against each other** rather than against
-a single authority. The contract is [`../docs/WORKERS.md`](../docs/WORKERS.md) — read that first; this
-file is the map.
+This directory holds the project's multilingual layer: the same six capabilities implemented
+in several languages — the three text ones in every implementation, the other three in the languages
+with something to say about them — driven through one corpus, and **diffed against each other** rather
+than against a single authority. The contract is [`../docs/WORKERS.md`](../docs/WORKERS.md) — read that
+first; this file is the map.
 
 ```
 workers/
@@ -13,14 +14,19 @@ workers/
     latin-lower.json         shared case table  (generated, do not hand-edit)
     latin-fold.json          shared fold table  (generated, do not hand-edit)
     generate-tables.py       regenerates both from Python's unicodedata
-    cases/*.json             65 hand-written cases, the inputs
+    cases/*.json             152 hand-written cases, the inputs
     expected/*.json          the reviewed snapshot, the answers
   js/       vmltext.js       the reference implementation, and a worker like the others
   java/     vmltext.jar      JDK 17, no dependencies, tables read at run time
   cpp/      vmltext          C++17, no dependencies, tables embedded at build time
   go/       vmltext          Go, standard library only
   python/   vmltext.py       Python 3, standard library only
-  r/ j/ pwsh/ bash/          machine-local implementations (see below)
+  csharp/   vmltext.dll      C# / .NET, built by the SDK and launched through the dotnet host
+  perl/     vmltext.pl       Perl 5, core modules only, with its own ordered serialization
+  pwsh/     vmltext.ps1      PowerShell 7, present on every CI runner
+  sql/      vmlsearch.mjs    SQLite answering the search capability, behind a thin node host
+  r/ bash/                   machine-local implementations (see below)
+  j/                         a documented experiment that stalled, not registered (see its README)
 ```
 
 ## Running it
@@ -68,11 +74,16 @@ these was found by an implementation disagreeing with another, not by a test the
 
 ## Machine-local implementations
 
-`r-text`, `j-text` and `bash-text` need interpreters that not every machine has. Their entries live in
+`r-text` and `bash-text` live in the overlay rather than the published registry, because neither launch
+command is a portable fact: `bash` means three different programs on the three platforms (`/bin/bash`,
+the bash that ships with Git for Windows, WSL) with three different ideas of what a path is, and
+`Rscript` is only there if somebody installed R. Both run here, where their interpreters were measured
+rather than assumed. Their entries live in
 `workers/registry.local.json` (gitignored, merged over the published registry by the harness) so that the
 published registry stays portable and a run elsewhere reports them as `[skip]`. The PowerShell worker is
 **not** in that list: PowerShell 7 is present on every CI runner, so `pwsh-text` is registered in
-`registry.json` like any other, and the same is true of Java, Go, Python, node and SQLite.
+`registry.json` like any other, and the same is true of Java, Go, Python, node, SQLite, C# and Perl - for
+Perl the workflow measures the version on each runner rather than assuming it.
 Copy `registry.local.example.json` and fill in your own paths; never put an absolute path from your
 machine into `registry.json` — the release checks reject machine-specific paths, and a registry that
 only works on one computer is not a registry. A language whose interpreter cannot read a live pipe at all

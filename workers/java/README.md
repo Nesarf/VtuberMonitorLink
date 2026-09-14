@@ -136,9 +136,9 @@ sources; the descriptor declares `"deterministic": true`.
 ## Tests
 
 * `--selfcheck` runs the shipped corpus (`workers/spec/cases/*.json`) against the reviewed snapshot
-  (`workers/spec/expected/*.json`) — 65 cases — plus sixteen built-in checks for the contract's stated
-  edge rules, the JSON codec and the protocol envelopes. All 65 corpus cases and all 76 checks pass.
-* `node tools/workers.mjs --only java-text` agrees with the corpus and the snapshot on all 65 cases.
+  (`workers/spec/expected/*.json`) — 69 cases, the three text capabilities — plus eleven built-in checks
+  for the contract's stated edge rules, the JSON codec and the protocol envelopes. All 80 checks pass.
+* `node tools/workers.mjs --only java-text` agrees with the corpus and the snapshot on all 69 cases.
 * `node workers/java/tools/compare-reference.mjs` runs 101 inputs through both this worker (piped
   through the real protocol on stdin/stdout, one process per capability) and the JavaScript
   reference, and checks seven protocol edges. Result: 101/101 byte-identical, 7/7 edges as specified.
@@ -486,8 +486,9 @@ that rule in another, and a differential run is what finds the difference.
    says so outright, the code decides the field with `Term.matchesTag`, and the corpus is the reason
    the two answers could not stay conflated: the wrong one matched one document too many and also
    inflated the tag facet.
-6. **A directory-level inconsistency, not a worker one.** Section 8 says the next capability after the
-   text ones is `search.query`, while the planned list in the same document calls it section 10 and
-   the normative text is section 9. Nothing depends on the number; noted because it is exactly the
-   kind of cross-reference that costs a reader time.
+6. **A directory-level inconsistency, not a worker one.** When this worker was written, section 8 called
+   the next capability after the text ones `search.query` while its planned list pointed at section 10,
+   and the normative text was section 9. The cross-reference has since been repaired - the sections now
+   carry the names they landed with - and it is kept here because it is exactly the kind of drift that
+   costs a reader time, and because this note was the thing that found it.
 

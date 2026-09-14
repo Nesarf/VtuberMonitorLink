@@ -123,9 +123,10 @@ differences it had reported — CDATA re-parsing, unclosed CDATA, `<p` at end of
 inside an `<a>` — were fixed in the reference and pinned in the corpus.
 
 **Seeded fuzz differential (`tools/workers-diff.mjs --n 60 --cap text.extract`)**: seeds 7, 11 and 23
-all report **60/60 generated cases unanimous across six implementations** and "no divergence found",
-with 360 repeat answers per seed identical when the same questions are asked again in the opposite
-order.
+all report **60/60 generated cases unanimous** across the six implementations the registry had when that
+run was made, and "no divergence found", with 360 repeat answers per seed identical when the same
+questions are asked again in the opposite order. The number of implementations is the part of that line
+that moves with the registry; run the command to see today's.
 
 Getting there required fixing three real defects in this worker that the hand-written corpus could not
 see, all of them in `text.extract`:
@@ -311,13 +312,14 @@ on Windows and on Linux.
 - `node workers/python/build-llm.mjs` → prints the interpreter, the self-check summary and
   `workers/python/vmlllm.py` as its last stdout line, exit 0 (with forward slashes, so the line is the
   same on every platform).
-- `node tools/workers.mjs --published-only` → `llm.parse 34/34 cases unanimous across 2
+- `node tools/workers.mjs --published-only` → `llm.parse 36/36 cases unanimous across 2
   implementation(s)` (`js-llm`, `python-llm`); the whole published run ends `all implementations
-  agree`, exit 0. The narrower `--only python-llm` run prints the same `34/34` line but **exits 1**:
-  `--only` filters the JavaScript reference out of the run, and the runner's closing check — "every
-  capability has a JavaScript implementation that answered" — then correctly reports `reference :
-  MISSING for …` for all six capabilities. That is the check doing its job, not a verdict on this
-  worker; the unfiltered run above is the one that decides.
+  agree`, exit 0. The narrower `--only python-llm` run prints the same `36/36` line for `llm.parse`,
+  `[skip] no implementation available` for the other five capabilities, and exits 0: `--only` takes the
+  JavaScript reference out of the run, so the runner prints `reference : not checked (--only …)` rather
+  than the closing check it cannot honestly make. (An earlier version of this file described that run
+  exiting 1 with `reference : MISSING for …`; the runner has since learned to say "not checked" out loud
+  instead of turning a narrowed run into a verdict.)
 - `node tools/workers-diff.mjs --cap llm.parse --n 200 --seed 7`, `--seed 11` and `--n 600 --seed 3`
   → `200/200`, `200/200` and `600/600 generated cases unanimous across 2 implementations`, with
   `400`, `400` and `1200 repeat answer(s) identical when asked again in the opposite order`, and

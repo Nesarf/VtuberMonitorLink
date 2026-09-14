@@ -22,7 +22,7 @@ stopped being the SQL entry.
 # from the repository root
 node workers/sql/vmlsearch.mjs --capability search.query   # stdio JSON-Lines protocol
 node workers/sql/vmlsearch.mjs --selfcheck                 # 23 built-in cases, no protocol traffic
-node workers/sql/selfdiff.mjs                              # 456 inputs vs the JS reference (not part of the protocol)
+node workers/sql/selfdiff.mjs                              # 461 inputs vs the JS reference (not part of the protocol)
 node tools/workers.mjs --no-build --cap search.query       # the corpus against every search worker
 ```
 
@@ -276,43 +276,46 @@ node:sqlite available, SQLite 3.53.4
 $ node workers/sql/vmlsearch.mjs --selfcheck
 23/23 checks passed                        # exit 0; the 23 case lines and the summary go to stderr
 
-$ node workers/sql/selfdiff.mjs            # 16 corpus inputs + 440 generated and hand-written ones
-differential: 456/456 identical
+$ node workers/sql/selfdiff.mjs            # 21 corpus inputs + 440 generated and hand-written ones
+differential: 461/461 identical
 
-$ node tools/workers.mjs --no-build --cap search.query     # with a temporary registry.local.json entry
-  overlay    : workers/registry.local.json (2 machine-local entries)
+$ node tools/workers.mjs --published-only --cap search.query --no-build
+  overlay    : ignored (--published-only): this is the state of the published registry
 workers: multilingual conformance run
   repository : <the checkout directory>
-  corpus     : search.query(16)
-  workers    : js-text, js-search, java-text, cpp-text, go-text, python-text, pwsh-text, r-text, sql-search
+  corpus     : search.query(21)
+  workers    : js-text, js-search, js-llm, js-fetch, java-text, cpp-text, go-text, go-fetch,
+               python-text, python-llm, pwsh-text, java-search, sql-search, csharp-text, perl-text
 
-== search.query  (16 cases x 2 implementation(s): js-search, sql-search)
-   agreement  : 16/16 cases unanimous across 2 answering implementation(s)
-   note       : js-search produced no usable answer for 1/16 case(s) (and said nothing on stderr)
-   note       : sql-search produced no usable answer for 1/16 case(s) (and said nothing on stderr)
+== search.query  (21 cases x 3 implementation(s): js-search, java-search, sql-search)
+   agreement  : 21/21 cases unanimous across 3 answering implementation(s)
+   mismatch   : every implementation refuses a capability it was not launched for (3 asked)
 
 == summary
-   search.query       16/16 unanimous, 2 implementation(s)
+   search.query       21/21 unanimous, 3 implementation(s)
+   reference : every capability has a JavaScript implementation that answered
+   contract   : 1 capability, each named in the contract and each with a reviewed snapshot
    all implementations agree
-   reference: js-text (present)
 ```
 
-No `DIVERGES`, `ORDER` or `SNAPSHOT` line names `sql-search`. The "no usable answer for 1/16" notes are
-both implementations refusing `negative-limit-is-bad-input` with `ok: false, code: bad-input`, which is
-the contract's answer for that case and is compared by code (the notes are the harness counting
-`ok: false` as "no usable answer", not a failure — the case itself is unanimous).
+No `DIVERGES`, `ORDER` or `SNAPSHOT` line names `sql-search`. An earlier version of this run carried two
+"no usable answer for 1/16" notes, which were both implementations refusing `negative-limit-is-bad-input`
+with `ok: false, code: bad-input`, which is the contract's answer for that case and is compared by code
+(the notes were the harness counting `ok: false` as "no usable answer", not a failure — the case itself
+was unanimous). The current transcript has no notes at all.
 
-The registry entry used for that run was added to the machine-local, gitignored
-`workers/registry.local.json` and **restored immediately afterwards**; the file is back to its single
-`r-text` entry.
+The registry entry used for that first run was added to the machine-local, gitignored
+`workers/registry.local.json` and **restored immediately afterwards**; the SQL worker is published in
+`registry.json` now, and the overlay is back to its own two entries (`r-text` and `bash-text`).
 
 Also verified: an unparsable request line answers `{"id":null,"ok":false,…}` and the worker stays
 alive; an `invoke` for another capability answers `unsupported`; an unknown `op` answers `unsupported`;
 `shutdown` answers the bare envelope and nothing else, exit 0; three bad command lines exit 2 with
 stdout empty; the protocol stream is LF-only (2 responses out of a 2-request session, 0 `CR` bytes);
-`--selfcheck` writes nothing at all to stdout (0 bytes); and the whole 16-case corpus pipelined as 18
-request lines through three fresh processes produces byte-identical output each time (18 responses,
-2908 characters, one distinct SHA-256 over the three runs).
+`--selfcheck` writes nothing at all to stdout (0 bytes); and the corpus as it stood when that was
+measured (16 cases) pipelined as 18 request lines through three fresh processes produces byte-identical
+output each time (18 responses, 2908 characters, one distinct SHA-256 over the three runs). The same
+property over today's 21-case corpus is what the conformance run above checks far more cheaply.
 
 ## Known limits
 

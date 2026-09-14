@@ -57,6 +57,7 @@
     "traverse": "node tools/traverse-release.cjs",
     "traverse:ui": "node tools/traverse-ui.cjs",
     "release": "node tools/i18n-hant.mjs && node tools/build-portable.cjs && node tools/verify-release.cjs && node tools/traverse-release.cjs && node tools/traverse-ui.cjs",
+    "verify:release-copy": "node tools/verify-release-copy.mjs",
     "test:groups": "node tools/groups-test.mjs",
     "test:dormant": "node tools/dormant-test.mjs",
     "test:cost": "node tools/cost-test.mjs",

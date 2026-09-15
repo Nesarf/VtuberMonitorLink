@@ -5,6 +5,7 @@
 //   personal directories, user names, cookies, API keys, a particular proxy port, a particular machine path.
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -82,6 +83,39 @@ function walk(dir, out = []) {
 }
 
 const files = walk(ROOT);
+
+/**
+ * Everything git ignores is announced and **not scanned**.
+ *
+ * Why this is a rule rather than a convenience: the release copy carries what git tracks, so the content of a
+ * gitignored file cannot reach anyone - yet the scan reported it as a finding, and no one running the check can
+ * act on it. `config.json` holds a live API key by definition and `vdb/` holds a roster fetched from the
+ * network; both are ignored, both were reported, and the check therefore could never be clean on a working
+ * machine. A gate that can never be clean is a gate people learn to skim, which is exactly how a real leak
+ * rides along. The presence is still said out loud - "there is machine-local data here" is worth knowing before
+ * publishing - it is only the *content* that stops being a finding.
+ */
+function ignoredByGit(paths) {
+  if (!paths.length) return new Set();
+  try {
+    // `-z` on both sides, and that is not decoration: without it git quotes any path containing a backslash and
+    // prints it C-style (`"E:\\...\\vdb\\index.json"`), which on Windows is every path - so a set built from that
+    // output matches nothing and the skip silently does not happen. NUL-separated output is unquoted and
+    // unambiguous; measured by running the command by hand and looking at what it actually printed.
+    const out = execFileSync('git', ['check-ignore', '-z', '--stdin'], {
+      cwd: ROOT,
+      input: paths.join('\0') + '\0',
+      encoding: 'utf8',
+    });
+    return new Set(out.split('\0').filter(Boolean).map((p) => path.resolve(ROOT, p)));
+  } catch {
+    // `git check-ignore` exits non-zero when nothing matched, and when there is no repository at all. Neither is
+    // a reason to stop checking: without an answer, nothing is treated as ignored.
+    return new Set();
+  }
+}
+const IGNORED = ignoredByGit(files);
+
 const findings = [];
 const notices = [];
 const SELF = 'sanitize-check.mjs';
@@ -102,7 +136,7 @@ for (const file of files) {
   const rel = path.relative(ROOT, file);
   // The checker's own rule definitions necessarily contain these keywords, so skip self-scanning
   if (path.basename(file) === SELF) continue;
-  if (MACHINE_LOCAL_FILES.has(path.basename(file))) {
+  if (IGNORED.has(path.resolve(file)) || MACHINE_LOCAL_FILES.has(path.basename(file))) {
     notices.push(`machine-local file present (gitignored, excluded from the release copy): ${rel}`);
     continue;
   }

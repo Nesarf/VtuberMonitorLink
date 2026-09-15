@@ -552,7 +552,7 @@ t('a probe with a configured profile reports the dir it read, so the page can sh
   const r = await checkLoginState(setCfg(P_DEFAULT), 'x-post', {
     readCookies: async (dir, domains) => {
       calls.push({ dir, domains });
-      return { ok: true, names: ['auth_token'], cookieHeader: 'auth_token=x', profile: dir };
+      return { ok: true, names: ['auth_token'], cookieHeader: 'auth_token=x', profile: dir }; // sanitize-allow: a fixture value, deliberately cookie-shaped, for the check that proves a cookie value cannot leak out of the resolver
     },
   });
   assert.deepEqual(calls.map((c) => c.dir), [P_DEFAULT]);

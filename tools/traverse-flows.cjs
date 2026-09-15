@@ -258,8 +258,17 @@ async function main() {
       'live ' + (live.json?.live?.length ?? 0) + ', rerun ' + (live.json?.round?.length ?? 0) + ', off ' + (live.json?.off?.length ?? 0)
     );
     if (live.json?.ok) {
-      const any = [...(live.json.live ?? []), ...(live.json.round ?? []), ...(live.json.off ?? [])].find((x) => x.roomId);
-      check('each entry carries a room id and an embed URL', !!any && /\/blanc\/\d+/.test(String(any.embed)), any ? any.embed : '');
+      const all = [...(live.json.live ?? []), ...(live.json.round ?? []), ...(live.json.off ?? [])];
+      // An empty answer means there was nothing to inspect, and a check that fails on its own empty precondition
+      // reports a defect where there is only an environment: this walk seeds no uid, so nothing is checked and
+      // `checked 0 uid(s)` is the honest result rather than a broken entry. The room-id question is only
+      // meaningful once there is an entry to ask it about - so it is asked, or said to be unaskable.
+      if (!all.length) {
+        console.log('  [--]   each entry carries a room id and an embed URL -- no uid was checked, so there is nothing to inspect');
+      } else {
+        const any = all.find((x) => x.roomId);
+        check('each entry carries a room id and an embed URL', !!any && /\/blanc\/\d+/.test(String(any.embed)), any ? any.embed : '');
+      }
       check('rerun entries are not counted as live', (live.json.round ?? []).every((x) => x.status === 2) && (live.json.live ?? []).every((x) => x.status === 1), 'status codes are distinct');
     }
     const roster = await api('GET', '/api/live/roster?q=' + encodeURIComponent('泠鸢'));

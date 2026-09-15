@@ -66,6 +66,13 @@ jobs:
           $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
           "version=$v" >> $env:GITHUB_OUTPUT
 
+      # The notes for this version must exist before anything is built. A release whose page says nothing is a
+      # release whose reader has to guess what changed, and the check also refuses a section that is only a
+      # heading - "the notes exist" and "the notes say something" are different claims.
+      - name: The release notes for this version exist
+        shell: pwsh
+        run: node tools/release-notes.mjs --check "v${{ steps.version.outputs.version }}"
+
       - name: Collect artifacts and checksums
         shell: pwsh
         run: |
@@ -76,6 +83,10 @@ jobs:
           Get-ChildItem out | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
           } | Set-Content out/SHA256SUMS.txt -Encoding ASCII
+          # After the checksums on purpose: SHA256SUMS covers the two downloadable assets, and the notes are text
+          # for the release page rather than something a download is verified against. Written by the tool rather
+          # than by a redirect, because a PowerShell redirect writes UTF-16.
+          node tools/release-notes.mjs "v${{ steps.version.outputs.version }}" --out out/RELEASE-NOTES.md
           Get-ChildItem out | Format-Table Name, Length
 
       - name: Upload the workflow artifact
@@ -94,3 +105,6 @@ jobs:
             out/*.manifest.json
             out/SHA256SUMS.txt
           generate_release_notes: true
+          # The body is the repository's own notes for this version, so the release page and docs/RELEASE.md cannot
+          # drift apart - one source, and the generated changelog is appended by the action on top of it.
+          body_path: out/RELEASE-NOTES.md

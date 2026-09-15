@@ -1,6 +1,6 @@
 {
   "name": "vml",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Vtuber's Monitor Link - a local-web VTuber intelligence monitor with user-configurable browser, sources, and LLM.",
   "license": "MIT",

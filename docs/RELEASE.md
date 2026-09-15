@@ -1,5 +1,91 @@
 # Release notes
 
+## v1.0.2
+
+**An egress that knows where it lands, a share flow that can be finished by hand, and checks that stopped lying
+about their own input.**
+
+82 commits since 1.0.1. Three threads run through them. The network layer learned to judge an exit by *where the
+traffic comes out* and not only by how fast it answers. The share and login surfaces stopped being one button
+and became stages a person can actually drive - including, explicitly, the sites this build cannot post to. And
+the checks guarding all of it were repaired in several places where they had quietly stopped being true, which
+is the part worth reading the "problems" section for.
+
+### Added
+
+1. **Egress locality, measured rather than assumed.** Each working egress's exit country is read through that
+   egress itself (`probe.js` asks a trace endpoint), and the automatic decision applies it as a **weight**: a
+   small bonus for landing in the country a source wants, a penalty for landing elsewhere, and a factor of
+   exactly one when either side is unknown - so every earlier decision is unchanged. Sources can declare the
+   region they want to appear from (three built-ins do, and it is editable in the list and when creating a
+   source). Measured on the development machine: the direct egress lands in CN and the local proxy in JP.
+2. **Trend ranges from thirty minutes to a year**: 30m / 1h / 4h / 12h / 1d / 3d / 7d / 30d / 90d / 180d /
+   360d, with sub-day buckets computed in the report layer rather than in SQL, and the alerts series hidden
+   where a range cannot carry it.
+3. **A login state can be checked wherever it can be configured.** Five surfaces (Settings, Live, Sources,
+   Watch, Share) each carry an always-present check that measures rather than assumes, tells the person what is
+   missing when it cannot run, and never invents a pass. A new **Browser** page owns the browser and profile
+   targeting for every consumer at once: it enumerates the profiles installed on this machine for one-click
+   selection, shows a per-feature status table, and links from the results that complain about a missing
+   setting. `privacy.anonymousMode` - documented as "never use a login", and until this release read by
+   **nothing at all** - is now enforced inside the resolver.
+4. **Sharing is three independent stages** (account / verification / send) with a declared profile per site:
+   login kind, credential, named requirements, whether publishing is implemented, text and image limits, and a
+   manual block. For everything this build cannot do, the page prepares instead: a hand-off with a compose link
+   (offered only when the body fits that site's limit), copy, and a file - recorded in the audit as a hand-off
+   and never as a post. Each site also has its own editable body with a live character counter and a way back to
+   the prepared text, and a report can be opened in an editor straight from the list.
+5. **The worker layer**: Perl, R and C# implementations joined it, macOS stopped being an informational CI leg
+   and started gating, and the differential fuzzer reports an interpreter that is not on the machine instead of
+   dying of it.
+6. **The launcher answers a second launch** (opening the page and exiting 0 instead of reporting a port
+   conflict), and when it does fail it prints where the reason is and waits for a key **only when a person is
+   there** - a pipe, a service manager or CI is never blocked.
+7. **Gates**: the release copy proves it came from this tree; the bug table is checked for contiguous numbering;
+   `integrity-check` now constructs the application, refuses a route that reaches a helper before it is
+   declared, checks that every `api.<name>()` the UI calls exists, and checks that one owner resolves the
+   browser profile. `sanitize-check` no longer reports findings no one can act on.
+
+### Verification evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Fast self-check | `npm run verify:fast` | 22/22 steps, including every `tools/*-test.mjs` |
+| Release traversal (packaged build: every route and error path) | `npm run traverse` | **85/85** |
+| UI traversal (real browser, real collection against a mock LLM) | `npm run traverse:ui` | **237/237** |
+| Flow traversal (webhook delivery, config round-trip, scheduled tasks, assistant) | `node tools/traverse-flows.cjs` | **33/33** |
+| Pre-publish scan | `npm run sanitize-check` | no hard-coded paths or personal data |
+| Locale coverage / proofreading | `locale-coverage` / `i18n-proofread` | coverage flat, proofread suspect count **below** its pinned baseline, structural problems 0 |
+| Committed tree | a checkout of the release commit | the full suite, run inside it rather than in the tree it was written in |
+
+### Problems found and fixed
+
+The bug table grew from #71 to #90. Three are worth naming because of what they say about checking:
+
+- **A privacy switch that did nothing** (#87): `privacy.anonymousMode` was documented, rendered, and read by no
+  code anywhere in the repository. A promise to sit above every consumer needs a shared decision point, and
+  there was none - the defect was not a missing condition but the absence of an owner. There is one now, and the
+  switch is enforced inside it.
+- **A check that lied about its own input** (#89): the integrity checker's string stripper treated an apostrophe
+  inside a comment as the start of a string literal, so English prose swallowed the eleven dictionary keys that
+  followed it and the checker reported a file of 260 keys as having 249. The same class appeared twice more the
+  same day - a structural check tripped by the comment that explained it, and `git check-ignore`'s quoting of
+  every Windows path silently disabling a skip.
+- **A commit that was green everywhere except in its own checkout** (#84): every check ran in the working tree,
+  where the generated dictionary was correct because it had been generated from the working tree's dictionary.
+  The committed tree is a different input, and CI reported the difference. Releases are now verified from a
+  checkout of the commit that is being released, which is where the numbers in the table above come from.
+
+### Not yet verified
+
+The same two as 1.0.1: sending danmaku from a real account and vision tagging with a real key need the user's own
+credentials, so the self-checks use local fakes. In addition, this release does not attempt to publish to X,
+YouTube, Weibo, Reddit or Mastodon - they declare what they need, their login state can be checked, and sending
+reports honestly that it is not implemented - and the image attachment setting is page-level rather than a
+per-site override.
+
+---
+
 ## v1.0.1
 
 **A bilingual manual that can be read inside the UI, with instant language switching.**

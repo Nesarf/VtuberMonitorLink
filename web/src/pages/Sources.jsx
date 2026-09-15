@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
+import { cachedThumb, loadThumb } from '../thumb-cache.js';
 import { Inline } from '../markdown.jsx';
 
 const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '' };
@@ -52,26 +53,37 @@ export default function Sources() {
     load();
   }, []);
 
-  // Thumbnails: the server answers instantly when it has a cache, so only the enabled sources are lazily loaded once here
+  // Thumbnails: asked once per source per session, through web/src/thumb-cache.js.
+  //
+  // This used to depend on the whole `data` object, so replacing it - which happens on every reload, and
+  // twice when React double-invokes an effect - re-asked for all fourteen, and every visit to the page
+  // started over. The request log caught the shape of it: bursts of 14 and of 28, with single fetches
+  // taking up to two seconds. The dependency is now the list itself, so reloading the same list costs
+  // nothing and toggling one source only re-asks for what changed.
+  const thumbListKey = (data?.sources ?? []).map((s) => `${s.id}:${s.enabled ? 1 : 0}`).join(',');
+  const thumbTargets = useMemo(
+    () => (data?.sources ?? []).filter((s) => s.enabled && s.url).slice(0, 14),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [thumbListKey],
+  );
   useEffect(() => {
-    if (!data) return;
     let stop = false;
-    const targets = data.sources.filter((s) => s.enabled && s.url).slice(0, 14);
+    // Whatever is already known is shown at once, without waiting a microtask for it.
+    for (const s of thumbTargets) {
+      const known = cachedThumb(s);
+      if (known !== undefined) setThumbs((prev) => ({ ...prev, [s.id]: known }));
+    }
     (async () => {
-      for (const s of targets) {
+      for (const s of thumbTargets) {
         if (stop) break;
-        try {
-          const r = await api.thumbMeta(s.url, s.id);
-          if (!stop && r.ok) setThumbs((prev) => ({ ...prev, [s.id]: r.image }));
-        } catch {
-          /* nothing there is fine */
-        }
+        const image = await loadThumb(s, api.thumbMeta);
+        if (!stop && image) setThumbs((prev) => ({ ...prev, [s.id]: image }));
       }
     })();
     return () => {
       stop = true;
     };
-  }, [data]);
+  }, [thumbTargets]);
 
   const healthById = useMemo(() => new Map((health?.sources ?? []).map((h) => [h.id, h])), [health]);
 

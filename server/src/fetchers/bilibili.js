@@ -11,6 +11,7 @@
 //   - Order of preference for a login state: cookie carried by the source -> configured browser profile -> browser rendering as a fallback.
 import { netFetch, resolveProxyMode } from '../net.js';
 import { wbiFetch } from '../wbi.js';
+import { resolveProfileDir } from '../browser-target.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -136,7 +137,9 @@ export async function fetchFollowers(uid, ctx, bv) {
  */
 export async function resolveLogin(source, ctx) {
   if (source.cookie) return { cookie: source.cookie, via: 'inline' };
-  const profileDir = source.profileDir || ctx.cfg?.browser?.profileDir;
+  // A per-source override wins (it is a deliberate, source-local choice); otherwise the shared resolver, so
+  // this source and every login check are reading the same setting.
+  const profileDir = source.profileDir || resolveProfileDir(ctx.cfg);
   if (!profileDir) return { cookie: null, via: 'none', reason: '未配置浏览器 profileDir' };
   const { readBrowserCookies } = await import('../cookies.js');
   const r = await readBrowserCookies(profileDir, ['bilibili.com']);
@@ -263,7 +266,7 @@ export async function fetchBilibiliDynamic(source, ctx) {
       throw new Error(`B 站接口拒绝 / code=${j?.code} ${j?.message ?? ''}（cookie 可能已失效）`);
     }
   } else {
-    ctx.log?.warn(`bilibili has no login (${login.reason ?? 'unknown'}), falling back to browser rendering${source.profileDir || ctx.cfg?.browser?.profileDir ? '' : ': with no profile configured this will most likely raise a slider captcha'}`);
+    ctx.log?.warn(`bilibili has no login (${login.reason ?? 'unknown'}), falling back to browser rendering${source.profileDir || resolveProfileDir(ctx.cfg) ? '' : ': with no profile configured this will most likely raise a slider captcha'}`);
   }
 
   return fetchBilibiliDynamicRendered(source, ctx, login);
@@ -279,7 +282,8 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
 
   const launch = { headless: bcfg.headless !== false, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
   if (source.executablePath || bcfg.executablePath) launch.executablePath = source.executablePath || bcfg.executablePath;
-  const profileDir = source.profileDir || bcfg.profileDir;
+  // Same resolver as the cookie path above: a source-local override first, otherwise the one shared setting.
+  const profileDir = source.profileDir || resolveProfileDir(ctx.cfg);
 
   let context = null;
   let browser = null;
@@ -356,7 +360,7 @@ export async function fetchBilibiliDynamicRendered(source, ctx, login = {}) {
     if (/ProcessSingleton|is already (running|in use)|SingletonLock|profile.*lock/i.test(m)) {
       throw new Error(
         '该浏览器正在运行，profile 被锁定 / the browser is running and its profile is locked —— 要么关掉它，' +
-          '要么在「设置 → 浏览器」里把 profileDir 指向另一个已登录 B 站的浏览器（只读提取 cookie 不需要关浏览器）'
+          '要么在「浏览器」页里把 profile 指向另一个已登录 B 站的浏览器（只读提取 cookie 不需要关浏览器）'
       );
     }
     throw err;

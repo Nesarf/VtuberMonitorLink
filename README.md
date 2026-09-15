@@ -108,7 +108,9 @@ So there is a lighter path:
 **Copy the browser's cookie store and decrypt it read-only.** The browser can stay open; nothing is
 locked or modified.
 
-- Settings → Browser → *Check login*, with the domain to read (defaults to `bilibili.com`).
+- The **Browser** tab → *Check login*, with the domain to read (defaults to `bilibili.com`). That tab is
+  also where the browser and its profile are configured, and where each dependent feature reports what it
+  needs and whether it has it.
 - Measured: on Opera / Chromium 130+ the `v10` scheme (AES-256-GCM, key protected by DPAPI) reads
   fine, including stripping the 32-byte domain-binding prefix Chromium 130+ prepends.
 - **Chrome 127+ enables App-Bound Encryption by default** (`v20`), which cannot be decrypted from

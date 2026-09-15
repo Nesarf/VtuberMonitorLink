@@ -42,3 +42,26 @@ export function layoutClass(layout) {
   const mode = normalizeLayout(layout).mode;
   return mode === 'cards' ? 'cards' : `cards layout-${mode}`;
 }
+
+/**
+ * Cross-tab navigation, as a DOM event.
+ *
+ * Why an event rather than a prop: switching tabs is the shell's state (App.jsx owns `tab`), and there is
+ * exactly one reason to reach across pages right now — a login check that says "no profile dir is
+ * configured" has to be able to offer the page that fills it in, whichever page the check was pressed on
+ * (the share page is where the owner hit it). Threading a callback through five page components would put
+ * navigation state into pages that otherwise have none, and the shell would still be the only place that can
+ * really change it. This is the same shape the shell already uses to follow a layout change (`vml-layout`).
+ */
+export const GOTO_EVENT = 'vml-goto';
+
+/** Ask the shell to show a tab. Returns false when there is nothing listening (a test render, an old shell). */
+export function requestTab(id) {
+  if (typeof window === 'undefined' || !id) return false;
+  try {
+    window.dispatchEvent(new CustomEvent(GOTO_EVENT, { detail: id }));
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -6,12 +6,11 @@ import { useI18n, applyTheme } from '../i18n.jsx';
 import { api } from '../api.js';
 import { SaveBar, useSaveState } from '../savebar.jsx';
 import Collapsible from '../Collapsible.jsx';
-import { Inline } from '../markdown.jsx';
+import { requestTab } from '../layout.js';
 
 export default function Settings({ onLayout }) {
   const { t, tn, lang, weekdaysSunFirst: WEEKDAYS, fmtTime, fmtDateTime } = useI18n();
   const [cfg, setCfg] = useState(null);
-  const [browsers, setBrowsers] = useState([]);
   const [presets, setPresets] = useState([]);
   const [msg, setMsg] = useState('');
   const [msgKind, setMsgKind] = useState('');
@@ -19,9 +18,6 @@ export default function Settings({ onLayout }) {
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [newPreset, setNewPreset] = useState('deepseek');
-  const [domain, setDomain] = useState('bilibili.com');
-  const [loginMsg, setLoginMsg] = useState('');
-  const [loginOk, setLoginOk] = useState(false);
   // scheduled tasks / notifications / nodes / import-export
   // Note: every hook must sit above the `if (!cfg) return` below - otherwise the first frame and the
   // frame after the data arrives have a different hook count, React throws #310 and unmounts the whole tree.
@@ -37,7 +33,6 @@ export default function Settings({ onLayout }) {
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
-    api.getBrowsers().then((b) => setBrowsers(b.detected ?? [])).catch(() => {});
     api.getSchedule().then(setSched).catch(() => {});
     api.getNotify().then(setNotifyInfo).catch(() => {});
   }, []);
@@ -154,26 +149,9 @@ export default function Settings({ onLayout }) {
     });
   };
 
-  // Read-only login-state extraction: report the cookie count and names, never hand back any value
-  const checkLogin = async () => {
-    setBusy(true);
-    setLoginMsg(t('checkingLogin'));
-    try {
-      const r = await api.checkCookies({ profileDir: cfg.browser.profileDir, domains: [domain.trim() || 'bilibili.com'] });
-      setLoginOk(!!(r.ok && r.hasSession));
-      if (r.ok && r.hasSession)
-        setLoginMsg(`✅ ${t('loginOk')}: ${tn('cookieCountWithSession', r.cookieCount)} · ${r.profile ?? ''}`);
-      else if (r.ok)
-        setLoginMsg(`⚠️ ${t('loginNoSession')}: ${tn('cookieCount', r.cookieCount)} · ${(r.names ?? []).slice(0, 8).join(', ')}`);
-      else setLoginMsg(`❌ ${t('loginNone')}: ${r.error ?? ''}`);
-      if (r.warning) setLoginMsg((m) => `${m} ｜ ${r.warning}`);
-    } catch (e) {
-      setLoginOk(false);
-      setLoginMsg(`❌ ${e.message}`);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Read-only login-state extraction moved to the browser page together with the setting it reads: this page
+  // no longer owns a profile directory, so it has nothing to probe (web/src/pages/Browser.jsx, and
+  // server/src/browser-target.js for the one resolver behind both).
 
   // -- scheduled tasks / notifications / nodes / import-export (handlers live here, the hooks were
   // moved above the early return) --
@@ -402,95 +380,18 @@ export default function Settings({ onLayout }) {
 
   return (
     <>
-      {/* -- Browser -- */}
+      {/* -- Browser: the setting moved, so this page points at it instead of restating it --
+          The browser/profile targeting has one page of its own now (web/src/pages/Browser.jsx): it configures
+          which browser and which profile, lists the profiles this machine actually has with a "use this one"
+          action, and shows what each dependent feature needs. It is not duplicated here, because two places
+          that show the same setting are two places that can disagree — the share page's login check answering
+          `profileDir is empty` while this page's field looked filled in is exactly that. */}
       <section className="panel">
         <h2>{t('browserTitle')}</h2>
-        <div className="hint">{t('browserHint')}</div>
-        <div className="row">
-          <div className="field">
-            <label>{t('mode')}</label>
-            <select value={cfg.browser.mode} onChange={(e) => patch('browser.mode', e.target.value)}>
-              <option value="bundled">{t('mode_bundled')}</option>
-              <option value="system">{t('mode_system')}</option>
-              <option value="custom">{t('mode_custom')}</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>{t('headless')}</label>
-            <select
-              value={String(cfg.browser.headless)}
-              onChange={(e) => patch('browser.headless', e.target.value === 'true')}
-            >
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>{t('waitMs')}</label>
-            <input
-              type="number"
-              value={cfg.browser.waitMs}
-              onChange={(e) => patch('browser.waitMs', Number(e.target.value))}
-            />
-          </div>
-        </div>
-
-        {cfg.browser.mode !== 'bundled' && (
-          <div className="row">
-            <div className="field">
-              <label>{t('executablePath')}</label>
-              {browsers.length > 0 && (
-                <select value="" onChange={(e) => e.target.value && patch('browser.executablePath', e.target.value)}>
-                  <option value="">{t('detected')}…</option>
-                  {browsers.map((b) => (
-                    <option key={b.executablePath} value={b.executablePath}>
-                      {b.name} — {b.executablePath}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <input
-                value={cfg.browser.executablePath}
-                onChange={(e) => patch('browser.executablePath', e.target.value)}
-                placeholder="C:\\path\\to\\browser.exe"
-              />
-            </div>
-            <div className="field">
-              <label>{t('profileDir')}</label>
-              <input
-                value={cfg.browser.profileDir}
-                onChange={(e) => patch('browser.profileDir', e.target.value)}
-                placeholder="C:\\Users\\you\\AppData\\...\\User Data"
-              />
-              <div className="hint" style={{ margin: 0 }}>{t('profileHint')}</div>
-            </div>
-          </div>
-        )}
-
-        {/* -- login-state probe: read-only extraction, works even with the browser open -- */}
-        <div className="row">
-          <div className="field" style={{ flex: '0 0 150px' }}>
-            <label>{t('domainLabel')}</label>
-            <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="bilibili.com" />
-          </div>
-          <div className="field" style={{ flex: '0 0 auto' }}>
-            {/* Always rendered, and disabled only for a stated reason: its own check running, or the missing
-                profile dir that makes the read impossible. The title says which of the two it is, so a
-                greyed-out button is never a dead end. */}
-            <button
-              className="ghost"
-              title={!cfg.browser.profileDir ? t('noProfileDir') : busy ? t('checkingLogin') : t('loginCheckTitle')}
-              onClick={checkLogin}
-              disabled={busy || !cfg.browser.profileDir}
-            >
-              {busy ? t('checkingLogin') : t('checkLogin')}
-            </button>
-          </div>
-          <div className="field" style={{ flex: 1 }}>
-            <div className="hint" style={{ margin: 0 }}><Inline text={t('loginHint')} /></div>
-            {loginMsg && <div className={loginOk ? 'hint ok-text' : 'hint warn-text'} style={{ margin: 0 }}>{loginMsg}</div>}
-          </div>
-        </div>
+        <div className="hint">{t('browserMovedHint')}</div>
+        <button className="ghost" onClick={() => requestTab('browser')}>
+          {t('browserMovedOpen')} — {t('tab_browser')}
+        </button>
       </section>
 
       {/* -- Proxy -- */}
@@ -1297,14 +1198,10 @@ export default function Settings({ onLayout }) {
       <section className="panel">
         <h2>{t('privacyTitle')}</h2>
         <div className="hint">{t('privacyHint')}</div>
+        {/* The anonymous-mode switch itself lives on the Browser page, together with the profile it turns off:
+            one switch, one place. It used to sit here as well, which is the arrangement that let the two copies
+            disagree. */}
         <div className="row">
-          <div className="field" style={{ flex: '0 0 160px' }}>
-            <label>{t('anonymousMode')}</label>
-            <select value={String(cfg.privacy?.anonymousMode === true)} onChange={(e) => patch('privacy.anonymousMode', e.target.value === 'true')}>
-              <option value="false">off</option>
-              <option value="true">on</option>
-            </select>
-          </div>
           <div className="field" style={{ flex: '0 0 200px' }}>
             <label>Referer / Origin</label>
             <select value={String(cfg.privacy?.sendReferer !== false)} onChange={(e) => patch('privacy.sendReferer', e.target.value === 'true')}>
@@ -1315,6 +1212,12 @@ export default function Settings({ onLayout }) {
           <div className="field" style={{ flex: '0 0 180px' }}>
             <label>{t('probeTtl')}</label>
             <input type="number" value={cfg.ui?.probeTtlMinutes ?? 30} onChange={(e) => patch('ui.probeTtlMinutes', Number(e.target.value))} />
+          </div>
+          <div className="field" style={{ flex: '0 0 auto' }}>
+            <label>{t('anonymousMode')}</label>
+            <button className="ghost" onClick={() => requestTab('browser')}>
+              {t('browserMovedOpen')} — {t('tab_browser')}
+            </button>
           </div>
         </div>
       </section>

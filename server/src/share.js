@@ -38,6 +38,7 @@ import { resolveDir } from './config.js';
 import { htmlShell } from './reports.js';
 import { listAccounts, whoAmI as defaultWhoAmI } from './accounts.js';
 import { readBrowserCookies } from './cookies.js';
+import { resolveProfileTarget } from './browser-target.js';
 import { netFetch } from './net.js';
 
 // ───────────────────────────────────────────── per-site publishing profile
@@ -651,7 +652,11 @@ const SESSION_COOKIE = /^(SESSDATA|SUB|SUB_SESSION|auth_token|sessionid|ct0|SID)
  * @param {string} targetId
  * @param {{accounts?:object[], accountId?:string|null, whoAmI?:Function, profileDir?:string, readCookies?:Function}} opts
  *   `readCookies(profileDir, domains)` is injectable so the routing decision can be tested offline; the
- *   default is the same implementation the settings page's probe uses.
+ *   default is the same implementation the settings page's probe uses. `opts.profileDir` is an explicit
+ *   hand-in (a caller that was given one on purpose); with none, the shared resolver in
+ *   server/src/browser-target.js decides, exactly as it does for every other consumer.
+ *   The answer carries `profileDir` / `profileSource` / `profileReason` so a caller can tell "signed out"
+ *   apart from "no profile is configured, and here is where you set one".
  */
 export async function checkLoginState(cfg, targetId, opts = {}) {
   const { accounts = [], accountId = null, whoAmI = defaultWhoAmI } = opts;
@@ -703,11 +708,20 @@ export async function checkLoginState(cfg, targetId, opts = {}) {
   }
 
   // The generic probe: read the browser store for the site's own host, read-only.
+  //
+  // Which profile is read comes from the one shared resolver (server/src/browser-target.js), so this check
+  // and the feature it describes cannot disagree. When it answers "nothing is configured" the reason is
+  // stated as a **state** (`no-profile-configured`) alongside the profile it resolved, and the page turns
+  // that into a link to the page that owns the setting — the dead end the owner hit was a bare
+  // `profileDir is empty` with nothing to press.
   const readCookies = opts.readCookies ?? readBrowserCookies;
+  // Named `browserTarget`, not `profile`: in this file `profile` is the per-site publishing profile above,
+  // and two different things called "profile" is how a reader ends up debugging the wrong one.
+  const browserTarget = opts.profileDir ? { dir: opts.profileDir, source: 'given' } : resolveProfileTarget(cfg);
   const domain = String(plan.host).toLowerCase().replace(/^www\./, '');
   let ck = null;
   try {
-    ck = await readCookies(opts.profileDir ?? cfg?.browser?.profileDir ?? '', [domain]);
+    ck = await readCookies(browserTarget.dir, [domain]);
   } catch (e) {
     ck = { ok: false, error: e.message };
   }
@@ -722,6 +736,11 @@ export async function checkLoginState(cfg, targetId, opts = {}) {
     cookieCount: names.length,
     names: names.slice(0, 40),
     hasSession,
+    // Whether a login could be looked for at all, and if not, why. `profileSource` is 'none' when nothing is
+    // configured, which is the state the share page turns into "go and fill it in on the browser page".
+    profileDir: browserTarget.dir || null,
+    profileSource: browserTarget.source ?? 'none',
+    profileReason: browserTarget.dir ? null : 'no-profile-configured',
     accountId: chosen?.id ?? null,
     accountName: name,
     accountKind: plan.loginKind,

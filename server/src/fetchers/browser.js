@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { playwrightProxy } from '../net.js';
+import { resolveProfileDir } from '../browser-target.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -92,10 +93,13 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text' } = {}) {
     const launchOpts = resolveLaunch(bcfg);
     // the browser needs the proxy as well (measured: in an environment where direct is blocked, the browser cannot reach the target site either)
     const proxy = playwrightProxy(cfg);
-    if (bcfg.profileDir) {
+    // The profile dir comes from the one shared resolver (server/src/browser-target.js): empty means a clean
+    // temporary profile, and in anonymous mode it is always empty, whatever the setting says.
+    const profileDir = resolveProfileDir(cfg);
+    if (profileDir) {
       // reuse an existing login: this requires the browser to be closed
-      if (!fs.existsSync(bcfg.profileDir)) throw new Error(`profileDir 不存在 / not found: ${bcfg.profileDir}`);
-      context = await chromium.launchPersistentContext(bcfg.profileDir, {
+      if (!fs.existsSync(profileDir)) throw new Error(`profileDir 不存在 / not found: ${profileDir}`);
+      context = await chromium.launchPersistentContext(profileDir, {
         ...launchOpts,
         ...(proxy ? { proxy } : {}),
         viewport: { width: 1280, height: 900 },

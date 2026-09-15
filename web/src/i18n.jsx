@@ -38,6 +38,7 @@ export const STRINGS = {
     tab_run: '运行',
     tab_sources: '来源',
     tab_watch: '监视',
+    tab_browser: '浏览器',
     tab_settings: '设置',
     tab_reports: '报告',
     tab_calendar: '日历',
@@ -263,7 +264,7 @@ export const STRINGS = {
     // browser
     browserTitle: '浏览器',
     browserHint:
-      '选择抓取网页时使用的浏览器。要复用登录态（例如看 X 推文正文、B 站带配图动态、Twitch 关注列表）时，请选「系统浏览器」并把浏览器完全关闭后再运行。',
+      '抓取、登录态检查、弹幕账号、一键分享 —— 所有要用浏览器的功能都读这里的设置。只有这一处配置：换一个配置目录，全部功能一起换。',
     mode: '模式',
     mode_bundled: '随包 Chromium（开箱即用）',
     mode_system: '系统已装浏览器（可复用登录）',
@@ -292,10 +293,38 @@ export const STRINGS = {
     cookieCount: '{n} 个',
     cookieCountWithSession: '{n} 个（含 SESSDATA）',
     browserFromSettings: '设置里指定的',
+    // The browser page owns `browser.profileDir` and shows what every dependent feature needs (see
+    // web/src/pages/Browser.jsx and server/src/browser-consumers.js). `browserHint` is the page's own intro,
+    // which is a different sentence from the settings-era one: the point of the page is that this is the one
+    // place the setting lives.
+    browserProfile: '浏览器配置目录（profile）',
+    browserProfileHint: '留空 = 用临时干净配置（不携带任何登录）。浏览器开着时该目录会被锁；只读读取 cookie 不受影响。',
+    browserProfileScan: '扫描本机浏览器配置',
+    browserScanFound: '找到 {n} 个',
+    browserProfileUse: '用这个',
+    browserProfileSelected: '当前使用',
+    browserProfileDefaultHint: '本机 {browser} 的默认位置（留空时会用它）',
+    browserProfileCustom: '设置里的目录（本机没扫到）',
+    browserProfileNone: '还没指定配置目录',
+    browserFeatureStatus: '功能与状态',
+    browserFeature: '功能',
+    browserFeatureNeeds: '需要',
+    browserNeedsProfile: '需要配置目录',
+    browserNeedsNoProfile: '不需要',
+    browserStatusOk: '正常',
+    browserStatusMissing: '缺配置',
+    browserStatusTmp: '临时配置',
+    browserStatusEmpty: '目录为空',
+    browserStatusAnonymous: '匿名模式：不读登录态',
+    browserOneKey: '唯一的一处配置',
+    // The settings page no longer restates the browser setting, so it says where the page went. Two places
+    // showing the same setting are two places that can disagree — that is what this round fixed.
+    browserMovedHint: '浏览器与配置目录的设置已经移到「浏览器」页：那里能一键用扫描到的配置目录，还能看到每个功能缺什么。这里不再重复一遍，避免两处显示不一致。',
+    browserMovedOpen: '去设置',
     // Every surface that configures a login state gets a "check login state" button, and these are the
     // sentences it needs when it cannot run one. They exist so the button never has to be disabled
     // without saying why: a disabled control with no reason is the thing this round is about.
-    noProfileDir: '先在「设置 → 浏览器」里填用户配置目录，否则读不到登录态',
+    noProfileDir: '先在「浏览器」页里填用户配置目录，否则读不到登录态',
     loginNotCheckable: '这个来源声明不需要登录，没有可查的登录态',
     loginNoHost: '这个目标没有可读的域名，查不到登录态',
     loginFieldsEmpty: '填上用户名与 BotPassword 才能检查登录态',
@@ -860,6 +889,7 @@ export const STRINGS = {
     tab_run: 'Run',
     tab_sources: 'Sources',
     tab_watch: 'Watch',
+    tab_browser: 'Browser',
     tab_settings: 'Settings',
     tab_reports: 'Reports',
     tab_calendar: 'Calendar',
@@ -1082,7 +1112,7 @@ export const STRINGS = {
 
     browserTitle: 'Browser',
     browserHint:
-      'Pick the browser used for scraping. To reuse a login (e.g. X post bodies, bilibili dynamics with pictures, Twitch following list), choose "System browser" and make sure that browser is fully closed before running.',
+      'Scraping, login-state checks, the danmaku accounts and one-click sharing all read the setting on this page. This is the only place it is configured: change the profile here and every feature changes with it.',
     mode: 'Mode',
     mode_bundled: 'Bundled Chromium (works out of the box)',
     mode_system: 'Installed system browser (can reuse login)',
@@ -1112,10 +1142,37 @@ export const STRINGS = {
     cookieCount: '{n} cookies',
     cookieCountWithSession: '{n} cookies (incl. SESSDATA)',
     browserFromSettings: 'from Settings',
+    // The browser page owns `browser.profileDir` and shows what every dependent feature needs (see
+    // web/src/pages/Browser.jsx and server/src/browser-consumers.js).
+    browserProfile: 'Browser profile (user data dir)',
+    browserProfileHint: 'Empty = a clean temporary profile that carries no login. The dir is locked while that browser is running; a read-only cookie check is not affected.',
+    browserProfileScan: 'Scan this machine for browser profiles',
+    browserScanFound: '{n} found',
+    browserProfileUse: 'Use this one',
+    browserProfileSelected: 'In use',
+    browserProfileDefaultHint: 'Default location for {browser} on this machine (used while the field above is empty)',
+    browserProfileCustom: 'the dir in the setting (not found on this machine)',
+    browserProfileNone: 'no profile dir set yet',
+    browserFeatureStatus: 'Features and their status',
+    browserFeature: 'Feature',
+    browserFeatureNeeds: 'Needs',
+    browserNeedsProfile: 'the profile dir',
+    browserNeedsNoProfile: 'nothing',
+    browserStatusOk: 'Ready',
+    browserStatusMissing: 'Missing',
+    browserStatusTmp: 'Temporary profile',
+    browserStatusEmpty: 'The dir is empty',
+    browserStatusAnonymous: 'Anonymous mode: no login is read',
+    browserOneKey: 'The one key behind all of it',
+    // The settings page no longer restates the browser setting, so it says where the page went. Two places
+    // showing the same setting are two places that can disagree — that is what this round fixed.
+    browserMovedHint:
+      'The browser and its profile are configured on the Browser page: it fills the profile dir in from what was discovered on this machine, and shows what each dependent feature is missing. It is not restated here, because two places showing one setting are two places that can disagree.',
+    browserMovedOpen: 'Go to',
     // Every surface that configures a login state gets a "check login state" button, and these are the
     // sentences it needs when it cannot run one. They exist so the button never has to be disabled
     // without saying why: a disabled control with no reason is the thing this round is about.
-    noProfileDir: 'Set the browser user data dir in Settings → Browser first, otherwise the login state cannot be read',
+    noProfileDir: 'Set the browser user data dir on the Browser page first, otherwise the login state cannot be read',
     loginNotCheckable: 'This source declares it needs no login, so there is no login state to check',
     loginNoHost: 'This target has no host to read, so its login state cannot be checked',
     loginFieldsEmpty: 'Fill in the username and the BotPassword before checking the login',

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { Inline } from '../markdown.jsx';
+import { LoginActionLink } from '../LoginCheck.jsx';
 
 const LS_KEY = 'vml-live-grid';
 const LS_COLS = 'vml-live-cols';
@@ -449,7 +450,14 @@ export default function Live() {
               >
                 {accounts === null ? t('checkLogin') : t('danmakuRefresh')}
               </button>
-              {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}
+              {accounts && !sendable.length ? (
+                <span className="muted small">
+                  {t('danmakuNoAccount')}
+                  {/* The account list is built by reading the browser profile, so when it comes up empty the
+                      next step is on the browser page — offered as a link rather than left as a puzzle. */}
+                  <LoginActionLink action={{ tab: 'browser', label: t('tab_browser') }} />
+                </span>
+              ) : null}
             </div>
             {/* When the login state has not been read yet, spell out that this would read the browser cookie store (reusing existing copy, adding no new entries) */}
             {accounts === null ? <div className="hint" style={{ margin: '4px 0 0' }}><Inline text={t('loginHint')} /></div> : null}

@@ -66,7 +66,11 @@ export const api = {
   deleteCustomSource: (id) => j(`/api/sources/custom/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // environment
-  getBrowsers: () => j('/api/browsers'),
+  //
+  // The browser/profile target has one page (web/src/pages/Browser.jsx) and one route: it answers with the
+  // installed browsers, the discovered profiles, what the setting resolves to through the shared resolver, and
+  // the per-feature status rows from server/src/browser-consumers.js.
+  browserTarget: () => j('/api/browser/target'),
   detectProxy: () => j('/api/proxy/detect'),
   checkCookies: (payload) => post('/api/cookies/check', payload),
 

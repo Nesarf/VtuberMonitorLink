@@ -137,12 +137,39 @@ function blockFor(which) {
   return after.slice(0, end ? end.index : after.length);
 }
 
-/** Blank out the contents of string literals (keeping the quote positions), so brace counting cannot be fooled by a `{` inside a value */
+/**
+ * Blank out the contents of string literals (keeping the quote positions), so brace counting cannot be fooled
+ * by a `{` inside a value.
+ *
+ * Two things this has to get right, and the first version got one of them wrong:
+ *   1) a **comment** is not code: an apostrophe in an English comment ("the page's own intro") is not the start
+ *      of a string. Treated as one, the comment swallowed everything up to the next apostrophe — which was the
+ *      end of the dictionary, so eleven freshly added keys silently vanished from the set this check reads
+ *      (measured: zh showed 249 entries while the file had 260).
+ *   2) a string that spans lines (`'...' + '...'` wraps in the hint entries) must not look like an unclosed
+ *      quote either, which is why the quote state is carried across lines rather than reset per line.
+ */
 function stripStrings(s) {
   let out = '';
   let q = null;
+  let comment = null;
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
+    if (comment === 'line') {
+      if (c === '\n') comment = null;
+      else {
+        out += c === '\n' ? '\n' : ' ';
+        continue;
+      }
+    }
+    if (comment === 'block') {
+      if (c === '*' && s[i + 1] === '/') {
+        out += '  ';
+        i++;
+        comment = null;
+      } else out += c === '\n' ? '\n' : ' ';
+      continue;
+    }
     if (q) {
       if (c === '\\') {
         out += '  ';
@@ -150,11 +177,27 @@ function stripStrings(s) {
       } else if (c === q) {
         q = null;
         out += c;
-      } else out += ' ';
-    } else if (c === "'" || c === '"' || c === '`') {
+      } else out += c === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '/') {
+      comment = 'line';
+      out += '  ';
+      i++;
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      comment = 'block';
+      out += '  ';
+      i++;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
       q = c;
       out += c;
-    } else out += c;
+      continue;
+    }
+    out += c;
   }
   return out;
 }
@@ -365,8 +408,12 @@ try {
   const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
   // (a) The five surfaces, and the control that they do not merely mention the affordance in a comment.
+  //
+  // The browser login probe used to live in Settings.jsx (its Browser section owned the profile dir). It is on
+  // the Browser page now — the page that owns the setting is the page that checks it — and Settings points at
+  // that page instead of restating the setting, so this entry moved with it.
   const surfaces = [
-    ['web/src/pages/Settings.jsx', /onClick=\{checkLogin\}/, 'the browser login probe'],
+    ['web/src/pages/Browser.jsx', /<LoginCheckButton/, 'the browser login probe'],
     ['web/src/pages/Live.jsx', /onClick=\{loadAccounts\}/, 'the danmaku account check'],
     ['web/src/pages/Share.jsx', /<LoginCheckButton/, 'the share login stage'],
     ['web/src/pages/Sources.jsx', /<LoginCheckButton/, 'the per-source login check'],
@@ -543,6 +590,83 @@ try {
   }
 } catch (e) {
   problems.push(`could not construct the server: ${e.message}`);
+}
+
+// ───────────────────────────────────────────── 5g. the browser profile has one owner
+//
+// The defect this section is about, in the owner's words: the share page's login check answered `profileDir
+// is empty` and pointed at nothing he could act on. The setting lived in the Settings page's Browser section
+// (behind a `mode !== 'bundled'` condition) while five features read it in five places — and every one of
+// those reads works on the machine where the setting happens to be filled in, so nothing in the gate could
+// see the disagreement. What was missing was not a feature but a structure: **one key, one resolver, one
+// page**, and a check that says so.
+//
+// So this section pins the structure, as text over the sources (the same style as 5c/5d/5f above):
+//   1) every module in the inventory (server/src/browser-consumers.js) resolves `browser.profileDir` through
+//      server/src/browser-target.js, and **no** module reads the key itself;
+//   2) the resolver really reads the key (otherwise every consumer could go through it and get '' for ever),
+//      and it is the module that names the key (`browserProfileKey()`), so there is one spelling of it;
+//   3) the page that owns the setting exists, asks the server for the target, and renders the per-feature
+//      status table — plus the control on a fixture that does each of those things wrong.
+try {
+  const { pathToFileURL } = await import('node:url');
+  const target = await import(pathToFileURL(path.join(ROOT, 'server/src/browser-target.js')).href);
+  const consumers = await import(pathToFileURL(path.join(ROOT, 'server/src/browser-consumers.js')).href);
+
+  const rows = consumers.consumerSources();
+  const missingFiles = rows.filter((c) => !fs.existsSync(c.path));
+  if (missingFiles.length) {
+    problems.push(`the browser-profile inventory names file(s) that do not exist: ${missingFiles.map((c) => c.file).join(', ')}`);
+  }
+
+  const sources = rows.map((c) => ({ file: c.file, id: c.id, symbol: c.symbol, source: fs.readFileSync(c.path, 'utf8') }));
+  const keyProblems = consumers.BROWSER_CONSUMERS.filter((c) => c.key !== target.browserProfileKey());
+  if (keyProblems.length) {
+    problems.push(`consumer(s) reading a key other than ${target.browserProfileKey()}: ${keyProblems.map((c) => `${c.file}=${c.key}`).join(', ')}`);
+  }
+
+  const resolverSrc = fs.readFileSync(path.join(ROOT, 'server/src/browser-target.js'), 'utf8');
+  const pagePath = path.join(ROOT, 'web/src/pages/Browser.jsx');
+  const pageSrc = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : '';
+
+  const structural = target.browserConsumerProblems(sources, {
+    resolvers: [{ file: 'server/src/browser-target.js', source: resolverSrc, must: /cfg\?\.browser\?\.profileDir/ }],
+    page: { file: 'web/src/pages/Browser.jsx', source: pageSrc },
+    pageMustMatch: /api\.browserTarget\(\)[\s\S]*browserFeatureStatus/,
+  });
+  for (const p of structural) problems.push(`browser-profile structure: ${p}`);
+  if (!structural.length) {
+    process.stdout.write(`   [ok]   ${rows.length} browser-profile consumer(s), every one resolving the key through server/src/browser-target.js\n`);
+    process.stdout.write('   [ok]   the resolver reads the key, and web/src/pages/Browser.jsx owns the setting\n');
+  }
+
+  // The control: replace one consumer's resolver call with a **direct read of the shared key**. That is the
+  // exact shape the old code had (each feature reading `cfg.browser.profileDir` itself), and it is the one the
+  // detector has to catch — so the control is that shape, not an invented different key (measured: a fixture
+  // reading `browser.cookiesDir` proves nothing here, because this detector looks for *the* key).
+  const wrong = sources.map((s) =>
+    s.id === 'danmaku' ? { ...s, source: s.source.replace('resolveProfileDir(cfg)', 'cfg.browser.profileDir') } : s,
+  );
+  const wrongProblems = target.browserConsumerProblems(wrong);
+  if (wrongProblems.length !== 1) {
+    problems.push(
+      `the browser-profile structural check does not fire when a consumer reads the key itself (got ${wrongProblems.length} problem(s)), so it proves nothing`,
+    );
+  } else if (!/directly/.test(wrongProblems[0])) {
+    problems.push(`the browser-profile control fired, but on something other than the direct read: ${wrongProblems[0]}`);
+  } else {
+    process.stdout.write('   [ok]   (and the control, with one consumer reading the key itself, is caught)\n');
+  }
+
+  // The second control: a consumer that reads the shared key itself, which is the shape the old code had.
+  const directSource = (file) => ({ file, source: "const x = cfg.browser.profileDir;\n" });
+  if (target.directProfileReads(directSource('server/src/x.js').source).length !== 1) {
+    problems.push('the direct-read detector does not fire on `cfg.browser.profileDir`, so the rule above is unchecked');
+  } else {
+    process.stdout.write('   [ok]   (and a module reading `cfg.browser.profileDir` itself is caught)\n');
+  }
+} catch (e) {
+  problems.push(`could not read the browser-profile structure: ${e.message}`);
 }
 
 // ───────────────────────────────────────────── 6. bug table numbering

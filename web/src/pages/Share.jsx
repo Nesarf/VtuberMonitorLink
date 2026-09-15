@@ -30,7 +30,7 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import Collapsible from '../Collapsible.jsx';
 import { Inline } from '../markdown.jsx';
-import LoginCheckButton, { countKey, loginCheckMessage, textCounter } from '../LoginCheck.jsx';
+import LoginCheckButton, { LoginActionLink, countKey, loginCheckMessage, textCounter } from '../LoginCheck.jsx';
 
 export default function Share({ people = [] }) {
   const { t, tn, lang } = useI18n();
@@ -674,7 +674,13 @@ export default function Share({ people = [] }) {
                       onResult={() => {}}
                     />
                     {r.loginState?.message ? (
-                      <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>{r.loginState.message.text}</div>
+                      <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>
+                        {r.loginState.message.text}
+                        {/* When the check came back "no profile dir is configured", the way to the page that
+                            fills it in is right here. That absence is the whole reason the browser page exists:
+                            the answer used to be the cookie reader's internal string and nothing to press. */}
+                        <LoginActionLink action={r.loginState.message.action} />
+                      </div>
                     ) : null}
                     {/* Which account this site would use -- the configuration half of "configure and check the
                         login state", available for every target including the ones whose publishing is
@@ -753,7 +759,10 @@ export default function Share({ people = [] }) {
                             onResult={() => {}}
                           />
                           {r.loginState?.message ? (
-                            <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>{r.loginState.message.text}</div>
+                            <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>
+                              {r.loginState.message.text}
+                              <LoginActionLink action={r.loginState.message.action} />
+                            </div>
                           ) : null}
                         </div>
                         {r.handoff?.composeUrl === null && r.handoff?.textSource === 'edited' && !r.handoff?.fits ? (

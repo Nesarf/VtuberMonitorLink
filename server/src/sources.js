@@ -220,8 +220,8 @@ export const BILIBILI_SOURCES = [
     login: 'required',
     defaultEnabled: false,
     note: {
-      zh: '先用「设置 → 浏览器」里配的 profile 只读提取登录 cookie 调接口（浏览器开着也行）；拿不到再退回浏览器渲染。uid 可在网页里改。',
-      en: 'Reads login cookies read-only from the profile in Settings → Browser (works while that browser is open); falls back to browser rendering. The uid is editable in the UI.',
+      zh: '先用「浏览器」页里配的 profile 只读提取登录 cookie 调接口（浏览器开着也行）；拿不到再退回浏览器渲染。uid 可在网页里改。',
+      en: 'Reads login cookies read-only from the profile configured on the Browser page (works while that browser is open); falls back to browser rendering. The uid is editable in the UI.',
     },
   },
 ];

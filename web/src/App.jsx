@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from './i18n.jsx';
 import { LOCALES } from './locales/index.js';
-import { applyLayout } from './layout.js';
+import { applyLayout, GOTO_EVENT } from './layout.js';
 import { api } from './api.js';
 import Intel from './pages/Intel.jsx';
 import Search from './pages/Search.jsx';
@@ -11,13 +11,14 @@ import Live from './pages/Live.jsx';
 import Run from './pages/Run.jsx';
 import Sources from './pages/Sources.jsx';
 import Watch from './pages/Watch.jsx';
+import Browser from './pages/Browser.jsx';
 import Settings from './pages/Settings.jsx';
 import Reports from './pages/Reports.jsx';
 import Calendar from './pages/Calendar.jsx';
 import People from './pages/People.jsx';
 import About from './About.jsx';
 
-const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'llm', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'browser', 'llm', 'settings', 'reports'];
 
 export default function App() {
   const { t, tn, localeCode, setLang } = useI18n();
@@ -46,6 +47,15 @@ export default function App() {
     };
     window.addEventListener('vml-layout', onLayout);
 
+    // A page asking the shell to show another tab (see requestTab in layout.js). The one case today is a
+    // login check that reports "no profile dir is configured": it offers the page that fills it in, and any
+    // page can offer that without knowing anything about how tabs work.
+    const onGoto = (e) => {
+      const id = String(e?.detail ?? '');
+      if (TABS.includes(id)) setTab(id);
+    };
+    window.addEventListener(GOTO_EVENT, onGoto);
+
     const tick = async () => {
       try {
         const st = await api.getState();
@@ -66,6 +76,7 @@ export default function App() {
       stop = true;
       clearInterval(timer);
       window.removeEventListener('vml-layout', onLayout);
+      window.removeEventListener(GOTO_EVENT, onGoto);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -91,6 +102,7 @@ export default function App() {
     run: t('tab_run'),
     sources: t('tab_sources'),
     watch: t('tab_watch'),
+    browser: t('tab_browser'),
     settings: t('tab_settings'),
     reports: t('tab_reports'),
   };
@@ -149,6 +161,7 @@ export default function App() {
         {tab === 'run' && <Run />}
         {tab === 'sources' && <Sources />}
         {tab === 'watch' && <Watch />}
+        {tab === 'browser' && <Browser />}
         {tab === 'settings' && <Settings onLayout={applyLayoutNow} />}
         {tab === 'reports' && <Reports layout={layout} />}
         {tab === 'calendar' && <Calendar />}

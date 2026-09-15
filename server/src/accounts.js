@@ -12,6 +12,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { netFetch } from './net.js';
 import { readBrowserCookies } from './cookies.js';
+import { resolveProfileDir } from './browser-target.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -79,8 +80,11 @@ export async function whoAmI(cfg, cookieHeader) {
  */
 export async function listAccounts(cfg) {
   const dirs = new Map(); // profile path -> label
-  const configured = String(cfg?.browser?.profileDir ?? '').trim();
-  if (configured) dirs.set(path.resolve(configured), '（设置里指定的）');
+  // The profile the user configured, resolved through the one shared function every consumer uses
+  // (server/src/browser-target.js). Reading `cfg.browser.profileDir` here instead is how this file and the
+  // share page's login check were able to disagree about what "configured" meant.
+  const configured = resolveProfileDir(cfg);
+  if (configured) dirs.set(path.resolve(configured), 'Browser page');
   for (const [label, root] of browserRoots()) {
     for (const p of profilesUnder(root)) dirs.set(path.resolve(p), label);
   }

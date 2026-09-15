@@ -4,7 +4,7 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { cachedThumb, loadThumb } from '../thumb-cache.js';
 import { Inline } from '../markdown.jsx';
-import LoginCheckButton, { cookieProbeMessage } from '../LoginCheck.jsx';
+import LoginCheckButton, { LoginActionLink, cookieProbeMessage } from '../LoginCheck.jsx';
 
 const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '', region: '' };
 
@@ -404,6 +404,9 @@ export default function Sources() {
                               {loginState[s.id] ? (
                                 <span className={loginState[s.id].ok ? 'ok-text' : 'warn-text'} title={t('cookieDomain').replace('{domain}', sourceProbeHost(s) ?? '')}>
                                   {loginState[s.id].text}
+                                  {/* An empty profile dir is a state the person can fix one tab away, so the
+                                      check offers the way there instead of naming a page in prose. */}
+                                  <LoginActionLink action={loginState[s.id].action} />
                                 </span>
                               ) : null}
                             </div>

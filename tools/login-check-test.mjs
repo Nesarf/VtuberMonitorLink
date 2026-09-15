@@ -729,7 +729,11 @@ process.stdout.write('\nlogin check: the pages and the routes\n');
 
 t('every page that renders a login setting also renders the check affordance', () => {
   const pages = {
-    'web/src/pages/Settings.jsx': 'checkLogin',
+    // Settings moved out of this list when the browser/profile targeting moved to its own page: the field and
+    // the check that exercises it now live together in Browser.jsx, and Settings links there instead of
+    // keeping a second copy. The intent of this check is unchanged - every place that configures a login must
+    // offer a way to check it - so the name moved with the affordance rather than the check being relaxed.
+    'web/src/pages/Browser.jsx': 'LoginCheckButton',
     'web/src/pages/Live.jsx': 'checkLogin',
     'web/src/pages/Share.jsx': 'LoginCheckButton',
     'web/src/pages/Sources.jsx': 'LoginCheckButton',

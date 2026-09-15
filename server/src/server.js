@@ -117,6 +117,8 @@ import {
 import * as proxyctl from './proxyctl.js';
 import { getThumbnail, listThumbs, readThumb } from './thumbs.js';
 import * as scheduler from './scheduler.js';
+import { listProfiles, pickerFor, resolveProfileTarget } from './browser-target.js';
+import { browserTargetReport } from './browser-consumers.js';
 
 export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   const app = express();
@@ -241,24 +243,58 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, removed: before - cfg.customSources.length, sources: effectiveSources(cfg) });
   });
 
-  // ── browser detection ────────────────────────────────────────────
+  // ── browser / profile targeting ──────────────────────────────────
+  //
+  // The page that owns the browser setting (web/src/pages/Browser.jsx) is rendered from this one answer:
+  // the installed executables, the **discovered profiles** (so nobody hand-writes a path), what the setting
+  // currently resolves to (through the same function every feature uses, see server/src/browser-target.js),
+  // and one status row per feature that depends on it (server/src/browser-consumers.js).
+  //
+  // `profiles: false` skips the discovery for callers that only want the detected browsers; the discovery
+  // itself is a directory listing and reads no cookie.
+  app.get('/api/browser/target', (req, res) => {
+    const cfg = getConfig();
+    const discovered = listProfiles();
+    const picker = pickerFor(discovered, cfg);
+    res.json({
+      detected: detectBrowsers(),
+      target: resolveProfileTarget(cfg),
+      report: browserTargetReport(cfg),
+      profiles: picker.options,
+      // Entries the discovery refused (a row with no usable path) and rows the picker could not offer: the
+      // page shows the count rather than quietly presenting a shorter list.
+      unusableProfiles: picker.unusable,
+      selected: picker.selected,
+    });
+  });
+
+  // The older name of the route above, kept because a page may still ask for it: same detection, and the
+  // browser config it used to return (the target answers everything it did, and more).
   app.get('/api/browsers', (_req, res) => {
     res.json({ detected: detectBrowsers(), config: getConfig().browser });
   });
 
   // ── login availability ───────────────────────────────────────────
   // Only reports "which cookie names were read", and **never sends back any value**.
+  //
+  // The profile is resolved exactly like every feature's own read (server/src/browser-target.js): a request
+  // that names one is an explicit hand-in, anything else follows the shared setting. This route used to read
+  // `cfg.browser.profileDir` on its own, which is how the settings page and the share page could answer
+  // differently about the same machine.
   app.post('/api/cookies/check', async (req, res) => {
     const cfg = getConfig();
-    const profileDir = req.body?.profileDir ?? cfg.browser?.profileDir ?? '';
+    const profile = resolveProfileTarget(cfg, { profileDir: req.body?.profileDir });
     const domains = Array.isArray(req.body?.domains) && req.body.domains.length ? req.body.domains : ['bilibili.com'];
     const { readBrowserCookies } = await import('./cookies.js');
-    const r = await readBrowserCookies(profileDir, domains);
+    const r = await readBrowserCookies(profile.dir, domains);
     res.json({
       ok: r.ok,
       error: r.error ?? null,
       warning: r.warning ?? null,
       profile: r.profile ?? null,
+      profileDir: profile.dir || null,
+      profileSource: profile.source,
+      profileReason: profile.dir ? null : 'no-profile-configured',
       domains,
       cookieCount: (r.names ?? []).length,
       hasSession: (r.names ?? []).includes('SESSDATA'),

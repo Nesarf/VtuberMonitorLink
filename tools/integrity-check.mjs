@@ -669,6 +669,52 @@ try {
   problems.push(`could not read the browser-profile structure: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5h. every api.<name>() the UI calls exists
+//
+// A method that is not on the api object fails no build and no lint: it throws while the page runs, and because
+// it throws **synchronously**, a `.catch()` chained after it is never attached - so the error escapes the effect
+// and the page renders blank. That is exactly what happened on this machine: a page called `api.getBrowsers()`,
+// which api.js has never had, and the only thing that noticed was a browser walking the UI. This is the one-line
+// check that would have found it first, and its control is a fixture calling a method which is not there.
+const apiMethodsIn = (src) => new Set([...src.slice(src.indexOf('export const api = {')).matchAll(/^\s{2}([A-Za-z_][A-Za-z0-9_]*):/gm)].map((m) => m[1]));
+function missingApiCalls(apiSrc, sources) {
+  const defined = apiMethodsIn(apiSrc);
+  const out = [];
+  for (const [name, text] of sources) {
+    // Comments are removed before matching, and that is not a nicety: the comment explaining this check names
+    // the very method that is missing (`api.getBrowsers()`), and a scanner that reads prose as code fires on
+    // its own documentation - which is exactly the mistake recorded as bug 89 in this repository's table.
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    for (const m of code.matchAll(/\bapi\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) if (!defined.has(m[1])) out.push(`${name}: api.${m[1]}()`);
+  }
+  return out;
+}
+try {
+  const apiSrc = fs.readFileSync(path.join(ROOT, 'web/src/api.js'), 'utf8');
+  const sources = [];
+  (function collect(dir) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) collect(p);
+      else if (/\.jsx?$/.test(e.name) && e.name !== 'api.js') sources.push([rel(p), fs.readFileSync(p, 'utf8')]);
+    }
+  })(path.join(ROOT, 'web/src'));
+
+  const missing = missingApiCalls(apiSrc, sources);
+  const calls = sources.reduce((n, [, text]) => n + (text.match(/\bapi\.[A-Za-z_][A-Za-z0-9_]*\s*\(/g) ?? []).length, 0);
+  if (missing.length) problems.push(`the UI calls api method(s) that api.js does not define: ${missing.join(', ')}`);
+  else process.stdout.write(`   [ok]   ${calls} api call(s) across ${sources.length} file(s), every name defined\n`);
+
+  // The control: the exact call that shipped a blank page must be flagged, and a real one must not be.
+  const wrong = missingApiCalls(apiSrc, [['fixture.jsx', 'api.getBrowsers().then((x) => x)']]);
+  const right = missingApiCalls(apiSrc, [['fixture.jsx', 'api.browserTarget().then((x) => x)']]);
+  if (right.length) problems.push(`the api-call check rejects a call that exists: ${right.join(', ')}`);
+  else if (wrong.length !== 1) problems.push(`the api-call check does not fire on a method that is not defined (fired ${wrong.length} time(s))`);
+  else process.stdout.write('   [ok]   control: a call to a method that is not defined is flagged, a real one is not\n');
+} catch (e) {
+  problems.push(`could not read the api surface: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

@@ -579,10 +579,13 @@ async function main() {
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
     const tabs = await page.locator('nav.tabs button').allInnerTexts();
-    check('eleven navigation tabs render', tabs.length === 11, tabs.join(' | '));
+    // Twelve since the browser/profile targeting got its own page. The count is pinned rather than "at least",
+    // because the point of this check is that a page which appears is also walked here: a tab nobody visits is
+    // a tab this traversal does not cover, and the number is what makes that visible.
+    check('twelve navigation tabs render', tabs.length === 12, tabs.join(' | '));
     check(
       'the Intel, Search, Live and Watch tabs are present',
-      ['情报', '检索', '直播', '监视', 'LLM'].every((x) => tabs.includes(x)),
+      ['情报', '检索', '直播', '监视', '浏览器', 'LLM'].every((x) => tabs.includes(x)),
       tabs.join(' | ')
     );
 
@@ -695,8 +698,18 @@ async function main() {
     await tab('设置').click();
     await page.waitForTimeout(700);
     main = await mainText();
+    // The browser mode select moved to the page that owns the browser/profile targeting; on Settings the first
+    // select is something else now (two options). Walking there and back keeps this check about the control
+    // rather than about the address it used to live at.
+    await tab('浏览器').click();
+    await page.waitForTimeout(700);
     const providerOptions = await page.locator('main select').first().locator('option').count();
     check('browser mode select works', providerOptions >= 3, providerOptions + ' options');
+    const browserMovedHint = await page.locator('main').innerText();
+    check('the browser page names the profile it will use', /profile|配置|目录/i.test(browserMovedHint), browserMovedHint.slice(0, 60));
+    await tab('设置').click();
+    await page.waitForTimeout(600);
+    main = await mainText();
     check('theme selector is present', main.indexOf('主题') !== -1 && main.indexOf('桌面通知') !== -1);
 
     // Observation mode: this is the control plane for the "traces themselves are information"
@@ -1346,10 +1359,17 @@ async function main() {
     const shareTargets = await (await fetch(base + '/api/share/targets')).json();
     check('the share-targets endpoint answers', shareTargets.ok === true, `${shareTargets.targets?.length} targets`);
     const byId = Object.fromEntries((shareTargets.targets ?? []).map((x) => [x.id, x]));
-    check('the methods that need no login are ready', byId['file-html']?.status === 'ready' && byId['text']?.status === 'ready' && byId['webhook']?.status === 'ready');
+    // `declaredStatus` rather than the old flat `status`: a share target became three independent stages
+    // (account / verification / send) and the single field was replaced by the declaration plus the stages.
+    // The readings below are the same facts this traversal was always asserting - a method that needs no login
+    // is ready, a method that needs one does not pretend, and a platform that cannot be done says so.
+    check('the methods that need no login are ready', byId['file-html']?.declaredStatus === 'ready' && byId['text']?.declaredStatus === 'ready' && byId['webhook']?.declaredStatus === 'ready', JSON.stringify([byId['file-html']?.declaredStatus, byId['text']?.declaredStatus, byId['webhook']?.declaredStatus]));
     check('every target honestly declares whether a login is needed', (shareTargets.targets ?? []).every((x) => typeof x.needsLogin === 'boolean'));
-    check('a target that needs a login does not pretend to be available', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic'] ?? {}).slice(0, 90));
-    check('a platform we cannot do is marked unsupported explicitly (X needs OAuth)', byId['x-post']?.status === 'unsupported');
+    check('a target that needs a login does not pretend to be available', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.stages?.send?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic']?.stages?.send ?? {}).slice(0, 90));
+    check('a platform we cannot do is marked unsupported explicitly (X needs OAuth)', byId['x-post']?.declaredStatus === 'unsupported', byId['x-post']?.declaredStatus);
+    // And the rule the owner asked for after that: unsupported must still be configurable and checkable, so the
+    // login stage of a platform we cannot post to must be actionable rather than blank.
+    check('a platform we cannot post to still offers a login check', byId['x-post']?.stages?.verification?.actionable === true, JSON.stringify(byId['x-post']?.stages?.verification ?? {}).slice(0, 90));
 
     const bundleRes = await fetch(base + '/api/share/bundle', {
       method: 'POST',

@@ -42,11 +42,23 @@ export default function Browser() {
   const [domain, setDomain] = useState('bilibili.com');
   const st = useSaveState();
 
-  const loadTarget = () => api.browserTarget().then(setData).catch(() => {});
+  // The call stays on one line on purpose: the structural check in integrity-check.mjs asserts that this page
+  // fetches through `api.browserTarget()` and renders the per-feature status, and splitting the call across
+  // lines (as a first attempt did) makes that contract unfindable by text while changing nothing about the
+  // behaviour. The check is the contract; the formatting bends to it, not the other way round.
+  const loadTarget = () =>
+    api.browserTarget().then((d) => {
+      setData(d);
+      setPresets(d?.detected ?? []);
+    }).catch(() => {});
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e) => setMsg(e.message));
-    api.getBrowsers().then((b) => setPresets(b.detected ?? [])).catch(() => {});
+    // The installed-browser list comes from the same payload as everything else on this page. It used to be a
+    // second call - `api.getBrowsers()` - which does not exist in api.js; and because a missing method throws
+    // **synchronously**, the `.catch(() => {})` chained after it was never attached, so the TypeError escaped
+    // the effect and the page rendered blank. One route, one fetch: the list cannot disagree with the rest of
+    // the page, and there is no second method to forget to write.
     loadTarget();
   }, []);
 

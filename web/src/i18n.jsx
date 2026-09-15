@@ -549,6 +549,7 @@ export const STRINGS = {
     taskMode_watch: '只检查监视对象',
     freq: '频率',
     freq_weekly: '每周',
+    sourceRegion: '地区',
     freq_daily: '每天',
     catchUp: '错过补跑',
     catchUpTag: '（补跑）',
@@ -1342,6 +1343,7 @@ export const STRINGS = {
     testAgainst: 'Measure against',
     switchTo: 'Switch',
     switched: 'Switched',
+    sourceRegion: 'Region',
 
     ioTitle: 'Import & export',
     ioHint: 'Export sources, watch targets, LLM profiles, notifications and layout as JSON, then import on another machine. No secrets by default.',

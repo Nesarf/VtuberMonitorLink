@@ -470,6 +470,7 @@ export const GENERATED = {
     "scheduleTasks": "計劃任務",
     "scheduleHint2": "可以建多條任務，各自設定模式、頻率與時間；程序沒開時錯過的任務會在啓動後補跑一次。",
     "addTask": "新增任務",
+    "sourceRegion": "地區",
     "taskName": "任務名",
     "taskMode": "模式",
     "taskMode_daily": "常規收集",
@@ -1175,6 +1176,7 @@ export const GENERATED = {
     "historyTitle": "執行歷史",
     "noScheduleHistory": "還沒有執行記錄",
     "notifyTitle": "告警推送",
+    "sourceRegion": "地區",
     "notifyPanelHint": "命中關鍵詞、監視變更或運行失敗時推到手機。留空表示不啓用該通道。",
     "addTarget": "新增通道",
     "notifyKind": "通道",
@@ -2068,5 +2070,6 @@ export const GENERATED = {
     "browsersDirHint": "Playwright 瀏覽器核心的位置。Windows 預設在 %LOCALAPPDATA%（即 C 盤）；要守「不寫 C 盤」的紅線就指到別的盤。"
   }
 };
+    "sourceRegion": "地區",
 
 export default GENERATED;

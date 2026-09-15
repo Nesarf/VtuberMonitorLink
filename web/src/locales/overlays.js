@@ -50,33 +50,36 @@ export const GB_STEMS = [
  * self-check on the spot).
  */
 const LATE_KEYS = {
-  'ja-JP': { tab_people: 'ピープル', tab_calendar: 'カレンダー' },
-  'ko-KR': { tab_people: '관심', tab_calendar: '달력' },
-  'id-ID': { tab_people: 'Orang', tab_calendar: 'Kalender' },
+  'ja-JP': { tab_people: 'ピープル', tab_calendar: 'カレンダー', sourceRegion: '地域' },
+  'ko-KR': { tab_people: '관심', tab_calendar: '달력', sourceRegion: '지역' },
+  'id-ID': { tab_people: 'Orang', tab_calendar: 'Kalender', sourceRegion: 'Wilayah' },
   // Thai: `คน` (people) rather than a transliteration of "people", and `ปฏิทิน` (calendar). Both are
   // the words the rest of the Thai copy uses (`คนที่ติดตาม` / the calendar hint below).
-  'th-TH': { tab_people: 'คน', tab_calendar: 'ปฏิทิน' },
+  'th-TH': { tab_people: 'คน', tab_calendar: 'ปฏิทิน', sourceRegion: 'ภูมิภาค' },
   // Vietnamese: `Người` (people) and `Lịch` (calendar). They have to be written down here rather than
   // left to the machine layer, because the machine pass gave the People tab the same value as the
   // Watch tab (`Theo dõi`, from zh "关注" and zh "监视" respectively) -- two different tabs rendering english-logic:allow
   // one label, which no gate would have caught.
-  'vi-VN': { tab_people: 'Người', tab_calendar: 'Lịch' },
-  'es-ES': { tab_people: 'Personas', tab_calendar: 'Calendario' },
-  'es-419': { tab_people: 'Personas', tab_calendar: 'Calendario' },
-  'pt-PT': { tab_people: 'Pessoas', tab_calendar: 'Calendário' },
-  'pt-BR': { tab_people: 'Pessoas', tab_calendar: 'Calendário' },
-  'fr-FR': { tab_people: 'Personnes', tab_calendar: 'Calendrier' },
-  'de-DE': { tab_people: 'Personen', tab_calendar: 'Kalender' },
-  'it-IT': { tab_people: 'Persone', tab_calendar: 'Calendario' },
-  'ru-RU': { tab_people: 'Персоны', tab_calendar: 'Календарь' },
-  'uk-UA': { tab_people: 'Персони', tab_calendar: 'Календар' },
-  'pl-PL': { tab_people: 'Osoby', tab_calendar: 'Kalendarz' },
+  'vi-VN': { tab_people: 'Người', tab_calendar: 'Lịch', sourceRegion: 'Khu vực' },
+  'es-ES': { tab_people: 'Personas', tab_calendar: 'Calendario', sourceRegion: 'Región' },
+  'es-419': { tab_people: 'Personas', tab_calendar: 'Calendario', sourceRegion: 'Región' },
+  'pt-PT': { tab_people: 'Pessoas', tab_calendar: 'Calendário', sourceRegion: 'Região' },
+  'pt-BR': { tab_people: 'Pessoas', tab_calendar: 'Calendário', sourceRegion: 'Região' },
+  'fr-FR': { tab_people: 'Personnes', tab_calendar: 'Calendrier', sourceRegion: 'Région' },
+  'de-DE': { tab_people: 'Personen', tab_calendar: 'Kalender', sourceRegion: 'Region' },
+  'it-IT': { tab_people: 'Persone', tab_calendar: 'Calendario', sourceRegion: 'Regione' },
+  'ru-RU': { tab_people: 'Персоны', tab_calendar: 'Календарь', sourceRegion: 'Регион' },
+  'uk-UA': { tab_people: 'Персони', tab_calendar: 'Календар', sourceRegion: 'Регіон' },
+  'pl-PL': { tab_people: 'Osoby', tab_calendar: 'Kalendarz', sourceRegion: 'Region' },
   // customNamePh is hand-written for Serbian: the machine pass kept inventing a sentinel for it
   // (13 other locales translated it fine, this one failed twice), and a hand entry always wins.
-  'sr-RS': { tab_people: 'Особе', tab_calendar: 'Календар', customNamePh: 'Нечији блог' },
+  'sr-RS': { tab_people: 'Особе', tab_calendar: 'Календар', customNamePh: 'Нечији блог', sourceRegion: 'Регион' },
+  // Filipino is hand-maintained too, so the region box gets a word rather than the English fallback.
+  'fil-PH': { sourceRegion: 'Rehiyon' },
   'ar-SA': {
     tab_people: 'الأشخاص',
     tab_calendar: 'التقويم',
+    sourceRegion: 'المنطقة',
     // Hand-written because the machine pass kept a sentinel in this one (see BUGS #64): the
     // pipeline replayed it from its cache and overwrote a hand-edit of machine.json, so the fix
     // has to live in the hand layer, which always wins.

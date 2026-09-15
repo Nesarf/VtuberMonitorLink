@@ -5,7 +5,7 @@ import { api } from '../api.js';
 import { cachedThumb, loadThumb } from '../thumb-cache.js';
 import { Inline } from '../markdown.jsx';
 
-const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '' };
+const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '', region: '' };
 
 /** Latency badge: value + failure rate, coloured by how good it is */
 function Lat({ p, label, t }) {
@@ -99,6 +99,20 @@ export default function Sources() {
     } catch (e) {
       setErr(e.message);
     }
+  };
+
+  /**
+   * Commit the region box, but only when it actually changed.
+   *
+   * Why not patch on every keystroke like the selects do: a select changes once per decision, while a text
+   * box changes once per character, and every patch here writes the config file and reloads the whole list.
+   * The box is therefore uncontrolled (defaultValue + a key tied to the stored value), which also means the
+   * normalised value the server kept is what the box shows after the reload - typing `cn` must end up
+   * reading `CN`, not disagreeing with the setting it just wrote.
+   */
+  const commitRegion = (id, typed, current) => {
+    const code = String(typed ?? '').trim().toUpperCase();
+    if (code !== String(current ?? '')) patch(id, { region: code });
   };
 
   /** Bulk toggle: no ids means everything; with ids only those few are touched */
@@ -349,6 +363,25 @@ export default function Sources() {
                           <option value="proxy">{t('proxyUse')}</option>
                           <option value="tor">Tor</option>
                         </select>
+                        {/* Which country this source wants to be seen from. Empty is a real answer - "no
+                            preference" - which is also what every source behaved like before the setting
+                            existed. It is placed above the verdict because the verdict takes it into
+                            account, and it is only read in automatic mode, so a pinned egress says so. */}
+                        <div className="small muted" style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <label htmlFor={`region-${s.id}`}>{t('sourceRegion')}</label>
+                          <input
+                            id={`region-${s.id}`}
+                            key={s.region ?? ''}
+                            defaultValue={s.region ?? ''}
+                            placeholder="—"
+                            maxLength={2}
+                            style={{ width: 48, textTransform: 'uppercase' }}
+                            onBlur={(e) => commitRegion(s.id, e.target.value, s.region ?? '')}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') e.currentTarget.blur();
+                            }}
+                          />
+                        </div>
                         {/* What automatic mode picked and why -- leaving it unwritten makes it a black box */}
                         {!s.proxy || s.proxy === 'auto' ? (
                           <div className="small muted" title={eg?.[s.id]?.reason ?? ''} style={{ maxWidth: 220, marginTop: 4 }}>
@@ -472,6 +505,18 @@ export default function Sources() {
               <option value="proxy">{t('proxyUse')}</option>
               <option value="tor">Tor</option>
             </select>
+          </div>
+          {/* The same setting as the one in the list, available at creation time, so a source that wants a
+              particular country does not have to be created first and corrected afterwards. */}
+          <div className="field" style={{ flex: '0 0 130px' }}>
+            <label>{t('sourceRegion')}</label>
+            <input
+              value={form.region}
+              onChange={(e) => setForm({ ...form, region: e.target.value })}
+              placeholder="CN / JP"
+              maxLength={2}
+              style={{ textTransform: 'uppercase' }}
+            />
           </div>
         </div>
         <button className="primary" onClick={addCustom} disabled={busy === 'add' || !form.id || (!form.url && !form.uid)}>

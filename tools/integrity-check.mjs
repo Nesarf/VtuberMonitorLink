@@ -291,6 +291,57 @@ try {
   problems.push(`could not read the long-operation guards: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5d. a source's region survives the whole trip
+//
+// The region setting is the one kind of value where a mistake is invisible in every direction at once:
+// stored with a typo it never matches what an exit measured, so it reads as "no preference"; sent by the
+// page but dropped by the route it looks saved and does nothing; and dropped by the sanitiser it is simply
+// gone. None of those raise anything. So the trip is checked end to end: the catalogue's own values, the
+// sanitiser's rules, and the two places that have to carry it (the route and the page).
+try {
+  const { pathToFileURL } = await import('node:url');
+  const { BUILTIN_SOURCES, sanitizeCustomSource, mergeSourceOverride } = await import(pathToFileURL(path.join(ROOT, 'server/src/sources.js')).href);
+
+  const declared = (BUILTIN_SOURCES ?? []).filter((s) => s.region !== undefined);
+  const bad = declared.filter((s) => !/^[A-Z]{2}$/.test(String(s.region)));
+  if (bad.length) problems.push(`built-in source(s) with an unusable region: ${bad.map((s) => `${s.id}=${JSON.stringify(s.region)}`).join(', ')} (a two-letter code, upper case)`);
+  else if (declared.length) process.stdout.write(`   [ok]   ${declared.length} built-in source(s) pin a region, every one a usable code\n`);
+
+  // The rules, each with the value that must NOT survive: a lower-case code is normalised rather than
+  // rejected (people type `jp`), while a country name, a three-letter code and an object are dropped.
+  const kept = sanitizeCustomSource({ id: 'x', url: 'https://e.com/', region: 'jp' });
+  const dropped = ['china', 'CHN', 'J', '12', 'j p', {}];
+  const survived = dropped.filter((v) => sanitizeCustomSource({ id: 'x', url: 'https://e.com/', region: v }).region !== undefined);
+  if (kept.region !== 'JP') problems.push(`a region is no longer normalised to an upper-case code: ${JSON.stringify(kept.region)}`);
+  else if (survived.length) problems.push(`region value(s) that should have been dropped were stored: ${survived.map((v) => JSON.stringify(v)).join(', ')}`);
+  else process.stdout.write('   [ok]   a region is either a two-letter code or absent, whatever was sent\n');
+
+  // The merge, and the bug the merge replaced. `base` is an override entry that already carries a url; the
+  // caller sends only a region. Both shapes are run here so the difference is stated rather than remembered:
+  // the spread loses the url, the merge cannot.
+  const base = { id: 'x', name: 'X', url: 'https://e.com/feed.xml', region: 'JP' };
+  const merged = mergeSourceOverride(base, { region: 'TW' });
+  if (merged.url !== base.url) problems.push(`a partial override dropped a field it did not mention: url became ${JSON.stringify(merged.url)}`);
+  else if (merged.region !== 'TW') problems.push(`a partial override did not apply the field it did mention: region is ${JSON.stringify(merged.region)}`);
+  else process.stdout.write('   [ok]   a partial override writes only the fields it actually sends\n');
+
+  const spreadShape = sanitizeCustomSource({ ...base, url: undefined, region: 'TW' });
+  if (spreadShape.url !== undefined) notes.push('the spread shape no longer loses an unmentioned field, so that check is now vacuous');
+  else process.stdout.write('   [ok]   (and the spread shape it replaced really did lose it - the bug was not imaginary)\n');
+
+  const serverSrc2 = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const routeBlock = serverSrc2.match(/app\.patch\('\/api\/sources\/:id'[\s\S]*?\n  \}\);/);
+  if (!routeBlock) problems.push('the source patch route could not be found, so its handling of region is unchecked');
+  else if (!/region/.test(routeBlock[0])) problems.push('PATCH /api/sources/:id ignores region: the page would save a region that is never written');
+  else process.stdout.write('   [ok]   the source patch route carries the region through\n');
+
+  const sourcesPage = fs.readFileSync(path.join(ROOT, 'web/src/pages/Sources.jsx'), 'utf8');
+  if (!/sourceRegion/.test(sourcesPage) || !/region:/.test(sourcesPage)) problems.push('the sources page no longer offers the region setting, so the field is only reachable by hand-editing config.json');
+  else process.stdout.write('   [ok]   the sources page offers the region setting, in the list and at creation time\n');
+} catch (e) {
+  problems.push(`could not read the region setting's trip: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

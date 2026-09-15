@@ -3,7 +3,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { APP_ROOT, resolveDir } from './config.js';
-import { CATEGORIES, effectiveSources, sanitizeCustomSource } from './sources.js';
+import { CATEGORIES, effectiveSources, mergeSourceOverride, sanitizeCustomSource } from './sources.js';
 import { FETCH_KINDS } from './fetchers/index.js';
 import { detectBrowsers } from './fetchers/browser.js';
 import { makeProxyAgent } from './net.js';
@@ -176,18 +176,24 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const { id } = req.params;
     if (!effectiveSources(cfg).some((s) => s.id === id)) return res.status(404).json({ error: `unknown source: ${id}` });
-    const { enabled, login, url, uid, proxy, note } = req.body ?? {};
+    const { enabled, login, url, uid, proxy, note, region } = req.body ?? {};
     cfg.sources = cfg.sources ?? {};
     cfg.sources[id] = {
       ...(cfg.sources[id] ?? {}),
       ...(enabled === undefined ? {} : { enabled: !!enabled }),
       ...(login ? { login } : {}),
     };
-    // overriding the handful of mutable fields of a built-in source (uid / url / egress) lands in the custom source list
+    // overriding the handful of mutable fields of a built-in source (uid / url / egress / region) lands in
+    // the custom source list.
+    //
+    // The merge keeps only the fields actually sent (see mergeSourceOverride): spreading all of them at once
+    // writes `undefined` over a field the caller left out, and the sanitiser skips undefined values, so the
+    // entry's old value for that field is lost rather than kept. The region box on the sources page is what
+    // made that visible - editing a region wiped the url of the same override entry, silently.
     const customIdx = (cfg.customSources ?? []).findIndex((s) => s.id === id);
-    if (url !== undefined || uid !== undefined || proxy !== undefined || note !== undefined) {
+    if (url !== undefined || uid !== undefined || proxy !== undefined || note !== undefined || region !== undefined) {
       const base = customIdx >= 0 ? cfg.customSources[customIdx] : effectiveSources(cfg).find((s) => s.id === id);
-      const merged = sanitizeCustomSource({ ...base, url, uid, proxy, note });
+      const merged = mergeSourceOverride(base, { url, uid, proxy, note, region });
       if (customIdx >= 0) cfg.customSources[customIdx] = merged;
       else cfg.customSources = [...(cfg.customSources ?? []), merged];
     }

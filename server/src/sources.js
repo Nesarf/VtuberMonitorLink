@@ -260,9 +260,34 @@ export function sanitizeCustomSource(input) {
   for (const k of CUSTOM_SOURCE_FIELDS) if (input?.[k] !== undefined) out[k] = input[k];
   if (out.id) out.id = String(out.id).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 60);
   if (out.name && typeof out.name === 'string') out.name = { zh: out.name, en: out.name };
+  // `region` is compared against the country an exit actually measured, so the only usable values are a
+  // two-letter code and the absence of one. Anything else - a longer name, a mixed-case code, an object
+  // sent by a hand-written request - is dropped rather than stored: a value that can never match would sit
+  // in the config looking like a setting the user made. Absence is a real state here (no preference), so
+  // "dropped" and "never set" behave identically.
+  if (out.region !== undefined) {
+    const code = String(out.region).trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(code)) out.region = code;
+    else delete out.region;
+  }
   if (!out.category) out.category = 'community';
   if (!out.fetch) out.fetch = 'rss';
   if (!out.login) out.login = 'none';
   out.custom = true;
   return out;
+}
+
+/**
+ * Merge a partial override into the entry that already exists for a source.
+ *
+ * Why this is a function instead of a spread at the call site: the spread is exactly where the bug lived.
+ * `{ ...base, url, uid, proxy, note }` writes `undefined` over every field the caller did not mention, and
+ * because the sanitiser skips undefined values that field's previous value does not survive - it is simply
+ * gone. The sources page made it visible: changing only the region of a source whose override carried a url
+ * deleted the url. Here, a key may only overwrite something if the caller actually sent a value for it.
+ */
+export function mergeSourceOverride(base, patch) {
+  const next = { ...(base ?? {}) };
+  for (const [k, v] of Object.entries(patch ?? {})) if (v !== undefined) next[k] = v;
+  return sanitizeCustomSource(next);
 }

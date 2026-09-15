@@ -19,6 +19,17 @@ import { resolveDir } from './config.js';
 
 /** one failure costs about as much as 4 normal requests (timeout + retry + slowdown) */
 export const LOSS_COST = 4;
+/**
+ * Jitter is charged more gently than loss, because it is a different kind of harm: a loss is a request
+ * that has to be made again, while jitter does not lose anything - it makes every request's duration
+ * unpredictable, which is what a browser fetch actually stalls on. Half of the spread is therefore added
+ * as equivalent latency, on top of the loss term rather than instead of it.
+ *
+ * Note this is a second, independent stability signal from the outcome history in historyPenalty():
+ * that one says "this egress has really been failing lately", this one says "this egress is noisy right
+ * now". A caller that never measured jitter gets exactly the old number, because the term is zero.
+ */
+export const JITTER_COST = 0.5;
 /** a challenger must be 20% cheaper than the incumbent before it takes over, to avoid flapping */
 export const SWITCH_MARGIN = 0.2;
 /** below this many samples no high-confidence verdict is given */
@@ -89,15 +100,21 @@ export function siteKey(subject) {
 
 /**
  * Score of a single egress.
- * @returns {{usable:boolean, effective:number, avg:number, loss:number, samples:number, why:string}}
+ *
+ * effective = avg × (1 + loss × LOSS_COST) + jitter × JITTER_COST
+ *
+ * The loss term is the original one and is unchanged; the jitter term is zero whenever the probe did not
+ * measure a spread, which is what keeps this backwards-compatible for callers that only ping once.
+ * @returns {{usable:boolean, effective:number, avg:number, loss:number, jitter:number, samples:number, why:string}}
  */
 export function scoreMode(m) {
-  if (!m || m.skipped) return { usable: false, effective: Infinity, avg: 0, loss: 0, samples: 0, why: '未参与对比' };
-  if (!m.ok) return { usable: false, effective: Infinity, avg: 0, loss: 1, samples: m.sent ?? 0, why: m.error ?? '不通' };
+  if (!m || m.skipped) return { usable: false, effective: Infinity, avg: 0, loss: 0, jitter: 0, samples: 0, why: '未参与对比' };
+  if (!m.ok) return { usable: false, effective: Infinity, avg: 0, loss: 1, jitter: 0, samples: m.sent ?? 0, why: m.error ?? '不通' };
   const avg = Number(m.avg ?? 0);
   const loss = Number(m.loss ?? 0);
-  const effective = Math.max(1, Math.round(avg * (1 + loss * LOSS_COST)));
-  return { usable: true, effective, avg, loss, samples: Number(m.sent ?? 0), why: '' };
+  const jitter = Number(m.jitter ?? 0);
+  const effective = Math.max(1, Math.round(avg * (1 + loss * LOSS_COST) + jitter * JITTER_COST));
+  return { usable: true, effective, avg, loss, jitter, samples: Number(m.sent ?? 0), why: '' };
 }
 
 /** stability correction from real fetch outcomes: repeated failures raise the score, long-running success earns a small bonus */
@@ -165,7 +182,7 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   const incumbent = candidates.find((c) => c.name === current) ?? null;
 
   const detail = (c) =>
-    `${c.name} ${c.raw.avg}ms${c.raw.loss ? ` 丢包${Math.round(c.raw.loss * 100)}%` : ''}→等效${Math.round(c.effective)}ms`;
+    `${c.name} ${c.raw.avg}ms${c.raw.loss ? ` 丢包${Math.round(c.raw.loss * 100)}%` : ''}${c.raw.jitter ? ` 抖动±${Math.round(c.raw.jitter)}ms` : ''}→等效${Math.round(c.effective)}ms`;
 
   // hysteresis: as long as the incumbent is not clearly worse, do not move — egress swapping back and forth is the real instability
   if (incumbent && incumbent.name !== best.name && incumbent.effective <= best.effective * (1 + SWITCH_MARGIN)) {

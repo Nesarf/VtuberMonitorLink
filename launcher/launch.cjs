@@ -27,7 +27,7 @@
 
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -148,6 +148,91 @@ function parseArgs(argv) {
   return out;
 }
 
+/**
+ * Is something already serving VML on this port?
+ *
+ * Two questions, and the order matters: is anything listening at all, and is it us. The second is answered by
+ * asking for an endpoint only this application has, because "the port is busy" and "the app is already
+ * running" need opposite answers. The first is a conflict to explain; the second is a reason to open the page
+ * the person actually wanted when they double-clicked the icon. The child's own message for the first case
+ * ("port 43110 in use - set the PORT environment variable to pick another port") is a developer's sentence,
+ * and the person who just launched a portable app has no idea what to do with it.
+ *
+ * A refused connection is the normal case of nothing being there; a listener that answers with something else,
+ * or that does not answer within the timeout, is somebody else's server and is treated as a conflict.
+ */
+async function probeExisting(port) {
+  const ctl = new AbortController();
+  const timer = setTimeout(function () {
+    ctl.abort();
+  }, 1500);
+  try {
+    const res = await fetch('http://127.0.0.1:' + port + '/api/sources', { signal: ctl.signal });
+    if (!res.ok) return { kind: 'other', detail: 'answered HTTP ' + res.status };
+    const body = await res.json();
+    return Array.isArray(body && body.sources) ? { kind: 'vml' } : { kind: 'other', detail: 'answered, but not like VML' };
+  } catch (err) {
+    const code = (err && err.cause && err.cause.code) || (err && err.code);
+    if (code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ENOTFOUND') return { kind: 'free' };
+    return { kind: 'other', detail: (err && err.message) || 'no answer' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Open a URL in the default browser, without a shell.
+ *
+ * `explorer` is used on Windows rather than `cmd /c start`, for the reason the open-file endpoint learned the
+ * same day: a shell re-parses its arguments, and the value here happens to be built by this program rather
+ * than typed by anyone, but a URL is still data. The caller prints the address when this returns false, so a
+ * machine where none of these exists is told the address instead of being left with nothing.
+ */
+function openInBrowser(url) {
+  const spec =
+    process.platform === 'win32'
+      ? ['explorer', [url]]
+      : process.platform === 'darwin'
+        ? ['open', [url]]
+        : ['xdg-open', [url]];
+  try {
+    execFileSync(spec[0], spec[1], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hold the window open when there is a person in front of it, and never otherwise.
+ *
+ * A double-clicked launcher closes the moment the process exits, so a failure that is only printed is a
+ * failure nobody reads - the owner's report of this application ("it starts and then quits by itself") is
+ * that, and the trace he needed was already in the log by then. `isTTY` is the whole guard: a pipe, a service
+ * manager or CI gets no prompt, so nothing can ever hang waiting for a key that will not be pressed.
+ */
+function pauseForHuman(message) {
+  if (!message) return;
+  process.stdout.write('\n' + message + '\n');
+  if (!process.stdin.isTTY) return;
+  try {
+    if (process.platform === 'win32') execFileSync('cmd', ['/c', 'pause'], { stdio: 'inherit' });
+    else execFileSync('sh', ['-c', 'read _'], { stdio: 'inherit' });
+  } catch {
+    /* no console to read from: exiting is the right answer */
+  }
+}
+
+/** Where the server writes its log - printed on failure, because that is where the reason already is */
+function logPathFor() {
+  try {
+    const L = resolveLayout(detectSea());
+    return L.appRoot ? path.join(L.appRoot, 'logs', 'server.log') : '(app root could not be resolved)';
+  } catch {
+    return '(app root could not be resolved)';
+  }
+}
+
 function doctorReport(L, version) {
   const cfgPath = L.appRoot ? path.join(L.appRoot, 'config.json') : null;
   const distPath = L.appRoot ? path.join(L.appRoot, 'web', 'dist', 'index.html') : null;
@@ -195,7 +280,7 @@ function problemsFor(L) {
   return problems;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const isSea = detectSea();
   const L = resolveLayout(isSea);
@@ -252,6 +337,37 @@ function main() {
 
   const port = args.port || process.env.PORT || '43110';
   const entry = path.join(L.appRoot, ENTRY);
+
+  // A port number that cannot be listened on is its own answer. Without this, a typo like --port 70000 fell
+  // through to the probe, which reported "something that is not this application is using it" - a sentence
+  // about a conflict that does not exist.
+  const portNumber = Number(port);
+  if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
+    pauseForHuman('[' + NAME + '] ' + port + ' is not a usable port number (1-65535).');
+    return 1;
+  }
+
+  // Before spawning anything: is this a second launch, and if so, of what? See probeExisting.
+  const existing = await probeExisting(port);
+  if (existing.kind === 'vml') {
+    const url = 'http://127.0.0.1:' + port + '/';
+    process.stdout.write('[' + NAME + '] already running - ' + url + '\n');
+    if (args.open && openInBrowser(url)) {
+      process.stdout.write('[' + NAME + '] opened in your browser.\n');
+      return 0;
+    }
+    pauseForHuman('[' + NAME + '] open this address in your browser:\n  ' + url);
+    return 0;
+  }
+  if (existing.kind === 'other') {
+    // Not our instance, so this really is a conflict - but it is told in a sentence a person can act on,
+    // rather than by handing the child's "set the PORT environment variable" to somebody who double-clicked.
+    pauseForHuman(
+      '[' + NAME + '] port ' + port + ' is already used by something that is not this application (' + existing.detail + ').\n' +
+        'Start this one on another port:  --port 43111'
+    );
+    return 1;
+  }
 
   const env = Object.assign({}, process.env);
   env.PORT = port;
@@ -315,17 +431,34 @@ function main() {
       resolve(1);
     });
     child.on('exit', function (code, signal) {
-      resolve(signal ? 0 : code || 0);
+      if (signal) {
+        // A child killed by a signal is not a success. `resolve(signal ? 0 : ...)` reported an out-of-memory
+        // kill, a service manager's stop and a clean shutdown as the same thing - exit code 0 - which is the
+        // one outcome a caller cannot tell apart from "everything went fine".
+        process.stderr.write('\n[' + NAME + '] the server was stopped by ' + signal + '\n');
+        resolve(1);
+        return;
+      }
+      resolve(code || 0);
     });
   });
 }
 
 main().then(
   function (code) {
+    if (code) {
+      // A double-clicked window closes the instant the process exits, so a failure that is only printed is a
+      // failure nobody reads - the owner's report ("it starts and then quits by itself") is exactly that, and
+      // by the time it happens the reason has already been written to the log.
+      pauseForHuman(
+        '[' + NAME + '] exited with code ' + code + '.\n' + 'The server log, which has the reason:\n  ' + logPathFor()
+      );
+    }
     process.exit(code);
   },
   function (err) {
     process.stderr.write('\n[' + NAME + '] unexpected error: ' + (err && err.stack ? err.stack : err) + '\n\n');
+    pauseForHuman('[' + NAME + '] the launcher itself failed.\n' + 'The server log:\n  ' + logPathFor());
     process.exit(1);
   }
 );

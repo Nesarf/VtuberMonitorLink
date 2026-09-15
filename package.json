@@ -21,6 +21,7 @@
     "start": "node server/src/index.js",
     "smoke": "node server/scripts/smoke.mjs",
     "sanitize-check": "node server/scripts/sanitize-check.mjs",
+    "sanitize:history": "node server/scripts/sanitize-history.mjs",
     "commit-msg": "node tools/commit-msg-check.mjs",
     "workers": "node tools/workers.mjs",
     "workers:update": "node tools/workers.mjs --update",

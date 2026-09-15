@@ -1,0 +1,10 @@
+{
+  "cookie-blob|tools/browser-config-test.mjs": 1,
+  "escaped-drive|tools/socks-test.mjs": 22,
+  "escaped-drive|tools/observe-test.mjs": 4,
+  "escaped-drive|tools/traverse-release.cjs": 5,
+  "specific-drive|workers/sql/README.md": 1,
+  "escaped-drive|tools/make-release.mjs": 2,
+  "specific-drive|docs/BUGS.md": 2,
+  "specific-drive|docs/PUBLISH.md": 2
+}

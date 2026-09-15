@@ -41,6 +41,12 @@ jobs:
       - name: Check the sources for leaked paths and secrets
         run: npm run sanitize-check
 
+      # The same rules, pointed at every blob that has ever been committed. A file deleted in a later commit is
+      # still in the history, and so is whatever was in it - which is why "the tree is clean" was never the whole
+      # question. Findings that are accepted are named and counted in a baseline, so this fails on anything new.
+      - name: Check the committed history for traces
+        run: npm run sanitize:history
+
       - name: Check that every commit message is English
         run: npm run commit-msg
 

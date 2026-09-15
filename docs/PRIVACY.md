@@ -31,6 +31,30 @@ That script scans every text file in the repository and reports:
 | `named-persona` | Personalised identifiers such as private persona names |
 | `runtime-data` | Whether runtime data/directories were mistakenly put into the repository |
 
+### The history, not just the tree
+
+`npm run sanitize-check` reads the working tree, which answers "is the repository clean now" - not the same
+question as "is anything personal reachable in it". A file deleted in a later commit is still inside the commits
+that contain it, `git log -p` shows it to anyone who asks, and a clone brings all of it along. That is how a key
+that was "removed ages ago" stays published.
+
+`npm run sanitize:history` therefore runs the **same rules and the same exemptions** (`sanitize-rules.mjs` is the
+one definition, so the two scanners cannot disagree) over every text blob that has ever been committed - 1170 of
+them at the time of writing - and masks what it finds, because a scanner that prints the match has just written
+it into a new place: a terminal, a public CI log, a transcript.
+
+Measured on this repository (2026-09-15): **no API key, no cookie content, no private name, no personal home
+directory path in any commit.** What it does find are machine drive paths in *older* versions of test fixtures
+and documentation examples; the current versions exempt those lines, which is why the tree scan is clean while
+the history scan is not. Rewriting the history to remove a fixture's drive letter would break every clone and
+fork for no privacy gain, so those are accepted **by name and by count** in
+`server/scripts/sanitize-history.baseline.json` and anything new fails the build. The baseline is meant to be
+read when it changes; `--update` rewrites it, and belongs in a commit that says why.
+
+If the scan ever reports a key, a cookie or a name, editing a file will not fix it: the history has to be
+rewritten (`git filter-repo` / BFG, then a force-push) **and the credential has to be rotated**, because a value
+that reached a public clone must be treated as known. Rotating first, rewriting afterwards, is the safe order.
+
 ## Developer notes
 
 - Do **not** hardcode any absolute path in the code; everything goes through `config.json` (see `DEFAULT_CONFIG` in `server/src/config.js`).

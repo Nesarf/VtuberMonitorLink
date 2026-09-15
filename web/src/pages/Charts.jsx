@@ -61,16 +61,32 @@ function HBars({ rows, label, formatter }) {
 
 export default function Charts() {
   const { t, tn } = useI18n();
-  const [days, setDays] = useState(30);
+  // The range keys the server knows. Short ones are answered from the items and bucketed by minutes
+  // (an hour is below the resolution of the daily table), and each of those buckets is labelled with its
+  // time rather than its date below.
+  const RANGES = [
+    { key: '30m', unit: 'groupMinutes', n: 30 },
+    { key: '1h', unit: 'groupHours', n: 1 },
+    { key: '4h', unit: 'groupHours', n: 4 },
+    { key: '12h', unit: 'groupHours', n: 12 },
+    { key: '1d', unit: 'groupDays', n: 1 },
+    { key: '3d', unit: 'groupDays', n: 3 },
+    { key: '7d', unit: 'groupDays', n: 7 },
+    { key: '30d', unit: 'groupDays', n: 30 },
+    { key: '90d', unit: 'groupDays', n: 90 },
+    { key: '180d', unit: 'groupDays', n: 180 },
+    { key: '360d', unit: 'groupDays', n: 360 },
+  ];
+  const [range, setRange] = useState('30d');
   const [data, setData] = useState(null);
   const [stat, setStat] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
 
-  const load = async (d = days) => {
+  const load = async (r = range) => {
     setBusy('load');
     try {
-      const [s, a] = await Promise.all([api.archiveSeries(d), api.archiveStats()]);
+      const [s, a] = await Promise.all([api.archiveSeries(r), api.archiveStats()]);
       setStat(a);
       setData(s);
       setErr('');
@@ -100,6 +116,13 @@ export default function Charts() {
 
   const empty = !stat?.items;
 
+  // A bucket is 'YYYY-MM-DDTHH:MM' for the short ranges and 'YYYY-MM-DD' for the long ones: an axis wants
+  // whatever tells its points apart, which is the time for one and the month-and-day for the other.
+  const pointLabel = (day) => (day.length > 10 ? day.slice(11, 16) : day.slice(5));
+  // Alerts and source health are counters the archive keeps per day. A window shorter than a day has no
+  // honest series behind either, so those two are explained rather than drawn as a row of zeros.
+  const subDay = Number(data?.bucket?.minutes ?? 1440) < 1440;
+
   return (
     <section className="panel">
       <h2>
@@ -118,16 +141,15 @@ export default function Charts() {
         <div className="field" style={{ flex: '0 0 140px' }}>
           <label>{t('chartsRange')}</label>
           <select
-            value={days}
+            value={range}
             onChange={(e) => {
-              const d = Number(e.target.value);
-              setDays(d);
-              load(d);
+              setRange(e.target.value);
+              load(e.target.value);
             }}
           >
-            {[7, 30, 90, 180].map((d) => (
-              <option key={d} value={d}>
-                {tn('groupDays', d)}
+            {RANGES.map((r) => (
+              <option key={r.key} value={r.key}>
+                {tn(r.unit, r.n)}
               </option>
             ))}
           </select>
@@ -148,7 +170,7 @@ export default function Charts() {
         <>
           <Collapsible id="chart-daily" title={t('chartsDaily')} summary={t('chartsDailyHint')} defaultOpen>
             <BarChart
-              data={(data?.daily?.days ?? []).map((d) => ({ key: d.day.slice(5), value: d.items }))}
+              data={(data?.daily?.days ?? []).map((d) => ({ key: pointLabel(d.day), value: d.items }))}
               label={t('chartsDaily')}
             />
           </Collapsible>
@@ -158,10 +180,12 @@ export default function Charts() {
               rows={(data?.bySource?.totals ?? []).slice(0, 12).map((r) => ({ key: r.sourceId, value: r.items }))}
               label={t('chartsSources')}
             />
-            <BarChart
-              data={(data?.daily?.days ?? []).map((d) => ({ key: d.day.slice(5), value: d.alerts }))}
-              label={t('chartsAlerts')}
-            />
+            {!subDay && (
+              <BarChart
+                data={(data?.daily?.days ?? []).map((d) => ({ key: pointLabel(d.day), value: d.alerts }))}
+                label={t('chartsAlerts')}
+              />
+            )}
           </Collapsible>
 
           <Collapsible id="chart-people" title={t('chartsPeople')} summary={t('chartsPeopleHint')}>

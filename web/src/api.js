@@ -111,7 +111,7 @@ export const api = {
 
   // SQLite archive and charts
   archiveStats: () => j('/api/archive/stats'),
-  archiveSeries: (days) => j(`/api/archive/series?days=${days ?? 30}`),
+  archiveSeries: (range) => j(`/api/archive/series?range=${encodeURIComponent(range ?? '30d')}`),
   groups: (days) => j(`/api/groups?days=${days ?? 30}`),
   silence: (days) => j(`/api/silence?days=${days ?? 60}`),
   cost: (days) => j(`/api/cost?days=${days ?? 14}`),

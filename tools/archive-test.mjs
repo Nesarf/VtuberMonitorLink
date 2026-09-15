@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   SCHEMA_VERSION,
   archivePath,
@@ -19,6 +20,7 @@ import {
   openArchive,
   peopleSeries,
   queryItems,
+  recentSeries,
   recordHealth,
   recordRun,
   series,
@@ -40,6 +42,7 @@ const t = (name, fn) => {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-archive-'));
 const dbPath = path.join(tmp, 'archive.db');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const mk = (n, day, sourceId = 'src-a', extra = {}) =>
   Array.from({ length: n }, (_, i) => ({
@@ -242,6 +245,64 @@ t('archivePath follows the configured feedsDir', () => {
   const p = archivePath({ paths: { feedsDir: tmp } });
   assert.ok(p.startsWith(tmp));
   assert.ok(p.endsWith('archive.db'));
+});
+
+process.stdout.write('\narchive: sub-day ranges for the trend chart\n');
+// The daily table cannot see below a day, so the chart's short ranges are counted from the items and
+// grouped into buckets. These checks pin the two things that could quietly go wrong: a bucket count that
+// does not match the window, and a bucket label the axis cannot read.
+t('a sub-day window is bucketed by minutes, and the items land inside it', () => {
+  const db = openArchive({}, { file: dbPath });
+  try {
+    const now = Date.now();
+    const ins = db.prepare(
+      'INSERT OR IGNORE INTO items (id, day, source_id, title, published_at, first_seen_at, people, keywords, image_count) VALUES (?,?,?,?,?,?,?,?,?)'
+    );
+    for (let i = 0; i < 5; i++) {
+      const at = new Date(now - i * 6 * 60000).toISOString();
+      ins.run(`sub-${i}`, at.slice(0, 10), 'src-sub', 'x', at, at, JSON.stringify(['p1']), JSON.stringify(['k1']), i === 0 ? 1 : 0);
+    }
+    const r = recentSeries(db, { minutes: 30, bucketMinutes: 1 });
+    // 30 buckets of one minute, give or take the one the window boundary lands in
+    assert.ok(r.days.length >= 30 && r.days.length <= 31, `expected 30 or 31 buckets, got ${r.days.length}`);
+    assert.match(r.days[0].day, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'the bucket label is a minute-precision timestamp');
+    assert.equal(r.bucket.minutes, 1);
+    assert.equal(r.bucket.alertGranularity, 'day', 'alerts stay day-granular and the answer says so');
+    const counted = r.days.reduce((a, b) => a + b.items, 0);
+    assert.ok(counted >= 1, `the items written inside the window should be counted, got ${counted}`);
+    assert.equal(r.days.reduce((a, b) => a + b.media, 0), 1, 'the item with an image is counted as media');
+    assert.ok(r.totals.some((x) => x.sourceId === 'src-sub'), 'totals carry the source');
+    assert.ok(r.peopleTotals.some((x) => x.personId === 'p1'), 'people totals are parsed from the text column');
+    assert.ok(r.keywords.some((x) => x.keyword === 'k1'), 'keyword totals are parsed from the text column');
+    const four = recentSeries(db, { minutes: 240, bucketMinutes: 15 });
+    assert.ok(four.days.length >= 16 && four.days.length <= 17, `4h in 15-minute buckets: got ${four.days.length}`);
+    assert.equal(four.bucket.minutes, 15);
+    const three = recentSeries(db, { minutes: 4320, bucketMinutes: 360 });
+    assert.ok(three.days.length >= 12 && three.days.length <= 13, `3d in 6-hour buckets: got ${three.days.length}`);
+    // And the day-based path still answers a day range with one row per day.
+    assert.equal(series(db, { days: 7 }).days.length, 7);
+  } finally {
+    // Close it even when an assertion above fails: a handle left open makes the temp directory
+    // undeletable, and the cleanup error would then hide the real one.
+    db.close();
+  }
+});
+
+t('the chart offers exactly the ranges the server knows', () => {
+  // Two lists that have to agree, in two files that cannot see each other: a range in the selector with no
+  // entry in the server's table silently falls back to 30 days, which looks like the selector being
+  // ignored rather than like a mistake.
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const chartSrc = fs.readFileSync(path.join(ROOT, 'web/src/pages/Charts.jsx'), 'utf8');
+  const serverBlock = /const RANGES = \{([\s\S]*?)\n\s*\};/.exec(serverSrc)?.[1] ?? '';
+  const serverKeys = [...serverBlock.matchAll(/'([0-9]+[mhd])':\s*\{/g)].map((m) => m[1]).sort();
+  const chartBlock = /const RANGES = \[([\s\S]*?)\n\s*\];/.exec(chartSrc)?.[1] ?? '';
+  const chartKeys = [...chartBlock.matchAll(/key:\s*'([^']+)'/g)].map((m) => m[1]).sort();
+  assert.ok(serverKeys.length >= 11, `expected the server to know the ranges, parsed ${serverKeys.length}`);
+  assert.deepEqual(chartKeys, serverKeys, 'the selector and the server must offer the same ranges');
+  for (const want of ['30m', '1h', '4h', '12h', '1d', '3d', '360d']) {
+    assert.ok(chartKeys.includes(want), `${want} should be offered`);
+  }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

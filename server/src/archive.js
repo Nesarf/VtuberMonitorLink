@@ -352,6 +352,103 @@ export function healthSeries(db, { days = 30, endDay = null } = {}) {
 }
 
 /** Archive overview */
+/**
+ * Sub-day ranges: the same payload shape as the day-based series, bucketed by minutes.
+ *
+ * The archive's trend tables are keyed by `day`, so a 30-minute or 4-hour window cannot be answered from
+ * them: an hour is below their resolution. The `items` table is not - it carries `published_at` (and
+ * `first_seen_at` for anything without one) - so short windows are counted from the items themselves and
+ * grouped into buckets of a size the caller picks. Two things stay day-granular and say so in the answer
+ * rather than pretending: `alerts` is a per-day counter with no per-item flag behind it, and
+ * `source_health` accumulates per day, so its row is only reported when the last check falls inside the
+ * window and its counts still cover the day. The UI hides those two panels for sub-day ranges.
+ */
+export function recentSeries(db, { minutes = 60, bucketMinutes = 5, keywordLimit = 12 } = {}) {
+  const to = new Date();
+  const since = new Date(to.getTime() - minutes * 60000).toISOString();
+  const bucketSeconds = Math.max(60, Math.round(bucketMinutes * 60));
+  const ts = `COALESCE(published_at, first_seen_at)`;
+
+  // One query for the window, and every figure computed here rather than in SQL.
+  //
+  // The bucketing used to be `(epoch / ?) * ?` in the query, which looked right and silently was not:
+  // node:sqlite binds a JavaScript number as REAL, so the division came back fractional and each bucket
+  // was the raw timestamp - one item per bucket, and no bucket ever matched the series the chart draws.
+  // The window is hours at most, so one pass over its rows is cheaper than depending on how a driver
+  // binds a parameter.
+  const rows = db.prepare(`SELECT source_id, ${ts} AS ts, people, keywords, image_count FROM items WHERE ${ts} >= ?`).all(since);
+
+  const fromMs = to.getTime() - minutes * 60000;
+  const firstBucket = Math.floor(fromMs / 1000 / bucketSeconds) * bucketSeconds;
+  const span = Math.ceil((to.getTime() - fromMs) / 1000 / bucketSeconds) + 1;
+  const buckets = [];
+  const byBucket = new Map();
+  for (let i = 0; i < span; i++) {
+    const at = firstBucket + i * bucketSeconds;
+    const row = { day: new Date(at * 1000).toISOString().slice(0, 16), items: 0, alerts: 0, media: 0 };
+    buckets.push(row);
+    byBucket.set(at, row);
+  }
+
+  const totals = new Map();
+  const people = new Map();
+  const keywords = new Map();
+  for (const r of rows) {
+    const at = Math.floor(Date.parse(r.ts) / 1000 / bucketSeconds) * bucketSeconds;
+    const bucket = byBucket.get(at);
+    if (bucket) {
+      bucket.items += 1;
+      if (Number(r.image_count ?? 0) > 0) bucket.media += 1;
+    }
+    totals.set(r.source_id, (totals.get(r.source_id) ?? 0) + 1);
+    for (const p of parseList(r.people)) people.set(p, (people.get(p) ?? 0) + 1);
+    for (const k of parseList(r.keywords)) keywords.set(k, (keywords.get(k) ?? 0) + 1);
+  }
+
+  return {
+    from: since,
+    to: to.toISOString(),
+    bucket: { minutes: bucketSeconds / 60, alertGranularity: 'day', healthGranularity: 'day' },
+    days: buckets,
+    totals: [...totals]
+      .map(([sourceId, items]) => ({ sourceId, items }))
+      .sort((a, b) => b.items - a.items),
+    peopleTotals: [...people]
+      .map(([personId, items]) => ({ personId, items }))
+      .sort((a, b) => b.items - a.items),
+    keywords: [...keywords]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, keywordLimit)
+      .map(([keyword, total]) => ({ keyword, total })),
+    health: db
+      .prepare(
+        `SELECT source_id, SUM(checks) AS n, SUM(ok) AS ok, SUM(ms_sum) AS ms_sum
+         FROM source_health WHERE at >= ? GROUP BY source_id ORDER BY n DESC`
+      )
+      .all(since)
+      .map((r) => {
+        const n = Number(r.n ?? 0);
+        return {
+          sourceId: r.source_id,
+          checks: n,
+          ok: Number(r.ok ?? 0),
+          rate: n > 0 ? Number(r.ok ?? 0) / n : null,
+          avgMs: n > 0 ? Math.round(Number(r.ms_sum ?? 0) / n) : null,
+        };
+      }),
+  };
+}
+
+/** One JSON list out of a text column, or an empty list when it is absent or malformed */
+function parseList(value) {
+  try {
+    const list = JSON.parse(value ?? '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
 export function stats(db) {
   const one = (sql, ...args) => {
     try {

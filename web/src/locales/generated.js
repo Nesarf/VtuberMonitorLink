@@ -1,7 +1,7 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-15T17:25:52.304Z
+// 生成时间：2026-09-15T17:40:59.231Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
@@ -309,6 +309,8 @@ export const GENERATED = {
     "groupViewHint": "逐條情報流回答不了「這個箱現在怎麼樣」。這裏把同一團體的成員排成熱力圖：一格一天、深色代表當天有條目；停更的人會被標出來，多人同一天出現記爲「同刻出現」（企劃聯動的形狀），整箱安靜單獨提示。判據都相對每個人自己的節奏 —— 日更的人停 3 天，和月更的人停 3 天，不是一回事。",
     "groupWindow": "窗口",
     "groupDays": "天",
+    "groupMinutes": "分鐘",
+    "groupHours": "小時",
     "groupNoAgency": "還沒有填寫團體的關注對象",
     "groupPeopleCount": "位關注對象",
     "groupMembers": "位成員",
@@ -995,6 +997,8 @@ export const GENERATED = {
     "groupViewHint": "逐條情報流回答不了「這個箱現在怎麼樣」。這裏把同一團體的成員排成熱力圖：一格一天、深色代表當天有條目；停更的人會被標出來，多人同一天出現記為「同刻出現」（企劃聯動的形狀），整箱安靜單獨提示。判據都相對每個人自己的節奏 —— 日更的人停 3 天，和月更的人停 3 天，不是一回事。",
     "groupWindow": "窗口",
     "groupDays": "天",
+    "groupMinutes": "分鐘",
+    "groupHours": "小時",
     "groupNoAgency": "還沒有填寫團體的關注對象",
     "groupPeopleCount": "位關注對象",
     "groupMembers": "位成員",
@@ -1681,6 +1685,8 @@ export const GENERATED = {
     "groupViewHint": "逐條情報流回答不了「這個箱現在怎麼樣」。這裡把同一團體的成員排成熱力圖：一格一天、深色代表當天有條目；停更的人會被標出來，多人同一天出現記為「同刻出現」（企劃聯動的形狀），整箱安靜單獨提示。判據都相對每個人自己的節奏 —— 日更的人停 3 天，和月更的人停 3 天，不是一回事。",
     "groupWindow": "視窗",
     "groupDays": "天",
+    "groupMinutes": "分鐘",
+    "groupHours": "小時",
     "groupNoAgency": "還沒有填寫團體的關注物件",
     "groupPeopleCount": "位關注物件",
     "groupMembers": "位成員",

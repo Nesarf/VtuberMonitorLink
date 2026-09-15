@@ -4,8 +4,33 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import { cachedThumb, loadThumb } from '../thumb-cache.js';
 import { Inline } from '../markdown.jsx';
+import LoginCheckButton, { cookieProbeMessage } from '../LoginCheck.jsx';
 
 const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '', region: '' };
+
+/**
+ * Which host a source's login state would come from — the same rule the server applies to its fallback
+ * (server/src/sources.js, sourceLoginHost): the source's own `url`, and only for the bilibili sources the
+ * parent domain `bilibili.com` (their urls live on `space.bilibili.com`, which is not where the login cookie
+ * is stored).
+ *
+ * It is repeated on this side for one reason: this decides **whether the button can run at all**, and that
+ * has to be known while rendering rather than after a request. When it says "no host" the button says so
+ * instead of sending a probe that could only answer "nothing found" — which would read as "not logged in".
+ */
+export function sourceProbeHost(source = {}) {
+  const raw = String(source.url ?? '').trim();
+  if (raw) {
+    try {
+      const host = new URL(raw).host.toLowerCase();
+      if (host) return host.replace(/^www\./, '');
+    } catch {
+      /* fall through to the bilibili rule below */
+    }
+  }
+  const isBili = source.category === 'bili' || String(source.fetch ?? '').startsWith('bili-');
+  return isBili ? 'bilibili.com' : null;
+}
 
 /** Latency badge: value + failure rate, coloured by how good it is */
 function Lat({ p, label, t }) {
@@ -33,6 +58,17 @@ export default function Sources() {
   const [form, setForm] = useState({ ...BLANK });
   const [customOnly, setCustomOnly] = useState(false);
   const [diag, setDiag] = useState(null);
+  // Per-row login-check results: s.id -> {ok, text}. Kept here (not in a child) so the row can show the
+  // outcome next to the login badge it belongs to, in the same narrow cell.
+  const [loginState, setLoginState] = useState({});
+  // The domains the cookie probe would read. Only the host, never a path: the probe matches cookie rows by
+  // `host_key LIKE %domain%`, so passing a URL would match nothing.
+  const checkSourceLogin = async (s) => {
+    const host = sourceProbeHost(s);
+    if (!host) return null;
+    const r = await api.checkCookies({ domains: [host] });
+    return r;
+  };
   // Automatic egress verdicts: s.id -> {mode, reason, confidence}
   const [eg, setEg] = useState({});
 
@@ -352,6 +388,24 @@ export default function Sources() {
                               <span className={`badge ${s.login}`}>
                                 {s.login === 'required' ? t('login_required') : s.login === 'optional' ? t('login_optional') : t('login_none')}
                               </span>
+                            </div>
+                            {/* Every source carries a login setting, so every row carries a way to check it.
+                                The measurement is the read-only cookie probe for **this source's own host** —
+                                counts and names only, never a value. A source that declares no login has no
+                                login state to check, and a source with no usable address cannot be probed:
+                                both say which of the two they are (in the button's title) instead of
+                                pretending, and neither case hides the button. */}
+                            <div className="muted" style={{ fontSize: 11, marginTop: 2, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
+                              <LoginCheckButton
+                                onCheck={() => checkSourceLogin(s)}
+                                disabledReason={s.login === 'none' ? t('loginNotCheckable') : !sourceProbeHost(s) ? t('loginNoHost') : ''}
+                                onResult={(r) => setLoginState((cur) => ({ ...cur, [s.id]: cookieProbeMessage(r, t, tn) }))}
+                              />
+                              {loginState[s.id] ? (
+                                <span className={loginState[s.id].ok ? 'ok-text' : 'warn-text'} title={t('cookieDomain').replace('{domain}', sourceProbeHost(s) ?? '')}>
+                                  {loginState[s.id].text}
+                                </span>
+                              ) : null}
                             </div>
                           </span>
                         </div>

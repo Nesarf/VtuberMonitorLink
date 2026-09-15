@@ -407,6 +407,171 @@ async function checkRecentChanges(target, ctx) {
   };
 }
 
+// ── 4a) "does this wiki credential work?" -- a pure request builder and a pure parser
+//
+// Why this exists as its own pair of pure functions rather than as three lines inside a route: the
+// target configures a **real login credential** (a wiki `username` + `botPassword`, used by the
+// watchlist check below), and until now nothing in the application ever measured whether it works --
+// the first thing that found out was a watch run, whose failure reads as "the wiki changed".
+//
+// Two rules shape the request, and both come from the credential being secret:
+//   • the password travels **only** in the Authorization header. A basic-auth credential put in the
+//     URL would be echoed by proxies, redirect targets and error messages, and this project logs the
+//     URLs it fetches;
+//   • the call is **read-only**: `meta=userinfo` with `assert=user` answers "who am I" in one request
+//     and can never write. There is no write action anywhere in this pair of functions.
+// The returned "safe request" carries no credential at all, so it is the one thing that may be logged.
+
+/** The wiki host of an api.php address ('' when the address has no parseable host) */
+export function wikiHostOf(apiUrl) {
+  try {
+    return new URL(String(apiUrl ?? '').trim()).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Build the MediaWiki "who am I, and am I logged in" request.
+ *
+ * Pure: nothing is sent here. The caller hands the result to netFetch.
+ * @param {{apiUrl?:string, username?:string, botPassword?:string, proxy?:string}} target
+ * @returns {{ok:true, url:string, headers:object, host:string, domain:string}
+ *          |{ok:false, error:string, missing:string}}
+ */
+export function buildWikiLoginRequest(target = {}) {
+  const apiUrl = String(target.apiUrl ?? '').trim();
+  const username = String(target.username ?? '').trim();
+  const password = String(target.botPassword ?? '');
+  // Refuse politely rather than firing a request with a blank password: a blank credential is not a
+  // failed login, it is a question that was never asked, and an anonymous answer would be read as
+  // "your credential does not work".
+  const missing = [];
+  if (!apiUrl) missing.push('apiUrl');
+  if (!username) missing.push('username');
+  if (!password) missing.push('botPassword');
+  if (missing.length) {
+    return {
+      ok: false,
+      missing,
+      error: `missing ${missing.join(' / ')} -- nothing was requested`,
+    };
+  }
+  const host = wikiHostOf(apiUrl);
+  if (!host) return { ok: false, missing: ['apiUrl'], error: 'the api url has no usable host -- nothing was requested' };
+  // `format=json` is appended the same way apiOf() does it, but this builder must stay usable on its
+  // own (the route and the tests both call it directly).
+  const url =
+    `${apiUrl}${apiUrl.includes('?') ? '&' : '?'}format=json` +
+    '&action=query&meta=userinfo&uiprop=rights%7Cgroups&assert=user';
+  return {
+    ok: true,
+    url,
+    host,
+    // The label the UI shows next to a result: the same host the credential was read for. Kept apart
+    // from `host` because the cookie probe lower-cases and may strip a leading `www.`.
+    domain: host.replace(/^www\./, ''),
+    headers: {
+      'user-agent': UA,
+      accept: 'application/json',
+      // BotPassword credentials are sent as basic auth (`BotName@TaskName:password`).
+      authorization: `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`,
+      // No cookie jar: one request, one credential, nothing to persist at the site.
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+  };
+}
+
+/**
+ * The log-safe view of a built request: **no credential**. Written as its own function so "nothing
+ * secret is logged" is a property a test can assert rather than a habit.
+ */
+export function safeLoginRequestSummary(req) {
+  if (!req?.ok) return { ok: false, error: req?.error ?? 'request not built' };
+  return { ok: true, url: req.url, host: req.host, method: 'GET', hasAuthorization: true };
+}
+
+/**
+ * Parse the answer to that request.
+ *
+ * Pure. Three outcomes are kept apart on purpose, because they send the person in different
+ * directions: an authenticated answer names the account, `anon` means the site ignored the
+ * credential (for a basic-auth request that means the Wiki does not accept BotPassword over
+ * Authorization), and `error` is the site's own reason -- userinfo plus `assert=user` answers
+ * `assertuserfailed` when the credential is wrong, and that code is more useful than anything this
+ * module could invent.
+ * @returns {{ok:boolean, status:'ok'|'anon'|'error', user?:string, anon?:boolean, groups?:string[],
+ *            rights?:string[], code?:string, reason:string}}
+ */
+export function parseWikiLoginResponse(payload) {
+  const j = payload && typeof payload === 'object' ? payload : null;
+  if (!j) return { ok: false, status: 'error', code: 'bad-response', reason: 'the wiki did not return JSON' };
+  if (j.error) {
+    const code = String(j.error.code ?? 'error');
+    const info = String(j.error.info ?? '').trim();
+    return { ok: false, status: 'error', code, reason: info ? `${code}: ${info}` : code };
+  }
+  const u = j.query?.userinfo;
+  if (!u) return { ok: false, status: 'error', code: 'no-userinfo', reason: 'the answer carried no userinfo block' };
+  if (u.anon === true || u.id === 0) {
+    return {
+      ok: false,
+      status: 'anon',
+      anon: true,
+      reason: 'the wiki answered as an anonymous user: the credential was not accepted',
+    };
+  }
+  const user = String(u.name ?? '').trim();
+  if (!user) return { ok: false, status: 'error', code: 'no-name', reason: 'the answer named no account' };
+  return {
+    ok: true,
+    status: 'ok',
+    user,
+    anon: false,
+    groups: Array.isArray(u.groups) ? u.groups : [],
+    rights: Array.isArray(u.rights) ? u.rights : [],
+    reason: '',
+  };
+}
+
+/**
+ * Measure the configured wiki credential with one read-only request.
+ *
+ * The password is never returned, logged or echoed: the result carries the account name or the
+ * site's own reason, and nothing else. A failure to reach the wiki is reported as such rather than
+ * as "the credential is wrong" -- the two are different facts.
+ * @param {{apiUrl?:string, username?:string, botPassword?:string, proxy?:string}} target
+ * @param {{cfg?:object, log?:object}} ctx
+ * @param {{fetchImpl?:Function}} [opts] injectable for tests
+ */
+export async function checkWatchLogin(target = {}, ctx = {}, opts = {}) {
+  const built = buildWikiLoginRequest(target);
+  if (!built.ok) return { ok: false, checked: false, status: 'incomplete', missing: built.missing, reason: built.error };
+  const doFetch = opts.fetchImpl ?? jget;
+  let res;
+  try {
+    res = await doFetch(built.url, {
+      cfg: ctx.cfg,
+      target: { ...target, botPassword: undefined },
+      headers: { authorization: built.headers.authorization },
+    });
+  } catch (e) {
+    const cause = e?.cause?.message ?? e?.cause?.code ?? '';
+    return { ok: false, checked: true, status: 'error', domain: built.domain, reason: `could not reach the wiki: ${e.message}${cause ? ` (${cause})` : ''}` };
+  }
+  if (!res?.ok) {
+    return { ok: false, checked: true, status: 'error', domain: built.domain, httpStatus: res?.status ?? null, reason: `the wiki answered HTTP ${res?.status ?? '?'}` };
+  }
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;
+  }
+  const parsed = parseWikiLoginResponse(payload);
+  return { ok: parsed.ok, checked: true, domain: built.domain, ...parsed };
+}
+
 // ── 4) MediaWiki watchlist (requires login)
 async function mwLogin(target, ctx) {
   const api = apiOf(target.apiUrl);

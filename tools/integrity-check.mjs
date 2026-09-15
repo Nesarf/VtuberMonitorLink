@@ -12,6 +12,7 @@
 //   3) verify that every i18n key used by the UI is in the dictionaries (and that the zh/en key sets are aligned with each other)
 //   4) verify that the key artifacts exist and are non-empty (the generated dictionaries, the web build output)
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -340,6 +341,208 @@ try {
   else process.stdout.write('   [ok]   the sources page offers the region setting, in the list and at creation time\n');
 } catch (e) {
   problems.push(`could not read the region setting's trip: ${e.message}`);
+}
+
+// ───────────────────────────────────────────── 5e. every login setting has a "check login state"
+//
+// The requirement is one sentence -- "wherever a login state can be configured, there must be a check button,
+// and it must always be available" -- and every way of failing it is invisible in a different way. The button
+// can be missing (Share's account stage and the sources list had none), it can be **wrapped in a condition**
+// that is usually false (BUGS #26 is exactly that, and it shipped), it can be disabled into uselessness, and
+// it can call a route that does not exist or one that answers with the cookie probe's shape while the page
+// reads a different one. So each of those is asserted separately, on the page source rather than on a comment.
+//
+// The other rule this section pins is the one the share page got wrong: the **login** stage is independent of
+// the **send** stage, so a target whose publishing is unsupported must still offer configure-and-check.
+try {
+  const { pathToFileURL } = await import('node:url');
+  const { shareTargets, resolveLoginProbe, stagesReport } = await import(pathToFileURL(path.join(ROOT, 'server/src/share.js')).href);
+  const { sourceLoginHost } = await import(pathToFileURL(path.join(ROOT, 'server/src/sources.js')).href);
+  const { parseWikiLoginResponse } = await import(pathToFileURL(path.join(ROOT, 'server/src/watch.js')).href);
+  const { resolveOpenPath, parseEditorCommand, buildOpenInvocation } = await import(pathToFileURL(path.join(ROOT, 'server/src/openfile.js')).href);
+
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+  // (a) The five surfaces, and the control that they do not merely mention the affordance in a comment.
+  const surfaces = [
+    ['web/src/pages/Settings.jsx', /onClick=\{checkLogin\}/, 'the browser login probe'],
+    ['web/src/pages/Live.jsx', /onClick=\{loadAccounts\}/, 'the danmaku account check'],
+    ['web/src/pages/Share.jsx', /<LoginCheckButton/, 'the share login stage'],
+    ['web/src/pages/Sources.jsx', /<LoginCheckButton/, 'the per-source login check'],
+    ['web/src/pages/Watch.jsx', /onClick=\{checkWikiLogin\}/, 'the wiki BotPassword check'],
+  ];
+  const missingAffordance = surfaces.filter(([file, re]) => !re.test(read(file)));
+  if (missingAffordance.length) {
+    problems.push(`login setting(s) with no check affordance: ${missingAffordance.map(([f, , w]) => `${w} (${f})`).join(', ')}`);
+  } else {
+    process.stdout.write(`   [ok]   ${surfaces.length} surfaces that configure a login, every one with a check affordance\n`);
+  }
+
+  // (b) The check must be rendered unconditionally. The precedent is BUGS #26, where a button lived inside
+  // `{active && ...}`: an assertion that the identifier appears would have passed the whole time.
+  const conditional = [];
+  for (const [file, re] of [
+    ['web/src/pages/Sources.jsx', /<LoginCheckButton/],
+    ['web/src/pages/Share.jsx', /<LoginCheckButton/],
+  ]) {
+    const src = read(file);
+    for (const line of src.split(/\r?\n/)) {
+      if (!re.test(line)) continue;
+      if (/\{[\w.?]+\s*&&\s*<LoginCheckButton|&&\s*$/.test(line)) conditional.push(`${file}: ${line.trim()}`);
+    }
+  }
+  if (conditional.length) problems.push(`a login check is rendered conditionally, so it can be hidden: ${conditional.join(' | ')}`);
+  else process.stdout.write('   [ok]   the login checks render unconditionally (no `{active && <button/>}` shape)\n');
+
+  // (c) The routes those buttons call must exist, and the expensive ones must keep the in-flight guard.
+  const routes = [
+    ["/api/cookies/check", /app\.post\('\/api\/cookies\/check'/],
+    ["/api/watch/login-check", /app\.post\('\/api\/watch\/login-check', busyGuard\(/],
+    ["/api/share/check-login", /app\.get\('\/api\/share\/check-login', busyGuard\(/],
+    ["/api/open", /app\.post\('\/api\/open'/],
+  ];
+  const missingRoutes = routes.filter(([, re]) => !re.test(serverSrc));
+  if (missingRoutes.length) problems.push(`check-login route(s) missing (or without their guard): ${missingRoutes.map(([r]) => r).join(', ')}`);
+  else process.stdout.write(`   [ok]   the ${routes.length} routes behind those buttons exist (the long ones guarded)\n`);
+
+  // (d) The login stage is independent of the send stage: an unsupported target is still checkable, and the
+  // control is a login kind with no probe AND no host, which is the only case with nothing to measure.
+  const posts = shareTargets({}).filter((x) => x.kind === 'post');
+  const notCheckable = posts.filter((x) => !resolveLoginProbe(x, {}).checkable);
+  const unsupported = posts.filter((x) => x.status === 'unsupported');
+  const unsupportedStages = stagesReport([], {}, {}).filter((x) => x.declaredStatus === 'unsupported');
+  const notActionable = unsupportedStages.filter((x) => x.stages.verification.actionable !== true);
+  if (notCheckable.length) problems.push(`posting target(s) with no login check at all: ${notCheckable.map((x) => x.id).join(', ')}`);
+  else if (!unsupported.length) notes.push('no target is declared unsupported any more, so the "a site that cannot post is still checkable" check is now vacuous');
+  else if (notActionable.length) problems.push(`unsupported target(s) whose login stage is not actionable: ${notActionable.map((x) => x.id).join(', ')}`);
+  else process.stdout.write(`   [ok]   all ${posts.length} posting targets are checkable, including the ${unsupported.length} that cannot post\n`);
+
+  // The control: a cookie login kind on a site with no knowable host must be refused rather than probed.
+  const noHost = resolveLoginProbe('weibo-no-host', { share: { sites: [{ id: 'weibo-no-host', loginKind: 'weibo', manual: { compose: 'https://{instance}/compose?text={text}' } }] } });
+  if (noHost.checkable !== false) problems.push('a login kind with no probe and no host is reported as checkable, so a probe would run against a domain nobody owns');
+  else process.stdout.write('   [ok]   (and a login with no probe and no host is refused instead of probed - the control fires)\n');
+
+  // (e) The sources page takes the host from the source itself, and the wiki probe stays read-only: both are
+  // "the honest measurement" this round is about, so a regression in either makes the button lie.
+  if (sourceLoginHost({ id: 'bili-opus-x', category: 'bili', fetch: 'bili-opus' }) !== 'bilibili.com') problems.push('the bilibili source fallback host changed, so a bilibili source would be probed on a subdomain the cookie is not stored against');
+  if (sourceLoginHost({ id: 'rss-x', category: 'community', fetch: 'rss' }) !== null) problems.push('a source with no url no longer answers "no host", so the check would silently do nothing');
+  if (!/sourceProbeHost/.test(read('web/src/pages/Sources.jsx'))) problems.push('the sources page no longer resolves the probe host itself, so a source with no host cannot say so before sending a request');
+  else process.stdout.write('   [ok]   a source is probed on its own host (bilibili on the parent domain, no url -> no host)\n');
+
+  const anon = parseWikiLoginResponse({ query: { userinfo: { id: 0, anon: true } } });
+  const named = parseWikiLoginResponse({ query: { userinfo: { id: 7, name: 'Bot@Task' } } });
+  if (anon.ok !== false || named.ok !== true) problems.push('the wiki answer parser no longer separates an anonymous answer from a named one, so a refused credential could read as success');
+  else process.stdout.write('   [ok]   the wiki probe reads an anonymous answer as a failure and a named one as a success\n');
+
+  // (f) The editor opener: the request carries a name and never a path, and the invocation is an argv array.
+  const outside = resolveOpenPath({ paths: { reportsDir: path.join(os.tmpdir(), 'vml-integrity-none') } }, 'report', path.join(os.tmpdir(), 'x.txt'));
+  if (outside.ok || outside.code !== 'not-a-file-name') problems.push('the open endpoint accepts a path from the client, which is the one thing it must never do');
+  const inv = buildOpenInvocation({ path: '/tmp/x.html', editor: { program: 'code', args: [] }, platform: 'linux' });
+  if (!inv.ok || !Array.isArray(inv.args) || inv.shell !== false) problems.push('the editor invocation is no longer an argv array with shell:false');
+  // The configured command is split into words and nothing else: `&&` and `/` are arguments here, which is the
+  // whole point (they would be shell syntax if the value were handed to a shell).
+  if (parseEditorCommand('code && rm -rf /').length !== 5) problems.push('the configured editor command is no longer split without a shell');
+  else process.stdout.write('   [ok]   the editor opener takes a name (never a path) and builds an argv array with no shell\n');
+
+  // (g) The per-site edited body has to be the text that travels: prepared and edited must be distinguishable,
+  // and an edit must never be silently cut back to the prepared text.
+  const { resolveSiteBody } = await import(pathToFileURL(path.join(ROOT, 'server/src/share.js')).href);
+  const bundle = { title: 'x', items: [{ id: 'a', title: 'a'.repeat(400) }] };
+  const edited = resolveSiteBody({ text: 'my own words', bundle, profile: { textLimit: 280 } });
+  const over = resolveSiteBody({ text: 'z'.repeat(300), bundle, profile: { textLimit: 280 } });
+  if (edited.source !== 'edited' || edited.text !== 'my own words') problems.push('an edited body no longer wins over the prepared one');
+  else if (over.fits !== false || over.text.length !== 300) problems.push('a body edited past the site limit is being cut to fit instead of being reported as over it');
+  else process.stdout.write('   [ok]   an edited body is carried as written, and one over the limit is reported rather than cut\n');
+} catch (e) {
+  problems.push(`could not read the login-check wiring: ${e.message}`);
+}
+
+// ───────────────────────────────────────────── 5f. the app can actually be constructed
+//
+// Why this exists, in the owner's words after it happened: "the app does not start". A route registered at the
+// top of createApp used a helper declared further down as a `const`, so it hit the temporal dead zone at
+// **registration** time -- `ReferenceError: Cannot access 'busyGuard' before initialization` -- and
+// `node server/src/index.js` exited before serving anything. The whole gate stayed green, because nothing in
+// `verify:fast` ever constructs the app: every tool imports a module or reads a page, and a route that only
+// throws while registering is invisible to all of them.
+//
+// Two checks, because they are two different questions:
+//   1) **the real one**: import server/src/server.js and call createApp() with the same minimal arguments
+//      index.js uses. Nothing is listened on and no port is opened -- createApp returns an express app, and
+//      that is all this needs. A route that throws at registration time now fails the gate instead of the
+//      user's launch.
+//   2) **the specific mistake, named**: no helper may be *used* above the line where it is declared as a
+//      `const`. A plain text check over the file, with a control fixture that places the usage above the
+//      declaration, so the check is known to fire.
+try {
+  const { pathToFileURL } = await import('node:url');
+  let createApp = null;
+  try {
+    ({ createApp } = await import(pathToFileURL(path.join(ROOT, 'server/src/server.js')).href));
+  } catch (e) {
+    problems.push(`server/src/server.js cannot even be imported, so the app cannot start: ${e.message}`);
+  }
+  if (createApp) {
+    const probeCfg = {
+      paths: { reportsDir: path.join(os.tmpdir(), 'vml-integrity-check'), feedsDir: path.join(os.tmpdir(), 'vml-integrity-check') },
+      browser: {},
+      share: {},
+      watch: {},
+      llm: { providers: [] },
+    };
+    try {
+      const app = createApp({
+        getConfig: () => probeCfg,
+        setConfig: (next) => next,
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+        onConfigChanged: () => {},
+      });
+      if (typeof app !== 'function') problems.push('createApp no longer returns something that can serve');
+      else process.stdout.write('   [ok]   the server module constructs (no route throws at registration time)\n');
+    } catch (e) {
+      problems.push(`createApp() throws, so the app cannot start: ${e.name}: ${e.message}`);
+    }
+  }
+
+  // The named mistake: a route using `busyGuard` above the line where it is declared. This is the exact shape
+  // that took the application down (`app.post('/api/watch/login-check', busyGuard('watch login check'), ...)`
+  // registered from the top of createApp, with `const busyGuard` far below it), and it is deliberately the
+  // helper this check names: `busyGuard` is used as an **argument while routes register**, so the temporal
+  // dead zone is reached during createApp rather than while serving a request. A helper that is only called
+  // from inside a handler is safe wherever it is declared, and a rule that flagged those would be noise.
+  const tdzProblems = (src) => {
+    const lines = String(src).split(/\r?\n/);
+    const declLineOf = (name) => {
+      const re = new RegExp(`^\\s*const\\s+${name}\\s*=`);
+      const i = lines.findIndex((l) => re.test(l));
+      return i < 0 ? null : i + 1;
+    };
+    const out = [];
+    for (const name of ['busyGuard']) {
+      const declLine = declLineOf(name);
+      if (declLine === null) continue;
+      const useRe = new RegExp(`^\\s*app\\.(get|post|put|patch|delete|use)\\([^\\n]*\\b${name}\\s*\\(`);
+      lines.forEach((line, i) => {
+        if (i + 1 >= declLine) return;
+        if (useRe.test(line)) out.push(`${name} used at line ${i + 1} but declared at ${declLine}`);
+      });
+    }
+    return out;
+  };
+  const realTdz = tdzProblems(fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8'));
+  if (realTdz.length) problems.push(`helper used before its const declaration (temporal dead zone -- this breaks startup): ${realTdz.join('; ')}`);
+  else process.stdout.write('   [ok]   no helper is used above its own const declaration\n');
+
+  // The control: the same check on a fixture that really does use a helper above its declaration.
+  const fixture = ["app.post('/', busyGuard('x'), handler);", '', 'const busyGuard = (name) => (req, res, next) => next();'].join('\n');
+  if (tdzProblems(fixture).length !== 1) {
+    problems.push('the "used before its const declaration" check does not fire on a fixture that does exactly that, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control fixture, with the usage above the declaration, is caught)\n');
+  }
+} catch (e) {
+  problems.push(`could not construct the server: ${e.message}`);
 }
 
 // ───────────────────────────────────────────── 6. bug table numbering

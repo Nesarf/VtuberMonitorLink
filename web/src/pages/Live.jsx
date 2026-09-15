@@ -439,7 +439,14 @@ export default function Live() {
               ))}
             </select>
             <div className="row" style={{ gap: 6, marginTop: 4 }}>
-              <button className="ghost tiny" onClick={loadAccounts} disabled={busy}>
+              {/* The login-state check for the danmaku account. Always rendered; its own read is the only
+                  thing that disables it, and the title spells out what pressing it does. */}
+              <button
+                className="ghost tiny"
+                title={accounts === null ? t('loginCheckTitle') : t('danmakuRefresh')}
+                onClick={loadAccounts}
+                disabled={busy}
+              >
                 {accounts === null ? t('checkLogin') : t('danmakuRefresh')}
               </button>
               {accounts && !sendable.length ? <span className="muted small">{t('danmakuNoAccount')}</span> : null}

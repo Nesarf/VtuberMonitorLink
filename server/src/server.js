@@ -24,7 +24,7 @@ import {
 import { diffHunks, diffLines, diffStats } from './diff.js';
 import { preflight } from './analyze.js';
 import { PRESETS, activeProvider, newProvider, listModels } from './llm.js';
-import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
+import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, checkWatchLogin, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
@@ -75,6 +75,7 @@ import {
   buildBundle,
   buildHandoff,
   bundleFilename,
+  checkLoginState,
   contentDisposition,
   getAccounts,
   guardPost,
@@ -89,6 +90,8 @@ import {
   recordVerification,
   renderBundle,
   renderSiteText,
+  resolveLoginProbe,
+  resolveSiteBody,
   shareImageSetting,
   siteProfileById,
   stagesReport,
@@ -98,6 +101,7 @@ import {
   verificationStore,
 } from './share.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
+import { openResolvedPath, openResultNote, resolveEditorCommand, resolveOpenPath } from './openfile.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
 import { spawn } from 'node:child_process';
 import {
@@ -262,6 +266,41 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
+  // "Open this file in an editor" -- the app is local, so the person who generated a report can look at it
+  // in the tool they actually use.
+  //
+  // This is the one endpoint in the app whose request names a file that is then handed to an external
+  // program, so the request carries a **kind and an id** and the path is resolved here, from the app's own
+  // output roots (see server/src/openfile.js for the three defences: a plain file name, a resolved-prefix
+  // test, and a symlink test). The invocation is an argv array handed to execFile with `shell: false`, so no
+  // file name can ever become command syntax. It is not a long operation and needs no in-flight guard: it
+  // starts a program and returns.
+  app.post('/api/open', (req, res) => {
+    const cfg = getConfig();
+    const kind = String(req.body?.kind ?? '');
+    // A request that carries a path is refused by name rather than quietly ignored -- resolveOpenPath says so.
+    const id = String(req.body?.id ?? req.body?.file ?? '');
+    const r = resolveOpenPath(cfg, kind, id);
+    if (!r.ok) return res.status(400).json({ ok: false, code: r.code, error: r.error });
+    const editor = resolveEditorCommand(cfg.open?.editor);
+    if (!editor.program) {
+      return res.status(400).json({
+        ok: false,
+        code: 'no-editor',
+        error: 'no editor found: install VS Code (the `code` command) or set an editor command in Settings',
+        editor,
+      });
+    }
+    const name = path.basename(r.path);
+    openResolvedPath({ file: r.path, editor, displayName: name, platform: process.platform })
+      .then((out) => {
+        const note = openResultNote(out, editor);
+        log?.[out.ok ? 'info' : 'warn'](`open ${kind}/${name}: ${note.en}`);
+        res.status(out.ok ? 200 : 500).json({ ok: out.ok, code: out.code ?? null, error: out.error ?? null, kind, name, editor: { program: editor.program, source: editor.source }, command: out.command ?? editor.program, args: out.args ?? null, note });
+      })
+      .catch((e) => res.status(500).json({ ok: false, code: 'launch-failed', error: e.message }));
+  });
+
   // ── proxy detection ──────────────────────────────────────────────
   // Tries the common local proxy ports one by one and returns the addresses that actually get through
   // (no port is hard-coded as the one true answer)
@@ -390,6 +429,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
+  // "Is the wiki credential I configured still a login?" -- the check button next to those two fields.
+  //
+  // A watchlist target carries a real credential (username + BotPassword) and nothing ever measured it,
+  // so the first thing that found out it had stopped working was a watch run whose failure reads as
+  // "the wiki changed". This route makes one read-only request (`meta=userinfo` + `assert=user`) and
+  // returns who the credential is, or the wiki's own reason.
+  //
+  // The password never leaves this process: it is not echoed, not logged, and not part of the answer --
+  // the answer carries a name or a reason. The client sends the two fields because the check has to work
+  // **before** they are saved, which is the moment a person actually wants it.
+  app.post('/api/watch/login-check', busyGuard('watch login check'), async (req, res) => {
+    const cfg = getConfig();
+    const body = req.body ?? {};
+    // The saved target is the fallback, so an already-configured target can be checked without the page
+    // sending its secret back at all.
+    const saved = (cfg.watch?.targets ?? []).find((t) => t.id === body.id) ?? {};
+    const target = {
+      apiUrl: body.apiUrl ?? saved.apiUrl,
+      username: body.username ?? saved.username,
+      botPassword: body.botPassword ?? saved.botPassword,
+      proxy: body.proxy ?? saved.proxy,
+    };
+    const r = await checkWatchLogin(target, { cfg, log });
+    res.json(r);
+  });
+
   app.get('/api/watch/:id/history', (req, res) => {
     const cfg = getConfig();
     res.json({ id: req.params.id, history: readHistory(cfg, req.params.id, Number(req.query.limit ?? 50)) });
@@ -434,20 +499,29 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // the same time. A duplicate is answered with code 'busy' and the age of the run already going,
   // rather than being queued behind it, because the caller can decide what to do with that answer.
   const inFlight = new Map();
-  const busyGuard = (name) => (req, res, next) => {
-    const startedAt = inFlight.get(name);
-    if (startedAt) {
-      res.status(409).json({
-        ok: false,
-        code: 'busy',
-        error: `${name} is already running (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`,
-      });
-      return;
-    }
-    inFlight.set(name, Date.now());
-    res.on('close', () => inFlight.delete(name));
-    next();
-  };
+  // A **function declaration**, not an arrow on a `const`: routes register from the top of createApp
+  // downwards, so a route written above this block would reach a `const` while it is still in its temporal
+  // dead zone -- `ReferenceError: Cannot access 'busyGuard' before initialization` at registration time, which
+  // takes the whole application down before it serves anything (measured: the watch login-check route did
+  // exactly that, and `verify:fast` stayed green because nothing in the gate constructs the app).
+  // `inFlight` may stay a `const`: the middleware only reads it when a request arrives, long after createApp
+  // has returned. Do not convert this back to an arrow, whatever the style around it looks like.
+  function busyGuard(name) {
+    return (req, res, next) => {
+      const startedAt = inFlight.get(name);
+      if (startedAt) {
+        res.status(409).json({
+          ok: false,
+          code: 'busy',
+          error: `${name} is already running (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`,
+        });
+        return;
+      }
+      inFlight.set(name, Date.now());
+      res.on('close', () => inFlight.delete(name));
+      next();
+    };
+  }
 
   app.post('/api/sources/:id/diagnose', busyGuard('source diagnose'), async (req, res) => {
     const cfg = getConfig();
@@ -1331,6 +1405,26 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: !!r.ok, ...r });
   });
 
+  // "Check login state" for a posting site, on demand.
+  //
+  // Why this exists next to /api/share/verify: verify is the **send-stage** measurement and only a site
+  // whose publishing has a probe implements it, so the sites with no probe (X, Weibo, YouTube, Reddit)
+  // had no way to answer "am I signed in there?" -- exactly the question a person about to paste a post
+  // in by hand is asking. This route measures the login state itself: the site's own probe where one
+  // exists, and otherwise the read-only cookie probe for the site's own host. It stores nothing, because
+  // a login state is not a verification result, and it never reports a pass it did not measure.
+  app.get('/api/share/check-login', busyGuard('share login check'), async (req, res) => {
+    const cfg = getConfig();
+    const target = String(req.query.target ?? '');
+    if (!targetById(target, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${target}` });
+    // A fresh read: a check answered from a cached login state is not a check. The site's own probe needs
+    // the accounts for that; the cookie probe reads the store directly and needs none.
+    const plan = resolveLoginProbe(target, cfg);
+    const accounts = plan.needsAccount ? (await getAccounts(cfg, { force: true })).accounts : [];
+    const r = await checkLoginState(cfg, target, { accounts, accountId: String(req.query.account ?? '') || null });
+    res.json(r);
+  });
+
   /** collect items by scope: latest / day / person */
   function collectScope(cfg, scope = {}) {
     const kind = scope.kind ?? 'latest';
@@ -1384,6 +1478,16 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       note: String(req.body?.note ?? '').slice(0, 300),
       images,
     });
+    // A per-site download carries the body that site would actually use -- the person's edit when there is
+    // one. It is the plain-text form (that is what the hand-off downloads), so the file is exactly the text
+    // on the clipboard rather than a re-rendered report of it.
+    const sent = req.body?.text;
+    if (format === 'text' && sent !== undefined && sent !== null) {
+      const body = String(sent);
+      appendAudit(cfg, { action: 'bundle', scope: bundle.scope, format, items: bundle.items.length, chars: body.length, textSource: 'edited' });
+      res.setHeader('content-disposition', contentDisposition(bundleFilename(bundle, 'txt')));
+      return res.type('text/plain; charset=utf-8').send(body);
+    }
     const out = renderBundle(bundle, format);
     appendAudit(cfg, {
       action: 'bundle',
@@ -1422,15 +1526,21 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const profile = siteProfileById(targetId, cfg);
     const text = renderSiteText(bundle);
     const whole = truncateForSite(text, profile?.textLimit);
-    const perSite = truncateForSite(text, profile?.maxPerPost ? profile.maxPerPost : whole.limit);
-    // Two truncations, because they answer two different questions: what one post may carry (the site's own
-    // ceiling) and how much of it this build would actually send (the setting). Reporting both keeps the
-    // "prepared" body from quietly being the wrong one of the pair.
+    // The body this site would carry, resolved by the one implementation that also decides what an edited
+    // body does (see resolveSiteBody): the page seeds its editable box with `text`, and `bodySource` says
+    // whether that text is the app's prepared starting point or the person's own edit.
+    const perSite = resolveSiteBody({ text: req.body?.text ?? null, bundle, profile });
+    // Reporting both lengths keeps the "prepared" body from quietly being the wrong one of the pair: the
+    // site's own ceiling answers "what one post may carry", the setting answers "how much this build sends".
     res.json({
       ok: true,
       target: targetId,
       text: perSite.text,
-      textLength: perSite.text.length,
+      textSource: perSite.source,
+      preparedText: perSite.prepared,
+      textLength: perSite.length,
+      over: perSite.over,
+      fits: perSite.fits,
       truncated: perSite.truncated,
       droppedLines: perSite.droppedLines,
       textLimit: profile?.textLimit ?? null,
@@ -1474,6 +1584,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       bundle,
       cfg,
       accountId: req.body?.accountId ?? pickAccountId(targetId, accounts, cfg),
+      // The edited body, when the page sends one. It is the text the person will actually paste, so it is
+      // the text the compose link is measured against and the text the copy path carries.
+      text: req.body?.text ?? null,
     });
     if (!h.ok) return res.status(400).json(h);
     // record the hand-off only when the page says a person is taking it from here (pressing the compose or copy
@@ -1492,6 +1605,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         chars: h.textLength,
         textLimit: h.textLimit,
         truncated: h.truncated,
+        // Whether the hand-off carried the app's prepared text or the person's own edit. Two different
+        // things happened, and an audit that cannot tell them apart cannot answer "what did I paste?".
+        textSource: h.textSource,
         images: h.images?.mode ?? 'none',
         ok: true,
       });
@@ -1536,9 +1652,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     // Autofill: with no text given, the post body comes from the bundle of the chosen scope. Plain text only
     // (the bilibili create endpoint takes no images), and images are only attached when the setting asks for
     // them **and** the site profile allows at least one -- a planned site must not silently gain images.
+    //
+    // A text the page **did** send is used exactly as sent, including an emptied box: it is the text a person
+    // edited and is about to publish under their own name, so replacing it with the app's prepared report (the
+    // old truthiness test did exactly that for an empty body) is not this side's decision to make.
     let body = String(req.body?.text ?? '').trim();
+    let bodySource = req.body?.text !== undefined && req.body?.text !== null ? 'edited' : 'prepared';
     let images = 0;
-    if (!body && req.body?.scope) {
+    if (!body && bodySource === 'prepared' && req.body?.scope) {
       const scope = collectScope(cfg, req.body.scope);
       const bundle = buildBundle({
         ...scope,
@@ -1564,6 +1685,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       ok: !!result.ok,
       error: result.error ?? null,
       chars: g.body.length,
+      textSource: bodySource,
       images,
       account: result.account ?? null,
     });

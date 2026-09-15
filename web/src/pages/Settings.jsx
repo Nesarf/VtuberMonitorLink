@@ -474,7 +474,15 @@ export default function Settings({ onLayout }) {
             <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="bilibili.com" />
           </div>
           <div className="field" style={{ flex: '0 0 auto' }}>
-            <button className="ghost" onClick={checkLogin} disabled={busy || !cfg.browser.profileDir}>
+            {/* Always rendered, and disabled only for a stated reason: its own check running, or the missing
+                profile dir that makes the read impossible. The title says which of the two it is, so a
+                greyed-out button is never a dead end. */}
+            <button
+              className="ghost"
+              title={!cfg.browser.profileDir ? t('noProfileDir') : busy ? t('checkingLogin') : t('loginCheckTitle')}
+              onClick={checkLogin}
+              disabled={busy || !cfg.browser.profileDir}
+            >
               {busy ? t('checkingLogin') : t('checkLogin')}
             </button>
           </div>
@@ -1254,6 +1262,33 @@ export default function Settings({ onLayout }) {
             <label>{t('importConfig')}</label>
             <input type="file" accept="application/json,.json" onChange={(e) => importFile(e.target.files?.[0])} />
             <div className="hint" style={{ margin: 0 }}>{t('importHint')}</div>
+          </div>
+        </div>
+      </section>
+
+      {/* -- opening generated files in an editor -- */}
+      <section className="panel">
+        <h2>{t('openEditorTitle')}</h2>
+        <div className="hint">{t('openEditorHint')}</div>
+        <div className="row">
+          <div className="field">
+            <label>{t('openEditorTitle')}</label>
+            {/* Committed on blur, not on every keystroke: every save rewrites config.json and reloads the
+                page, so a keystroke is not a decision (the same reason the region box on the sources page
+                commits on blur). Uncontrolled + keyed on the stored value, so what shows after the write is
+                what was actually stored. */}
+            <input
+              key={`editor-${cfg.open?.editor ?? ''}`}
+              defaultValue={cfg.open?.editor ?? ''}
+              placeholder="code -r"
+              onBlur={(e) => {
+                const next = e.target.value;
+                if (next !== (cfg.open?.editor ?? '')) patch('open.editor', next);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+              }}
+            />
           </div>
         </div>
       </section>

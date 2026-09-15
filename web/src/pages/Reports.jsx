@@ -18,8 +18,33 @@ export default function Reports() {
   const [hits, setHits] = useState(null);
   const [cmp, setCmp] = useState(null);
   const [cmpTo, setCmpTo] = useState('');
+  // The in-app editor opener: which file is being launched, and what the server said about the last attempt
+  // (what was opened, and with which program -- or why nothing was).
+  const [opening, setOpening] = useState('');
+  const [opened, setOpened] = useState(null);
   // The share scope has to allow picking by person, so the watch list is needed
   const [people, setPeople] = useState([]);
+
+  /**
+   * Ask the server to open one generated file in an editor on this machine.
+   *
+   * The request names a **kind and a file name**, never a path: the server resolves it inside its own output
+   * roots, refuses anything that resolves outside them (including through a symlink), and builds the argv
+   * array itself. So the page cannot name an arbitrary file, and the answer says exactly what happened --
+   * including "the editor is not installed", which is the failure a silent button would hide.
+   */
+  const openInEditor = async (kind, name) => {
+    setOpening(name);
+    setOpened(null);
+    try {
+      const r = await api.openFile(kind, name);
+      setOpened({ ok: !!r.ok, name, text: r.ok ? `${t('openInEditor')}: ${r.name} · ${r.command}` : `${t('openInEditorFailed')}: ${r.error ?? ''}` });
+    } catch (e) {
+      setOpened({ ok: false, name, text: `${t('openInEditorFailed')}: ${e.message}` });
+    } finally {
+      setOpening('');
+    }
+  };
 
   const compare = async (from, to) => {
     setCmpTo(to);
@@ -174,7 +199,16 @@ export default function Reports() {
                     </a>{' '}
                     <a className="ghost tiny" href={api.exportUrl(r.name, 'docx')}>
                       {t('exportDocxReport')}
-                    </a>
+                    </a>{' '}
+                    {/* Open the file in an editor on this machine (VS Code by default, the platform's own
+                        opener as the fallback). The app is local, so this is the shortest path from "the
+                        report exists" to "I am editing it". */}
+                    <button className="ghost tiny" onClick={() => openInEditor('report', r.name)} disabled={opening === r.name}>
+                      {opening === r.name ? t('checkingLogin') : t('openInEditor')}
+                    </button>
+                    {opened && opened.name === r.name ? (
+                      <span className={opened.ok ? 'ok-text small' : 'warn-text small'}>{opened.text}</span>
+                    ) : null}
                   </td>
                   <td style={{ width: 150 }}>
                     {cur === r.name || !list ? null : (

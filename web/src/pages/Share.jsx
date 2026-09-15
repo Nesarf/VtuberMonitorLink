@@ -30,6 +30,7 @@ import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
 import Collapsible from '../Collapsible.jsx';
 import { Inline } from '../markdown.jsx';
+import LoginCheckButton, { countKey, loginCheckMessage, textCounter } from '../LoginCheck.jsx';
 
 export default function Share({ people = [] }) {
   const { t, tn, lang } = useI18n();
@@ -53,6 +54,14 @@ export default function Share({ people = [] }) {
   // Per-target panels and the manual hand-off. Everything in `row` is per target and rebuilt on demand:
   // the account list (who could post there), the prepared body, and the hand-off the server computed.
   const [configFor, setConfigFor] = useState('');
+  // Per target: the server's prepared body (`prepared`), the person's edit for that site (`draftText`, null
+  // while untouched), the account list, the last hand-off and the last login check.
+  //
+  // The draft lives in React state and is deliberately **not persisted**: a draft is a decision in progress,
+  // and writing it to config.json would mean a config write per keystroke -- the exact pattern the region box
+  // on the sources page commits on blur to avoid (each write rewrites the file and reloads the list). The
+  // session keeps it, the box says which text is the app's and which is the person's, and the reset button
+  // puts the prepared text back, so a stale draft can never quietly pass itself off as freshly prepared.
   const [row, setRow] = useState({});
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ id: '', nameZh: '', nameEn: '', loginKind: 'bilibili', textLimit: 2000, maxImages: 4 });
@@ -89,14 +98,48 @@ export default function Share({ people = [] }) {
   const rowOf = (id) => row[id] ?? {};
   const setRowOf = (id, patch) => setRow((cur) => ({ ...cur, [id]: { ...(cur[id] ?? {}), ...patch } }));
 
-  const download = async (targetId = null, override = null) => {
+  /**
+   * The text this site would carry **right now**: the person's edit when there is one, otherwise the body the
+   * server prepared. `null` means "nothing decided here", which is what lets the server (the single owner of
+   * that rule, resolveSiteBody in server/src/share.js) decide between the two.
+   */
+  const bodyOf = (target) => {
+    const r = rowOf(target.id);
+    return r.draftText !== undefined && r.draftText !== null ? r.draftText : null;
+  };
+  /** The box's contents: the draft, or the prepared body as its starting point */
+  const shownBody = (target) => {
+    const r = rowOf(target.id);
+    return r.draftText !== undefined && r.draftText !== null ? r.draftText : r.text ?? '';
+  };
+  /** An edit is a keystroke-level thing: state only, never a config write (see the note on `row`). Named
+   *  `setEdit` because `setDraft` is already the add-a-site form's state setter on this page. */
+  const setEdit = (target, value) => setRowOf(target.id, { draftText: value });
+  /** The explicit way back: forget the edit so the app's prepared body is what is carried again */
+  const resetDraft = (target) => setRowOf(target.id, { draftText: null });
+
+  /** Build the body a per-site action should carry: the edit when there is one, the server's own otherwise */
+  const bodyPayload = (target) => {
+    const b = bodyOf(target);
+    return b === null ? {} : { text: b };
+  };
+
+  const download = async (targetId = null, override = null, text = null) => {
     setBusy(targetId ? `download:${targetId}` : 'download');
     try {
       const used = override ?? { mode: images.mode, maxPerBundle: images.maxPerBundle };
+      // A per-target download is the file version of the hand-off, so it carries **the edited body** when
+      // there is one: the person is about to paste this into a site, and the file must hold their words.
       const res = await fetch('/api/share/bundle', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scope: scope(), format: targetId ? 'text' : format, note, images: used }),
+        body: JSON.stringify({
+          scope: scope(),
+          format: targetId ? 'text' : format,
+          note,
+          images: used,
+          ...(text === null || text === undefined ? {} : { text }),
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const cd = res.headers.get('content-disposition') ?? '';
@@ -132,7 +175,7 @@ export default function Share({ people = [] }) {
   };
 
   /**
-   * Run the verification step of one site.
+   * The verification step of one site — the measurement the **send** stage depends on.
    *
    * The stage is an app-level state that is only measured against the site when the user asks: the measurement
    * costs a request, and it deliberately posts nothing (for bilibili it asks the site which account the
@@ -144,8 +187,8 @@ export default function Share({ people = [] }) {
     setErr('');
     try {
       const r = await api.shareVerify({ target: target.id, account: rowOf(target.id).accountId });
-      const prepared = await api.sharePrepare({ target: target.id, scope: scope() });
-      setRowOf(target.id, { accounts: prepared.accounts ?? [], accountId: prepared.accountId ?? '', prepared });
+      const prepared = await api.sharePrepare({ target: target.id, scope: scope(), text: bodyOf(target) });
+      setRowOf(target.id, { ...(prepared ?? {}), accountId: rowOf(target.id).accountId ?? prepared.accountId ?? '' });
       if (r.ok) setMsg(label(r.detail) || t('shareReady'));
       else setErr(label(r.detail) || r.reason || r.error || 'failed');
       await load();
@@ -156,13 +199,34 @@ export default function Share({ people = [] }) {
     }
   };
 
+  /**
+   * The login state of one site, measured on demand.
+   *
+   * Separate from `check` above on purpose: that one is the send-stage verification and only exists for sites
+   * whose publishing has a probe, while **every** site that needs a login can answer "am I signed in there?"
+   * -- the site's own probe where there is one, and otherwise the read-only cookie probe for the site's own
+   * host. It is the same measurement the login state is configured with, so it works on the sites this build
+   * cannot post to at all (X is the example), which is exactly where a person is about to paste by hand.
+   */
+  const checkLogin = async (target) => {
+    const r = await api.shareCheckLogin({ target: target.id, account: rowOf(target.id).accountId });
+    setRowOf(target.id, { loginState: { ...r, message: loginCheckMessage(r, t, tn) } });
+    // A fresh read of the account list is what makes the chooser show an account that was just signed in.
+    if (target.site?.accountDiscovery) {
+      api.sharePrepare({ target: target.id, scope: scope(), text: bodyOf(target) })
+        .then((p) => setRowOf(target.id, { ...(p ?? {}), accountId: rowOf(target.id).accountId ?? p?.accountId ?? '' }))
+        .catch(() => {});
+    }
+    return r;
+  };
+
   /** Prepare the body for one site (cut to that site's own limit) and the accounts that could carry it */
   const prepare = async (target) => {
     setBusy(`prepare:${target.id}`);
     setErr('');
     try {
-      const r = await api.sharePrepare({ target: target.id, scope: scope() });
-      setRowOf(target.id, { accounts: r.accounts ?? [], accountId: rowOf(target.id).accountId || r.accountId || '', prepared: r });
+      const r = await api.sharePrepare({ target: target.id, scope: scope(), text: bodyOf(target) });
+      setRowOf(target.id, { ...(r ?? {}), accountId: rowOf(target.id).accountId ?? r?.accountId ?? '' });
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -170,12 +234,24 @@ export default function Share({ people = [] }) {
     }
   };
 
-  /** The hand-off for a site this build cannot post to: text and links only, and the server audits it as manual */
+  /**
+   * The hand-off for a site this build cannot post to: text and links only, and the server audits it as manual.
+   *
+   * The body sent is the **edited** one when there is one, and the server decides the same way for the
+   * compose link: `composeUrl` comes back only when the text that would actually be pasted fits, so a draft
+   * grown past the site's limit loses the link rather than getting a truncated compose box.
+   */
   const handoff = async (target, { record = false } = {}) => {
     setBusy(`manual:${target.id}`);
     setErr('');
     try {
-      const h = await api.shareHandoff({ target: target.id, scope: scope(), accountId: rowOf(target.id).accountId, handoff: record });
+      const h = await api.shareHandoff({
+        target: target.id,
+        scope: scope(),
+        accountId: rowOf(target.id).accountId,
+        handoff: record,
+        ...bodyPayload(target),
+      });
       setRowOf(target.id, { handoff: h, accounts: h.accounts ?? [] });
       return h;
     } catch (e) {
@@ -186,19 +262,64 @@ export default function Share({ people = [] }) {
     }
   };
 
+  /**
+   * Open the site's compose page.
+   *
+   * The hand-off is recomputed before opening rather than reused: it is measured against the text as it is
+   * now, so a link can never be opened for a body that has since grown past the limit.
+   */
   const openCompose = async (target) => {
-    const h = rowOf(target.id).handoff ?? (await handoff(target, { record: true }));
-    if (!h?.composeUrl) return;
+    const h = await handoff(target, { record: true });
+    setRowOf(target.id, { handoff: h });
+    if (!h?.composeUrl) {
+      setErr(h?.composeNote ? label(h.composeNote) : t('shareManualFull'));
+      return;
+    }
     window.open(h.composeUrl, '_blank', 'noopener,noreferrer');
   };
 
+  /** Copy the body **as it is now** (the edit when there is one): what is on the clipboard must be what the box shows */
   const copyManual = async (target) => {
-    const h = rowOf(target.id).handoff ?? (await handoff(target, { record: true }));
+    const h = await handoff(target, { record: true });
+    setRowOf(target.id, { handoff: h });
     if (!h?.text) return;
     try {
       await navigator.clipboard.writeText(h.text);
       setMsg(t('shareCopied'));
       await load();
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  /**
+   * Copy the body of **any** target (a hand-off is only available for the sites this build cannot post to, so
+   * the copy action cannot go through it for the rest).
+   *
+   * For an edited body the box already holds exactly the text to copy. For an untouched one the server's
+   * prepared text is the thing to copy -- and if it has not been prepared yet in this session, it is asked for
+   * rather than copied from a stale render.
+   */
+  const copyBody = async (target) => {
+    const edited = bodyOf(target);
+    let text = edited;
+    if (text === null) {
+      const r = rowOf(target.id);
+      text = r.preparedText ?? null;
+      if (text === null) {
+        try {
+          const p = await api.sharePrepare({ target: target.id, scope: scope() });
+          setRowOf(target.id, { ...(p ?? {}), accountId: r.accountId ?? p?.accountId ?? '' });
+          text = p?.preparedText ?? p?.text ?? '';
+        } catch (e) {
+          setErr(e.message);
+          return;
+        }
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text ?? '');
+      setMsg(t('shareCopied'));
     } catch (e) {
       setErr(e.message);
     }
@@ -277,6 +398,9 @@ export default function Share({ people = [] }) {
         scope: scope(),
         confirm: true,
         accountId: rowOf(target.id).accountId || undefined,
+        // The body that is actually sent is the one in the box: a person who edited the text for this site and
+        // then pressed send must not have the app's prepared text published under their name instead.
+        ...bodyPayload(target),
       });
       if (r.ok) setMsg(t('sharePosted'));
       else setErr(`${r.error ?? 'failed'}`);
@@ -528,20 +652,33 @@ export default function Share({ people = [] }) {
                       {t('shareConfig')}
                     </button>
                   </td>
-                  <td className={st.account?.status === 'satisfied' ? 'ok-text' : 'muted small'}>{stageCell(st.account)}</td>
-                  <td className={verified ? 'ok-text' : 'muted small'}>
-                    {stageCell(st.verification)}
-                    {/* Always present, never hidden: when it cannot run it is disabled with the reason in its
-                        title, so the cell shows *what* is missing instead of being empty. */}
-                    <button
-                      className="ghost tiny"
-                      title={checkHint(x)}
-                      onClick={() => check(x)}
-                      disabled={busy === `check:${x.id}` || verified || !st.account?.accountId || (x.site && !x.site.verify)}
-                      style={{ marginTop: 4 }}
-                    >
-                      {busy === `check:${x.id}` ? t('loading') : t('shareCheck')}
-                    </button>
+                  <td className={st.account?.status === 'satisfied' ? 'ok-text' : 'muted small'}>
+                    {stageCell(st.account)}
+                    {/* What a login state **is** for this site, and whether this app can look one up at all.
+                        "which account to use" is the chooser below when one can be discovered; for a kind
+                        nothing discovers, the cell says so instead of showing an empty chooser that reads
+                        like "you have no login" (server/src/accounts.js discovers bilibili logins only). */}
+                    <div className="muted small">
+                      {t('shareLogin')}: {x.loginKind ?? '—'}
+                      {x.site?.host ? ` · ${x.site.host}` : x.loginKind ? ` · ${t('loginNoHost')}` : ''}
+                    </div>
+                    {x.loginKind && x.site?.accountDiscovery === false ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
+                    {/* The login state itself, measured on demand and always pressable: the site's own probe
+                        where one exists (bilibili's login-probe, Mastodon's token-scope), otherwise the
+                        read-only cookie probe for the site's own host. It stays available on the sites this
+                        build cannot post to -- the login stage is independent of the send stage, and that is
+                        exactly where someone is about to paste by hand. */}
+                    <LoginCheckButton
+                      onCheck={() => checkLogin(x)}
+                      disabledReason={!x.site?.host && !x.site?.verify ? t('loginNoHost') : !x.loginKind ? t('loginNotCheckable') : ''}
+                      onResult={() => {}}
+                    />
+                    {r.loginState?.message ? (
+                      <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>{r.loginState.message.text}</div>
+                    ) : null}
+                    {/* Which account this site would use -- the configuration half of "configure and check the
+                        login state", available for every target including the ones whose publishing is
+                        unsupported. */}
                     {r.accounts?.length ? (
                       <select
                         className="small"
@@ -567,6 +704,21 @@ export default function Share({ people = [] }) {
                       </ul>
                     ) : null}
                   </td>
+                  <td className={verified ? 'ok-text' : 'muted small'}>
+                    {stageCell(st.verification)}
+                    {/* The send-stage verification. Unlike the login check above, this one needs the site's own
+                        probe: with no probe and no account there is nothing to measure here, and the button
+                        says so in its title rather than being absent. The login state is checked next door. */}
+                    <button
+                      className="ghost tiny"
+                      title={checkHint(x)}
+                      onClick={() => check(x)}
+                      disabled={busy === `check:${x.id}` || verified || !x.site?.verify || !st.account?.accountId}
+                      style={{ marginTop: 4 }}
+                    >
+                      {busy === `check:${x.id}` ? t('loading') : t('shareCheck')}
+                    </button>
+                  </td>
                   <td className={st.send?.status === 'ready' ? 'ok-text' : 'muted small'}>
                     {stageCell(st.send)}
                     {st.send?.actionable ? (
@@ -580,20 +732,39 @@ export default function Share({ people = [] }) {
                         <button className="ghost tiny" onClick={() => openCompose(x)} disabled={busy === `manual:${x.id}`}>
                           {t('shareManualOpen')}
                         </button>{' '}
-                        <button className="ghost tiny" onClick={() => copyManual(x)}>
+                        <button className="ghost tiny" onClick={() => copyManual(x)} disabled={busy === `manual:${x.id}`}>
                           {t('shareManualCopy')}
                         </button>{' '}
                         <button
                           className="ghost tiny"
-                          onClick={() => download(x.id, (rowOf(x.id).handoff ?? r.prepared)?.images)}
+                          onClick={() => download(x.id, (rowOf(x.id).handoff ?? r).images, bodyOf(x))}
+                          disabled={busy === `download:${x.id}`}
                         >
                           {t('shareManualDownload')}
                         </button>
-                        {r.handoff?.fits === false ? <div className="warn-text small">{t('shareManualFull')}</div> : null}
-                        {r.handoff?.textLimit ? (
+                        {/* A hand-off is exactly when "am I signed in there?" matters: somebody is about to
+                            paste into that site by hand. So the check sits here as well, next to the buttons
+                            that use it -- and a site whose sending code does not exist is precisely one of
+                            these. */}
+                        <div style={{ marginTop: 4 }}>
+                          <LoginCheckButton
+                            onCheck={() => checkLogin(x)}
+                            disabledReason={!x.site?.host && !x.site?.verify ? t('loginNoHost') : !x.loginKind ? t('loginNotCheckable') : ''}
+                            onResult={() => {}}
+                          />
+                          {r.loginState?.message ? (
+                            <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>{r.loginState.message.text}</div>
+                          ) : null}
+                        </div>
+                        {r.handoff?.composeUrl === null && r.handoff?.textSource === 'edited' && !r.handoff?.fits ? (
+                          <div className="warn-text small">{label(r.handoff.composeNote)}</div>
+                        ) : r.handoff?.fits === false ? (
+                          <div className="warn-text small">{t('shareManualFull')}</div>
+                        ) : null}
+                        {x.site?.textLimit ? (
                           <div className="muted small">
-                            {t('shareTextLimit').replace('{n}', String(r.handoff.textLimit))}
-                            {r.handoff.truncated ? ` · ${r.handoff.droppedLines} ✂` : ''}
+                            {t('shareTextLimit').replace('{n}', String(x.site.textLimit))}
+                            {r.handoff?.truncated ? ` · ${r.handoff.droppedLines} ✂` : ''}
                           </div>
                         ) : null}
                         <div className="muted small">
@@ -617,6 +788,7 @@ export default function Share({ people = [] }) {
           if (!x) return null;
           const r = rowOf(x.id);
           const st = stagesOf(x);
+          const counter = textCounter(shownBody(x), x.site?.textLimit);
           return (
             <div className="panel" style={{ marginTop: 10 }}>
               <h3 className="muted small">{t('shareConfig')} · {label(x.name)}</h3>
@@ -654,22 +826,77 @@ export default function Share({ people = [] }) {
                   />
                 </div>
                 <div className="field" style={{ flex: '0 0 auto' }}>
-                  <button className="ghost" onClick={() => prepare(x)} disabled={busy === `prepare:${x.id}`}>
-                    {busy === `prepare:${x.id}` ? t('loading') : t('shareCopy')}
-                  </button>
-                  {x.custom ? (
-                    <button className="ghost" onClick={() => removeSite(x.id)} disabled={busy === `remove:${x.id}`}>
-                      {t('shareSiteRemove')}
-                    </button>
-                  ) : null}
+                  {/* Copy is offered once, in the body block below: it copies whatever the box currently holds. */}
                 </div>
+              </div>
+              {/* The body this site would carry, editable **here** -- independently per site, because each site
+                  has its own limit and its own audience. It is seeded with what the app prepared (cut to this
+                  site's limit) and the moment it is touched it becomes the person's own text: everything
+                  downstream reads it (copy, the compose link, the hand-off, the file, and posting where it is
+                  implemented), and the label above the box says which of the two it currently is.
+
+                  Why a textarea per target rather than one shared box: the limits differ by an order of
+                  magnitude (X takes 280 characters, Reddit 40000), so one shared body would be wrong for at
+                  least one site at all times. Why it is not saved on every keystroke: a patch writes
+                  config.json and reloads the list, so a keystroke would be a config write (the same reason the
+                  region box on the sources page commits on blur). */}
+              <div className="field">
+                <label>{t('shareManual')}</label>
+                <textarea
+                  rows={5}
+                  value={shownBody(x)}
+                  onChange={(e) => setEdit(x, e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  style={{ width: '100%', fontFamily: 'inherit', fontSize: 12 }}
+                />
+                <div className="muted small">
+                  {r.draftText !== undefined && r.draftText !== null ? t('shareTextEdited') : t('shareTextPrepared')}
+                  {' · '}
+                  {/* A bare used/limit pair needs no dictionary entry (the requirement says so); the sentence
+                      that names which limit it is reuses shareTextLimit, which already carries {n}. */}
+                  <span key={countKey(counter.used, counter.limit ?? 0)} className={counter.over ? 'warn-text' : 'muted'}>
+                    {counter.used}/{counter.limit ?? '∞'}
+                  </span>
+                  {x.site?.textLimit ? ` · ${t('shareTextLimit').replace('{n}', String(x.site.textLimit))}` : ''}
+                </div>
+                <div className="row" style={{ gap: 6, alignItems: 'center', marginTop: 4 }}>
+                  <button className="ghost tiny" onClick={() => resetDraft(x)} disabled={r.draftText === undefined || r.draftText === null}>
+                    {t('shareTextPrepared')}
+                  </button>
+                  <button className="ghost tiny" onClick={() => prepare(x)} disabled={busy === `prepare:${x.id}`}>
+                    {busy === `prepare:${x.id}` ? t('loading') : t('shareTextPrepare')}
+                  </button>
+                  <button className="ghost tiny" onClick={() => copyBody(x)}>
+                    {t('shareCopy')}
+                  </button>
+                  <LoginCheckButton
+                    onCheck={() => checkLogin(x)}
+                    disabledReason={!x.site?.host && !x.site?.verify ? t('loginNoHost') : !x.loginKind ? t('loginNotCheckable') : ''}
+                    onResult={() => {}}
+                  />
+                </div>
+                {r.loginState?.message ? (
+                  <div className={r.loginState.message.ok ? 'ok-text small' : 'warn-text small'}>{r.loginState.message.text}</div>
+                ) : null}
+                {/* The app's own prepared text, kept visible and labelled as the app's: the edited box must never
+                    be the only place the report text exists, or "reset" would have nothing to reset to. */}
+                {r.preparedText ? (
+                  <details>
+                    <summary className="muted small">{t('shareTextPrepared')}</summary>
+                    <pre className="muted small" style={{ maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                      {r.preparedText}
+                    </pre>
+                  </details>
+                ) : null}
               </div>
               <div className="muted small">
                 {t('shareLogin')}: {label(x.site?.credential)}
+                {x.site?.host ? ` · ${x.site.host}` : ''}
                 {x.site?.textLimit ? ` · ${t('shareTextLimit').replace('{n}', String(x.site.textLimit))}` : ''}
                 {x.site?.maxImages !== undefined ? ` · 🖼 ≤ ${x.site.maxImages}` : ''}
                 {x.site?.publish ? ` · ${x.site.publish}` : ''}
               </div>
+              {x.loginKind && x.site?.accountDiscovery === false ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
               {st.account?.requirementRows?.length ? (
                 <ul className="muted small" style={{ paddingLeft: 16 }}>
                   {st.account.requirementRows.map((q) => (
@@ -679,11 +906,26 @@ export default function Share({ people = [] }) {
                   ))}
                 </ul>
               ) : null}
-              {r.prepared?.text ? (
-                <pre className="muted small" style={{ maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                  {r.prepared.text}
-                </pre>
-              ) : null}
+              <div className="row" style={{ alignItems: 'center' }}>
+                {manualSite(x) ? (
+                  <>
+                    <button className="ghost tiny" onClick={() => openCompose(x)} disabled={busy === `manual:${x.id}`}>
+                      {t('shareManualOpen')}
+                    </button>
+                    <button className="ghost tiny" onClick={() => copyManual(x)} disabled={busy === `manual:${x.id}`}>
+                      {t('shareManualCopy')}
+                    </button>
+                    <button className="ghost tiny" onClick={() => download(x.id, (r.handoff ?? r).images, bodyOf(x))} disabled={busy === `download:${x.id}`}>
+                      {t('shareManualDownload')}
+                    </button>
+                  </>
+                ) : null}
+                {x.custom ? (
+                  <button className="ghost" onClick={() => removeSite(x.id)} disabled={busy === `remove:${x.id}`}>
+                    {t('shareSiteRemove')}
+                  </button>
+                ) : null}
+              </div>
               {x.site?.manual?.compose ? (
                 <div className="muted small">
                   {t('shareSiteLink')}: {x.site.manual.compose}

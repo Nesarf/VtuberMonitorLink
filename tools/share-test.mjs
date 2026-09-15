@@ -42,6 +42,7 @@ import {
   recordVerification,
   renderBundle,
   renderSiteText,
+  resolveSiteBody,
   sanitizeSiteEntry,
   shareTargets,
   siteProfileById,
@@ -439,18 +440,41 @@ t('a site whose publish code does not exist says "not implemented" instead of of
   }
 });
 
-t('a site with no probe cannot be "verified": the stage is blocked, not merely pending', () => {
+// Changed on purpose, at the owner's request: the login stage is independent of the send stage. A site with no
+// probe of its own used to be "blocked, and not actionable", which disabled the login check on exactly the
+// sites that have no site-specific probe. The honest measurement still exists for them -- the read-only cookie
+// probe against the site's own host -- so the stage now says which probe would run and is actionable, while
+// "verified" is still never claimed without the site's own measurement.
+t('a site with no site-specific probe is not "verified": the stage asks for the cookie probe instead', () => {
   const accounts = [{ id: 'acc-1', kind: 'weibo', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
   const r = stageReport(targetById('weibo-post'), accounts, {});
-  assert.equal(r.verification.status, 'blocked');
-  assert.equal(r.verification.actionable, false, 'nothing the user can do here would move it');
-  assert.ok(r.verification.detail.zh.includes('还没有能跑的检测'));
+  assert.equal(r.verification.status, 'needed', 'it is measured, not blocked');
+  assert.equal(r.verification.probe, 'cookie-probe', 'and it says which measurement it would use');
+  assert.equal(r.verification.fallbackProbe, 'cookie-probe');
+  assert.equal(r.verification.actionable, true, 'the login state can be checked on this site');
+  assert.equal(r.verification.accountId, 'acc-1');
+  assert.equal(r.send.status, 'unimplemented', 'posting to it still has no code (weibo is not wired up)');
+  assert.equal(r.send.actionable, false, 'and a login state on its own does not make it postable');
 });
 
-t('a platform that forbids the method is blocked in every stage it touches', () => {
+t('a platform that forbids the method is blocked where it sends, and still checkable where it logs in', () => {
   const r = stageReport(targetById('x-post'), [{ id: 'a', kind: 'twitter', canSend: true }], {});
+  assert.equal(r.send.status, 'blocked', 'x must never be posted to');
+  assert.equal(r.send.actionable, false);
+  // The login stage is a different question: "am I signed in to X?" is measurable, and a hand-off to X is
+  // exactly when somebody wants to know.
+  assert.equal(r.verification.actionable, true, 'the login state of X is still checkable');
+  assert.equal(r.verification.probe, 'cookie-probe');
+  assert.equal(r.verification.probeHost, 'x.com');
+});
+
+t('a login kind with no probe and no host is the one case that has nothing to run, and it says so', () => {
+  // A cookie login kind (so no probe of its own) on a site whose host is a placeholder nobody owns.
+  const cfg = { share: { sites: [{ id: 'weibo-no-host', loginKind: 'weibo', manual: { compose: 'https://{instance}/compose?text={text}' } }] } };
+  const r = stageReport(targetById('weibo-no-host', cfg), [{ id: 'a', kind: 'weibo', canSend: true }], {}, { cfg });
   assert.equal(r.verification.status, 'blocked');
-  assert.equal(r.send.status, 'blocked');
+  assert.equal(r.verification.actionable, false, 'nothing can be read for a domain that is not known');
+  assert.equal(r.verification.probe, null);
 });
 
 t('the file/export targets need no login and no verification; their send stage is simply available', () => {
@@ -807,6 +831,71 @@ t('the length gate uses the limit the site itself declares, not a hard-coded 200
 t('an unknown target is blocked', () => {
   assert.equal(guardPost(cfg, { target: 'nope', text: 'hi', confirm: true }).ok, false);
 });
+
+process.stdout.write('\nshare: the edited body per site (the app’s text is not the person’s words)\n');
+// The report is almost always longer than a site's limit, so what this app prepares can only be a starting
+// point: a person edits it per site. Two rules follow and both are asserted here -- an edit wins over the
+// prepared text **exactly as written**, and the compose link is measured against the edited body rather than
+// the prepared one. `resolveSiteBody` is the one place that decides which text a site carries, so the page and
+// the server cannot disagree about it.
+const editedFixture = buildBundle({ items: Array.from({ length: 40 }, (_, i) => ({ id: 'e' + i, title: `一条很长的标题 ${i}` })) });
+
+t('an edited body that fits produces a compose link, and the link carries the edited text', () => {
+  const h = buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'edited short body' });
+  assert.equal(h.ok, true);
+  assert.equal(h.textSource, 'edited');
+  assert.equal(h.text, 'edited short body');
+  assert.ok(h.composeUrl, 'the compose link is offered');
+  assert.equal(new URL(h.composeUrl).searchParams.get('text'), 'edited short body');
+});
+
+t('a body edited past the limit gets no compose link, and is not cut to make one appear', () => {
+  const long = 'y'.repeat(300); // x-post takes 280
+  const h = buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: long });
+  assert.equal(h.textSource, 'edited');
+  assert.equal(h.fits, false);
+  assert.equal(h.composeUrl, null, 'a truncated compose box is how half a post gets published');
+  assert.equal(h.text, long, 'the edited text is still what the copy path carries');
+  assert.ok(h.composeNote.en.includes('edited'), 'and the note says it is the edited body that does not fit');
+});
+
+t('the copy/hand-off path carries the edited text rather than the prepared one', () => {
+  const edited = buildHandoff({ targetId: 'weibo-post', bundle: editedFixture, cfg: {}, text: 'my own words for weibo' });
+  assert.equal(edited.text, 'my own words for weibo');
+  assert.notEqual(edited.text, edited.preparedText);
+  const prepared = buildHandoff({ targetId: 'weibo-post', bundle: editedFixture, cfg: {} });
+  assert.equal(prepared.textSource, 'prepared');
+  assert.equal(prepared.text, prepared.preparedText);
+});
+
+t('the prepared text travels with the hand-off, labelled as the app’s (so the page can offer a way back)', () => {
+  const h = buildHandoff({ targetId: 'weibo-post', bundle: editedFixture, cfg: {}, text: 'mine' });
+  assert.ok(h.preparedText.length > 0, 'the app’s own text is still available');
+  assert.ok(h.preparedText !== h.text);
+  const body = resolveSiteBody({ text: null, bundle: editedFixture, profile: { textLimit: 500 } });
+  assert.equal(body.source, 'prepared');
+  assert.ok(body.text.length <= 500);
+});
+
+t('an emptied body is an edit too (it means "do not send the app’s report"), not "no text given"', () => {
+  const body = resolveSiteBody({ text: '', bundle: editedFixture, profile: { textLimit: 500 } });
+  assert.equal(body.source, 'edited');
+  assert.equal(body.text, '');
+});
+
+vacuously(
+  'the compose link follows the edited body (wrong input: a body edited past the limit)',
+  (h) => (h.composeUrl ? [] : ['no compose link was produced']),
+  () => buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'short edited body' }),
+  () => buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'z'.repeat(300) })
+);
+
+vacuously(
+  'the hand-off carries the text it was given (wrong input: the prepared body while an edit exists)',
+  (h) => (h.text === 'my edited words' ? [] : [`expected the edited text, got ${JSON.stringify(String(h.text).slice(0, 30))}`]),
+  () => buildHandoff({ targetId: 'weibo-post', bundle: editedFixture, cfg: {}, text: 'my edited words' }),
+  () => buildHandoff({ targetId: 'weibo-post', bundle: editedFixture, cfg: {} })
+);
 
 process.stdout.write('\nshare: controls (a check that cannot fail is not a check)\n');
 // Each family is: one check function, run once on a freshly built right input and once on a freshly built

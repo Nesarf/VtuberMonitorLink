@@ -33,6 +33,11 @@ export default function Watch() {
   const [proxy, setProxy] = useState('');
   const [history, setHistory] = useState(null); // {id, entries}
   const [showRules, setShowRules] = useState(false);
+  // The wiki login check: the answer from the server (a name, or the wiki's own reason) and whether a check
+  // of the form's fields is in flight. The password is only ever sent to the server, which builds the
+  // read-only MediaWiki request and never returns it.
+  const [wikiLogin, setWikiLogin] = useState(null);
+  const [wikiBusy, setWikiBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -154,8 +159,29 @@ export default function Watch() {
     }
   };
 
-  const openHistory = async (id) => {
+  /**
+   * Check the wiki credential that is currently typed into the form.
+   *
+   * The measurement is a real, read-only MediaWiki request (`action=query&meta=userinfo&assert=user`) made
+   * with HTTP basic auth, so the answer is the account the wiki recognises -- or the wiki's own reason for
+   * refusing. It runs before the target is saved on purpose: the moment a person wants to know whether the
+   * BotPassword works is the moment they typed it. The password travels to this server only, is never
+   * logged, and is never part of the answer.
+   */
+  const checkWikiLogin = async () => {
+    setWikiBusy(true);
+    setWikiLogin(null);
     try {
+      const r = await api.checkWatchLogin({ apiUrl: form.apiUrl, username: form.username, botPassword: form.botPassword });
+      setWikiLogin(r);
+    } catch (e) {
+      setWikiLogin({ ok: false, reason: e.message });
+    } finally {
+      setWikiBusy(false);
+    }
+  };
+
+  const openHistory = async (id) => {    try {
       const r = await api.watchHistory(id, 50);
       setHistory({ id, entries: r.history ?? [] });
     } catch (e) {
@@ -360,6 +386,27 @@ export default function Watch() {
               </div>
             </div>
             <div className="hint" style={{ margin: 0 }}>{t('botPasswordHint')}</div>
+            {/* The one place a wiki login state can be configured, so the one place it must be checkable.
+                Always rendered: with the two fields empty it is disabled and says which field is missing
+                (loginFieldsEmpty) rather than firing a request with a blank password, and while its own
+                request is in flight it says that instead. */}
+            <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+              <button
+                className="ghost"
+                title={!form.username || !form.botPassword ? t('loginFieldsEmpty') : wikiBusy ? t('checkingLogin') : t('loginCheckTitle')}
+                onClick={checkWikiLogin}
+                disabled={wikiBusy || !form.username || !form.botPassword}
+              >
+                {wikiBusy ? t('checkingLogin') : t('checkLogin')}
+              </button>
+              {wikiLogin ? (
+                <span className={wikiLogin.ok ? 'ok-text small' : 'warn-text small'}>
+                  {wikiLogin.ok
+                    ? `✅ ${t('loginOk')}: ${wikiLogin.user}${wikiLogin.domain ? ` · ${wikiLogin.domain}` : ''}`
+                    : `❌ ${t('loginNone')}: ${wikiLogin.reason ?? ''}`}
+                </span>
+              ) : null}
+            </div>
           </>
         )}
 

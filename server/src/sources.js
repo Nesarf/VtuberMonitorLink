@@ -291,3 +291,34 @@ export function mergeSourceOverride(base, patch) {
   for (const [k, v] of Object.entries(patch ?? {})) if (v !== undefined) next[k] = v;
   return sanitizeCustomSource(next);
 }
+
+/**
+ * Which host a source's login state would have to come from.
+ *
+ * The source's own `url` decides it: a login is a property of the site being read, so the honest probe is
+ * the read-only cookie probe for that site's host. `www.` is dropped because a cookie is stored against
+ * the registrable domain more often than against the `www` label.
+ *
+ * The one fallback is the bilibili sources, and it is deliberate: their urls live on
+ * `space.bilibili.com` / `api.bilibili.com` / `t.bilibili.com`, while every bilibili login cookie is
+ * stored against `bilibili.com`. Probing the subdomain would ask for a narrower domain than the one the
+ * cookie actually belongs to and could report "no login" for a browser that is signed in, so for these
+ * sources the parent domain is the correct question rather than a convenience.
+ *
+ * A source with no usable host answers `null`; the caller must say so instead of quietly doing nothing.
+ * @param {{url?:string, category?:string, fetch?:string}} source
+ * @returns {string|null}
+ */
+export function sourceLoginHost(source = {}) {
+  const raw = String(source?.url ?? '').trim();
+  if (raw) {
+    try {
+      const host = new URL(raw).host.toLowerCase();
+      if (host) return host.replace(/^www\./, '');
+    } catch {
+      /* fall through to the bilibili fallback below */
+    }
+  }
+  const isBilibili = source?.category === 'bili' || String(source?.fetch ?? '').startsWith('bili-');
+  return isBilibili ? 'bilibili.com' : null;
+}

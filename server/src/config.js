@@ -321,6 +321,12 @@ export const DEFAULT_CONFIG = {
   sources: {
     // id -> { enabled: boolean, login: 'none'|'optional'|'required' }
   },
+  // How a generated file is opened on this machine. Empty means "decide it here": VS Code (`code`) when it
+  // is on PATH, otherwise the platform's own opener. The value is a program plus optional arguments, split
+  // without a shell (see server/src/openfile.js) -- it is never a shell fragment.
+  open: {
+    editor: '',
+  },
   // User-defined sources (added, edited and removed visually on the "sources" page)
   customSources: [],
 };

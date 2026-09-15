@@ -56,7 +56,14 @@ import { netFetch } from './net.js';
 //                      'login-probe'  read the credential and ask the site who it is  (bilibili)
 //                      'token-scope'  check a stored token carries the scope posting needs (mastodon)
 //                      'http-probe'   an authenticated request against the site's API
-//                      null           nothing implemented; verification honestly reports "no probe yet"
+//                      null           no site-specific probe; the **generic login check** below still
+//                                     measures the login state honestly, and this field says only that
+//                                     nothing site-specific exists
+//   host             the site's own host, used by the generic login check (the read-only cookie probe
+//                    reads the browser store for this domain and returns counts and names, never a
+//                    value). It is declared rather than guessed, because "no usable host" is a real
+//                    answer the check has to be able to give. null means "this site has no single host
+//                    to read" (a Mastodon instance is the user's own), which is reported as such.
 //   publish          how publishing itself is implemented
 //   implemented      whether the code path that publishes exists today
 //   textLimit        how many characters the site accepts (bilibili dynamics: 2000)
@@ -80,6 +87,7 @@ export const SHARE_SITES = [
     },
     requirements: ['login', 'session', 'csrf', 'write-permission'],
     verify: 'login-probe',
+    host: 'bilibili.com',
     publish: 'rest-csrf',
     implemented: true,
     unsupported: false,
@@ -104,10 +112,15 @@ export const SHARE_SITES = [
     credential: { zh: 'OAuth 2.0 授权（需要开发者应用）', en: 'OAuth 2.0 authorisation (needs a developer app)' },
     requirements: ['login', 'token', 'scope'],
     verify: null,
+    // X's compose endpoint is on twitter.com, but the login a person actually holds lives on x.com --
+    // the two are the same service and the cookie is stored against x.com.
+    host: 'x.com',
     publish: 'oauth2-api',
     implemented: false,
     // "there is no code yet" and "this must never be done" are different answers, and the send stage has to
     // keep them apart: the first is work in progress, the second will not change. X is the second one.
+    // It says nothing about the **login** stage: whether a person is signed in to X is measurable on its
+    // own, and a hand-off to X is exactly when that is worth knowing.
     unsupported: true,
     textLimit: 280,
     maxImages: 4,
@@ -130,6 +143,7 @@ export const SHARE_SITES = [
     credential: { zh: '登录 cookie（SUB）+ 表单里的 XSRF token', en: 'login cookies (SUB) + the XSRF token on the form' },
     requirements: ['login', 'session', 'csrf'],
     verify: null,
+    host: 'weibo.com',
     publish: 'form-post',
     implemented: false,
     unsupported: false,
@@ -153,6 +167,7 @@ export const SHARE_SITES = [
     credential: { zh: 'OAuth 2.0（youtube.force-ssl 权限）', en: 'OAuth 2.0 with the youtube.force-ssl scope' },
     requirements: ['login', 'token', 'scope'],
     verify: null,
+    host: 'youtube.com',
     publish: 'oauth2-api',
     implemented: false,
     unsupported: false,
@@ -176,6 +191,10 @@ export const SHARE_SITES = [
     credential: { zh: '实例上的一张访问令牌（write:statuses）', en: 'an access token from your instance (write:statuses)' },
     requirements: ['login', 'token', 'scope'],
     verify: 'token-scope',
+    // No host: the instance is the user's own, so there is no single domain a cookie probe could read.
+    // The site-specific probe (token-scope, measured locally) is the measurement that exists here, and
+    // the generic check reports "no host" rather than pretending to look somewhere.
+    host: null,
     publish: 'rest-bearer',
     implemented: false,
     unsupported: false,
@@ -201,6 +220,7 @@ export const SHARE_SITES = [
     credential: { zh: 'OAuth 访问令牌（submit 权限）+ User-Agent', en: 'an OAuth access token (submit scope) + a User-Agent' },
     requirements: ['login', 'token', 'scope'],
     verify: null,
+    host: 'reddit.com',
     publish: 'oauth2-api',
     implemented: false,
     unsupported: false,
@@ -336,6 +356,9 @@ function normalizeSite(raw) {
     credential: raw.credential ?? null,
     requirements: Array.isArray(raw.requirements) ? raw.requirements : ['login'],
     verify: raw.verify ?? null,
+    // Normalised here so every consumer sees the same shape: a lower-case host, or null when there is
+    // none (a hand-written profile that carries an empty string means "no host", not "empty host").
+    host: String(raw.host ?? '').trim().toLowerCase().replace(/^www\./, '') || null,
     publish: raw.publish ?? null,
     implemented: raw.implemented === true,
     unsupported: raw.unsupported === true,
@@ -544,6 +567,183 @@ function accountsFor(profile, accounts = []) {
   return (accounts ?? []).filter((a) => a && a.kind === profile.loginKind);
 }
 
+// ───────────────────────────────────────────── checking a login state
+//
+// "Check login state" has to mean the same thing everywhere: **measure it now and report what was
+// found**. For a site with a probe of its own that is the site's own measurement. For every other site
+// -- including the ones whose publishing is unsupported -- the honest measurement still exists: the
+// read-only cookie probe against the site's own host, which copies the browser cookie store and returns
+// counts and names, never a value. The three outcomes it can give are kept apart, because they send a
+// person in different directions:
+//
+//   session  a login cookie is there (a session cookie was found among the cookies)
+//   cookies  cookies for that host, but no session cookie -- "probably not signed in"
+//   none     nothing for that host at all, with the reason the read failed
+//
+// What this deliberately does not do: invent discovery for a login kind that has none. `accounts.js`
+// finds bilibili logins (and only those); for the OAuth kinds there is nothing on this machine to find,
+// so the result says so instead of showing an empty cell that reads like "no login".
+
+/**
+ * How a login state of this target could be measured.
+ *
+ * Pure, and deliberately independent of whether an account happens to exist: the check button asks
+ * "what would you run", and a site with a probe of its own keeps it while everything else falls back to
+ * the generic cookie probe for the site's host.
+ * @param {object|string} target a share target (from shareTargets) or its id
+ * @param {object} cfg
+ * @returns {{target:string|null, loginKind:string|null, host:string|null,
+ *            probe:'login-probe'|'token-scope'|'http-probe'|'cookie-probe'|null,
+ *            checkable:boolean, needsAccount:boolean, detail:{zh:string,en:string}|null}}
+ */
+export function resolveLoginProbe(target, cfg = {}) {
+  const id = typeof target === 'string' ? target : target?.id;
+  const t = typeof target === 'string' ? targetById(id, cfg) : target;
+  const profile = t ? siteProfileById(id, cfg) : null;
+  const loginKind = profile?.loginKind ?? null;
+  const host = profile?.host ?? null;
+  if (!t || !profile) {
+    return {
+      target: id ?? null,
+      loginKind,
+      host,
+      probe: null,
+      checkable: false,
+      needsAccount: false,
+      detail: { zh: '这不是一个需要登录的发布站点，没有可查的登录态', en: 'this is not a posting site with a login, so there is no login state to check' },
+    };
+  }
+  if (!loginKind) {
+    return {
+      target: id,
+      loginKind: null,
+      host,
+      probe: null,
+      checkable: false,
+      needsAccount: false,
+      detail: { zh: '这个站点声明为不需要登录', en: 'this site declares that it needs no login' },
+    };
+  }
+  if (profile.verify) {
+    return { target: id, loginKind, host, probe: profile.verify, checkable: true, needsAccount: true, detail: null };
+  }
+  if (!host) {
+    return {
+      target: id,
+      loginKind,
+      host: null,
+      probe: null,
+      checkable: false,
+      needsAccount: false,
+      detail: { zh: '这个站点没有可读的域名，查不到登录态', en: 'this site has no host to read, so its login state cannot be checked' },
+    };
+  }
+  return { target: id, loginKind, host, probe: 'cookie-probe', checkable: true, needsAccount: false, detail: null };
+}
+
+/** Cookies that mean "this browser is signed in", by login kind (used by the generic probe's verdict) */
+const SESSION_COOKIE = /^(SESSDATA|SUB|SUB_SESSION|auth_token|sessionid|ct0|SID)$/i;
+
+/**
+ * Measure the login state of one target, now.
+ *
+ * @param {object} cfg
+ * @param {string} targetId
+ * @param {{accounts?:object[], accountId?:string|null, whoAmI?:Function, profileDir?:string, readCookies?:Function}} opts
+ *   `readCookies(profileDir, domains)` is injectable so the routing decision can be tested offline; the
+ *   default is the same implementation the settings page's probe uses.
+ */
+export async function checkLoginState(cfg, targetId, opts = {}) {
+  const { accounts = [], accountId = null, whoAmI = defaultWhoAmI } = opts;
+  const target = targetById(targetId, cfg);
+  const profile = siteProfileById(targetId, cfg);
+  if (!target || !profile) return { ok: false, target: targetId, status: 'error', reason: 'unknown target' };
+  const plan = resolveLoginProbe(target, cfg);
+  if (!plan.checkable) {
+    return {
+      ok: false,
+      target: targetId,
+      status: 'unavailable',
+      probe: null,
+      loginKind: plan.loginKind,
+      host: plan.host,
+      accountId: null,
+      accountName: null,
+      accountKind: plan.loginKind,
+      discovered: accountsFor(profile, accounts).length,
+      reason: plan.detail?.en ?? 'no measurement exists for this login kind',
+      detail: plan.detail,
+    };
+  }
+
+  const list = accountsFor(profile, accounts);
+  const chosen = accountId ? list.find((a) => a.id === accountId) ?? null : pickAccount(profile, accounts);
+  const name = chosen ? chosen.name ?? chosen.uname ?? chosen.mid ?? chosen.id ?? null : null;
+
+  // The site's own probe first: where one exists it is the stronger measurement, and it is the one the
+  // send stage depends on, so the state measured here is the state that stage reads.
+  if (plan.probe !== 'cookie-probe') {
+    const r = await measureVerification(cfg, targetId, { accounts, accountId, whoAmI });
+    return {
+      ok: !!r.ok,
+      target: targetId,
+      status: r.ok ? 'verified' : 'failed',
+      probe: r.probe ?? plan.probe,
+      loginKind: plan.loginKind,
+      host: plan.host,
+      accountId: r.accountId ?? chosen?.id ?? null,
+      accountName: r.accountName ?? name,
+      accountKind: plan.loginKind,
+      discovered: list.length,
+      reason: r.reason ?? null,
+      detail: r.detail ?? null,
+      measured: r.measured ?? null,
+      at: r.at ?? new Date().toISOString(),
+    };
+  }
+
+  // The generic probe: read the browser store for the site's own host, read-only.
+  const readCookies = opts.readCookies ?? readBrowserCookies;
+  const domain = String(plan.host).toLowerCase().replace(/^www\./, '');
+  let ck = null;
+  try {
+    ck = await readCookies(opts.profileDir ?? cfg?.browser?.profileDir ?? '', [domain]);
+  } catch (e) {
+    ck = { ok: false, error: e.message };
+  }
+  const names = (Array.isArray(ck?.names) ? ck.names : []).map((n) => String(n));
+  const hasSession = names.some((n) => SESSION_COOKIE.test(n));
+  const base = {
+    target: targetId,
+    probe: 'cookie-probe',
+    loginKind: plan.loginKind,
+    host: plan.host,
+    domain,
+    cookieCount: names.length,
+    names: names.slice(0, 40),
+    hasSession,
+    accountId: chosen?.id ?? null,
+    accountName: name,
+    accountKind: plan.loginKind,
+    discovered: list.length,
+    at: new Date().toISOString(),
+    // Whether this app can even look for an account of this kind: it finds bilibili logins and nothing
+    // else, and saying so is the point (an empty chooser otherwise reads as "no login").
+    accountDiscovery: plan.loginKind === 'bilibili',
+  };
+  if (!ck?.ok) return { ok: false, status: 'none', ...base, reason: ck?.error ?? 'the cookie store could not be read' };
+  if (!names.length) return { ok: false, status: 'none', ...base, reason: `no cookies stored for ${domain}` };
+  if (!hasSession) {
+    return {
+      ok: false,
+      status: 'cookies',
+      ...base,
+      reason: `cookies for ${domain} were found, but none of them is a session cookie`,
+    };
+  }
+  return { ok: true, status: 'session', ...base, reason: null };
+}
+
 /** The first account whose credential satisfies every declared requirement (this is "which account would be used") */
 function pickAccount(profile, accounts = []) {
   const list = accountsFor(profile, accounts);
@@ -663,7 +863,7 @@ function accountStage(target, profile, accounts, accountId, { requirementRows = 
  * The stage is never claimed as done on the strength of an unrelated account: the stored result is looked
  * up by (target, account) and a mismatch degrades to "needed".
  */
-function verificationStage(target, profile, accounts, store, { accountId = null, nowMs = Date.now() } = {}) {
+function verificationStage(target, profile, accounts, store, { accountId = null, nowMs = Date.now(), cfg = {} } = {}) {
   if (target.kind !== 'post') {
     return {
       id: 'verification',
@@ -676,22 +876,10 @@ function verificationStage(target, profile, accounts, store, { accountId = null,
       actionable: false,
     };
   }
-  if (target.status === 'unsupported') {
-    return {
-      id: 'verification',
-      i18nKey: STAGE_I18N.verification.blocked,
-      status: 'blocked',
-      detail: {
-        zh: '平台本身不允许这种方式（见站点说明）',
-        en: 'the platform does not allow this method (see the site note)',
-      },
-      accountId: null,
-      probe: null,
-      // Every stage object carries the same fields, so a rendering path never has to guess: an absent
-      // "actionable" is not the same answer as false, and the test that reads this API says so.
-      actionable: false,
-    };
-  }
+  // A platform that forbids the *method* says nothing about the login stage: whether a person is signed
+  // in to X is measurable on its own, and a hand-off to X is exactly the moment that is worth knowing.
+  // So `unsupported` no longer short-circuits this stage -- it only removes the site-specific probe
+  // (there is none to run) and leaves the generic login check, which is a real measurement.
   const chosen = accountId ? accountsFor(profile, accounts).find((a) => a.id === accountId) ?? null : pickAccount(profile, accounts);
   const entry = chosen ? verificationFor(store, target.id, chosen.id) : null;
   const fresh = verificationFreshness(entry, nowMs);
@@ -702,18 +890,33 @@ function verificationStage(target, profile, accounts, store, { accountId = null,
       status: 'done',
       detail: {
         zh: `已测量：${entry.detail?.zh ?? entry.method ?? '通过'}`,
-        en: `measured: ${entry.detail?.en ?? entry.method ?? 'passed'}`,
+        en: `measured: ${entry.detail?.en ?? entry.method ?? 'pass'}`,
       },
       accountId: chosen?.id ?? null,
       verifiedAt: fresh.verifiedAt,
       method: entry.method ?? null,
+      // The same field on every branch: what measured this, so the page has one thing to read.
+      probe: entry.method ?? profile?.verify ?? resolveLoginProbe(target, cfg).probe,
+      actionable: !!profile?.verify,
     };
   }
-  // No probe implemented is **blocked**, not "needed": nothing the user can do here would move it, and
-  // showing an actionable "verify" button that cannot run is exactly the fake button this module refuses.
+  // No probe implemented is **blocked**, not "needed": nothing the user can do here would move it by
+  // running the site's own verification. That is still true, and the login stage stays independently
+  // checkable -- so the stage says which method the check button would use, and `actionable` is true
+  // whenever a real measurement exists, whatever it is.
   const noProbe = !profile?.verify;
+  const fallback = resolveLoginProbe(target, cfg);
+  // The probe the check button would run, whatever it is: the site's own where one exists, the cookie probe
+  // as the fallback, null when this login kind (or this site's missing host) leaves nothing to run. Reported
+  // for **every** target, so the page never has to infer it from `verify` being null.
+  const probe = profile?.verify ?? fallback.probe;
   const why = noProbe
-    ? { zh: '这个站点还没有能跑的检测（只有声明，没有测量）', en: 'no probe exists for this site yet (declared, never measured)' }
+    ? fallback.checkable
+      ? {
+          zh: `没有该站点专用的检测；登录态可以用只读 cookie 探针查（${fallback.host}）`,
+          en: `no site-specific probe; the login state can still be read with the read-only cookie probe (${fallback.host})`,
+        }
+      : fallback.detail
     : !chosen
       ? { zh: '先有账号才能验证', en: 'an account is needed before anything can be verified' }
       : entry?.ok === false
@@ -723,14 +926,20 @@ function verificationStage(target, profile, accounts, store, { accountId = null,
           : { zh: '还没测过', en: 'not measured yet' };
   return {
     id: 'verification',
-    i18nKey: STAGE_I18N.verification[noProbe ? 'blocked' : 'needed'],
-    status: noProbe ? 'blocked' : 'needed',
+    i18nKey: STAGE_I18N.verification[noProbe && !fallback.checkable ? 'blocked' : 'needed'],
+    status: noProbe && !fallback.checkable ? 'blocked' : 'needed',
     detail: why,
     accountId: chosen?.id ?? null,
-    probe: profile?.verify ?? null,
+    probe,
+    // What the fallback would run, kept separately so "this site has a probe" and "a login state can still be
+    // measured" stay two different facts in the answer.
+    fallbackProbe: fallback.probe,
+    probeHost: fallback.host,
     verifiedAt: fresh.verifiedAt,
     lastOk: entry?.ok ?? null,
-    actionable: !noProbe && !!chosen,
+    // A real measurement exists whenever either probe does. For the sites this build cannot post to
+    // (unsupported, or not implemented) this is still true: the login stage is independent of the send stage.
+    actionable: !!probe,
   };
 }
 
@@ -826,6 +1035,12 @@ export function stagesReport(accounts = [], store = {}, cfg = {}, opts = {}) {
             credential: st.profile.credential,
             requirements: st.profile.requirements,
             verify: st.profile.verify,
+            // The host the generic login check reads, and whether this app can look for an account of
+            // this login kind at all. Both travel with the profile so the page renders what was decided
+            // here instead of guessing from the login kind.
+            host: st.profile.host ?? null,
+            loginKind: st.profile.loginKind ?? null,
+            accountDiscovery: st.profile.loginKind === 'bilibili',
             publish: st.profile.publish,
             implemented: st.profile.implemented,
             unsupported: st.profile.unsupported,
@@ -936,15 +1151,23 @@ export function sanitizeSiteEntry(input) {
   // the browser as-is. `{text}` / `{title}` placeholders are kept for fillCompose().
   const composeRaw = String(raw.manual?.compose ?? '').trim().slice(0, 300);
   let compose = null;
+  let composeHost = null;
   if (composeRaw) {
     const probe = composeRaw.replace(/\{text\}|\{title\}/g, 'x');
     try {
       const u = new URL(probe);
-      if (u.protocol === 'http:' || u.protocol === 'https:') compose = composeRaw;
+      if (u.protocol === 'http:' || u.protocol === 'https:') {
+        compose = composeRaw;
+        composeHost = u.host;
+      }
     } catch {
       compose = null;
     }
   }
+  // The host the login check would read: declared if the caller declares one, otherwise taken from the
+  // compose page, which is the same site by definition. A compose page with a **placeholder** host (a
+  // Mastodon instance, `{instance}`) yields no host on purpose -- see hostFromCompose.
+  const host = cleanHost(raw.host) ?? hostFromCompose(composeRaw);
   return {
     ok: true,
     site: {
@@ -957,6 +1180,9 @@ export function sanitizeSiteEntry(input) {
       // No probe by default. A probe name that no code implements would be a promise this module cannot
       // keep, so the verification stage reports "no probe exists" until one is written for this kind.
       verify: kindRaw === 'bilibili' ? 'login-probe' : null,
+      // Not every kind gets one -- and the generic check reports "no host" rather than reading a domain
+      // that was never the user's site.
+      host: host ?? null,
       publish: kindRaw === null ? null : 'rest-api',
       implemented: false,
       textLimit,
@@ -968,6 +1194,41 @@ export function sanitizeSiteEntry(input) {
       },
     },
   };
+}
+
+/**
+ * A host string, or null when it is not one.
+ *
+ * The rejection list is the interesting half: a host carrying a `{placeholder}` or a `...` is not a
+ * domain anyone has cookies for, and accepting it would make the login check report "no cookies" for a
+ * site whose domain was never known in the first place.
+ */
+function cleanHost(value) {
+  const h = String(value ?? '').trim().toLowerCase().replace(/^www\./, '');
+  if (!h) return null;
+  if (/[{}]|\.\.\./.test(h)) return null;
+  if (!/^[a-z0-9.-]+$/.test(h)) return null;
+  if (!h.includes('.')) return null;
+  return h;
+}
+
+/**
+ * The host of a compose page, when it names one.
+ *
+ * A site's compose page is on the site, so it is a legitimate source for "which domain would the login
+ * live under" -- and it means an added site does not have to repeat what the form already asked for. A
+ * compose page whose host is a **placeholder** (`https://{instance}/publish`) has no host: a Mastodon
+ * instance is the user's own and the application has no way to know it, so the honest answer is "no
+ * host", which the login check reports rather than probing a domain that does not exist.
+ */
+function hostFromCompose(composeRaw) {
+  const s = String(composeRaw ?? '').trim();
+  if (!s) return null;
+  try {
+    return cleanHost(new URL(s.replace(/\{text\}|\{title\}/g, 'x')).host);
+  } catch {
+    return null;
+  }
 }
 
 /** What one login kind can be measured with, in words (the UI shows this under the add-site form) */
@@ -1107,6 +1368,62 @@ function fillCompose(manual, bundle, body) {
 }
 
 /**
+ * Which text a site would actually carry, and **where it came from**.
+ *
+ * The report is almost always longer than a site's limit, so what this app prepares can only be a starting
+ * point: a person edits it per site. Two rules follow, and both are about not lying in either direction:
+ *
+ *   1) an edit **wins** over the prepared text, and it is taken exactly as written -- re-truncating it here
+ *      would silently replace the person's words with the app's, which is the one thing a comment box must
+ *      never do. A body over the limit is reported as over the limit, with no compose link and no post;
+ *   2) the prepared text is cut to the site's limit, and the answer says that it was cut, so the page can
+ *      label it as the app's starting point rather than as the user's own words.
+ *
+ * `source` is what makes rule 2 visible to the UI: 'edited' or 'prepared', never inferred.
+ */
+export function resolveSiteBody({ text = null, bundle = null, profile = null } = {}) {
+  const preparedFull = renderSiteText(bundle ?? buildBundle({ scopeKind: 'latest', items: [], title: 'Vtuber 情报分享' }));
+  const preparedCut = truncateForSite(preparedFull, profile?.textLimit);
+  if (text !== null && text !== undefined) {
+    // `String()` rather than a truthiness test: an emptied box is a decision ("do not post the app's
+    // text"), and treating it as "no text" would put the prepared report back into the caller's hands.
+    const s = String(text);
+    let limit = profile?.textLimit;
+    if (!Number.isFinite(Number(limit))) {
+      // A site that declares no limit: if it is also the profile used for posting, cap at what a post may
+      // carry; otherwise leave it uncapped rather than inventing a number.
+      limit = Number(profile?.maxPerPost) > 0 ? profile.maxPerPost : null;
+    }
+    const over = limit !== null && s.length > limit;
+    return {
+      text: s,
+      source: 'edited',
+      prepared: preparedCut.text,
+      preparedLength: preparedFull.length,
+      length: s.length,
+      limit: limit ?? null,
+      fits: !over,
+      over,
+      truncated: false,
+      droppedLines: 0,
+    };
+  }
+  const fits = !preparedCut.truncated;
+  return {
+    text: preparedCut.text,
+    source: 'prepared',
+    prepared: preparedCut.text,
+    preparedLength: preparedFull.length,
+    length: preparedCut.text.length,
+    limit: preparedCut.limit ?? profile?.textLimit ?? null,
+    fits,
+    over: false,
+    truncated: preparedCut.truncated,
+    droppedLines: preparedCut.droppedLines,
+  };
+}
+
+/**
  * Build the hand-off for a target this app cannot post to.
  *
  * This is the answer to "anything the project cannot do must still be preparable by hand": the text and the
@@ -1119,9 +1436,14 @@ function fillCompose(manual, bundle, body) {
  *   3) the text is encoded for a URL by a real encoder, so `&`, `#` and spaces survive into the compose box;
  *   4) no network call, and no image download: this whole function is a pure computation over the bundle.
  *
- * @param {object} o { targetId, bundle, cfg, accountId }
+ * A fifth rule arrived with the per-site editable body: when the caller passes `text`, that text is what the
+ * hand-off carries (see resolveSiteBody), the compose link is offered only when **that** text fits, and the
+ * answer says whether it was edited or prepared, so the page never presents the app's own words as the
+ * user's. The file/copy path carries the same text, because it is the same body.
+ *
+ * @param {object} o { targetId, bundle, cfg, accountId, text }
  */
-export function buildHandoff({ targetId, bundle = null, cfg = {}, accountId = null } = {}) {
+export function buildHandoff({ targetId, bundle = null, cfg = {}, accountId = null, text = null } = {}) {
   const target = targetById(targetId, cfg);
   if (!target) return { ok: false, error: `unknown target: ${targetId}` };
   if (target.kind !== 'post') return { ok: false, error: 'this target is not a posting site; use the file or copy buttons' };
@@ -1131,8 +1453,7 @@ export function buildHandoff({ targetId, bundle = null, cfg = {}, accountId = nu
     return { ok: false, error: 'this site is implemented; use the send step' };
   }
   const b = bundle ?? buildBundle({ scopeKind: 'latest', items: [], title: 'Vtuber 情报分享' });
-  const full = renderSiteText(b);
-  const cut = truncateForSite(full, profile?.textLimit);
+  const body = resolveSiteBody({ text, bundle: b, profile });
   const images = imagePlan(shareImageSetting(cfg), profile?.maxImages);
   const manual = profile?.manual ?? null;
   return {
@@ -1145,19 +1466,26 @@ export function buildHandoff({ targetId, bundle = null, cfg = {}, accountId = nu
     posted: false,
     postedNote: { zh: '本程序不会替你发到这个站点', en: 'this app does not post to this site for you' },
     prepare: { zh: '准备好正文和配图，由你自己发', en: 'the body and the attachment are prepared; you post it yourself' },
-    text: cut.text,
-    fullLength: full.length,
-    textLength: cut.text.length,
-    truncated: cut.truncated,
-    droppedLines: cut.droppedLines,
+    text: body.text,
+    // Which text this is: the app's prepared starting point, or the one the person edited. The page shows
+    // them differently, so the two must never be conflated.
+    textSource: body.source,
+    preparedText: body.prepared,
+    fullLength: body.preparedLength,
+    textLength: body.length,
+    truncated: body.truncated,
+    droppedLines: body.droppedLines,
     textLimit: profile?.textLimit ?? null,
-    fits: !cut.truncated,
+    fits: body.fits,
     // With a body that does not fit, no compose link is offered: a truncated compose box is how a half post
-    // gets published by accident, and the copy/file path is right there.
-    composeUrl: cut.truncated ? null : fillCompose(manual, b, cut.text),
-    composeNote: cut.truncated
-      ? { zh: `正文 ${full.length} 字符，超过本站上限 ${profile?.textLimit}；按钮里不带正文，请用复制或下载`, en: `the body is ${full.length} characters, over this site's ${profile?.textLimit} limit; the button carries no text, use copy or download` }
-      : manualInstruction(manual),
+    // gets published by accident, and the copy/file path is right there. An **edited** body is measured the
+    // same way and is never cut to make the link appear.
+    composeUrl: body.fits ? fillCompose(manual, b, body.text) : null,
+    composeNote: body.fits
+      ? manualInstruction(manual)
+      : body.source === 'edited'
+        ? { zh: `你改的正文 ${body.length} 字符，超过本站上限 ${profile?.textLimit}；按钮里不带正文，请用复制或下载`, en: `your edited body is ${body.length} characters, over this site's ${profile?.textLimit} limit; the button carries no text, use copy or download` }
+        : { zh: `正文 ${body.preparedLength} 字符，超过本站上限 ${profile?.textLimit}；按钮里不带正文，请用复制或下载`, en: `the body is ${body.preparedLength} characters, over this site's ${profile?.textLimit} limit; the button carries no text, use copy or download` },
     needs: manual?.needs ?? { zh: '需要该站点的账号', en: 'an account on that site' },
     site: {
       id: profile?.id ?? targetId,

@@ -284,10 +284,37 @@ export const STRINGS = {
       '日志与报告里都不会出现 cookie 内容。若浏览器启用了 App-Bound Encryption（Chrome 127+ 默认），' +
       '外部无法解密，这时只能关掉浏览器让 Playwright 复用 profile。',
     domainLabel: '要读的域名',
+    cookieDomain: '读的是 {domain} 的登录态',
+    // The `title` of a check-login button. A separate, plain-text entry because `loginHint` carries `**`
+    // markers and renders through <Inline>: the same string used as a tooltip shows the asterisks literally,
+    // which tools/hint-md-test.mjs catches (measured: it did).
+    loginCheckTitle: '这里只读地读一次浏览器的登录态（浏览器可以开着，不锁定也不改动）',
     cookieCount: '{n} 个',
     cookieCountWithSession: '{n} 个（含 SESSDATA）',
     browserFromSettings: '设置里指定的',
-
+    // Every surface that configures a login state gets a "check login state" button, and these are the
+    // sentences it needs when it cannot run one. They exist so the button never has to be disabled
+    // without saying why: a disabled control with no reason is the thing this round is about.
+    noProfileDir: '先在「设置 → 浏览器」里填用户配置目录，否则读不到登录态',
+    loginNotCheckable: '这个来源声明不需要登录，没有可查的登录态',
+    loginNoHost: '这个目标没有可读的域名，查不到登录态',
+    loginFieldsEmpty: '填上用户名与 BotPassword 才能检查登录态',
+    // Deliberately names no site here: a site name in the source string is a glossary term, and a glossary
+    // term with no per-locale override is exactly what the proofreading ratchet counts (measured: the first
+    // wording of this entry named one and pushed 20 locales past their baseline by a row each).
+    loginNoDiscovery: '本机没有找出这类账号的途径（只能发现一种登录态），所以这里如实报告缺什么',
+    // Opening a generated file in an editor. The setting is a program plus optional arguments, and it is
+    // split without a shell (server/src/openfile.js), so it is never a shell fragment.
+    openInEditor: '在编辑器里打开',
+    openInEditorFailed: '没能打开',
+    openEditorTitle: '打开方式',
+    openEditorHint: '留空则先找 VS Code 的 code 命令，找不到就用系统默认打开方式。这里填「程序名 + 参数」，不会经过 shell；请求里只带文件类型和文件名，路径由服务端在自己的输出目录里解析。',
+    // The per-site editable body: which text the box holds, and the way back to the prepared one. The
+    // distinction is the point -- the app's text must never read as the person's own words.
+    shareTextEdited: '当前是你改过的正文（这个站点单独一份）',
+    shareTextPrepared: '当前是本程序准备的正文（已按本站上限裁过）',
+    shareTextReset: '退回准备稿',
+    shareTextPrepare: '重新生成准备稿',
     // llm
     llmTitle: 'LLM 分析',
     llmHint: '兼容 OpenAI 格式的接口（DeepSeek / OpenAI / Kimi / 通义 / 本地 Ollama 均可）。可以存好几套档位随时切换；Key 只保存在本机 config.json。',
@@ -1077,9 +1104,36 @@ export const STRINGS = {
       'If the browser uses App-Bound Encryption (the default in Chrome 127+), outside decryption is impossible and ' +
       'you have to close the browser so Playwright can reuse the profile.',
     domainLabel: 'Domains to read',
+    cookieDomain: 'reading the login state of {domain}',
+    // The `title` of a check-login button. A separate, plain-text entry because `loginHint` carries `**`
+    // markers and renders through <Inline>: the same string used as a tooltip shows the asterisks literally,
+    // which tools/hint-md-test.mjs catches (measured: it did).
+    loginCheckTitle: 'This reads the browser login state once, read-only (the browser may stay open; nothing is locked or changed)',
     cookieCount: '{n} cookies',
     cookieCountWithSession: '{n} cookies (incl. SESSDATA)',
     browserFromSettings: 'from Settings',
+    // Every surface that configures a login state gets a "check login state" button, and these are the
+    // sentences it needs when it cannot run one. They exist so the button never has to be disabled
+    // without saying why: a disabled control with no reason is the thing this round is about.
+    noProfileDir: 'Set the browser user data dir in Settings → Browser first, otherwise the login state cannot be read',
+    loginNotCheckable: 'This source declares it needs no login, so there is no login state to check',
+    loginNoHost: 'This target has no host to read, so its login state cannot be checked',
+    loginFieldsEmpty: 'Fill in the username and the BotPassword before checking the login',
+    // Deliberately names no site here (see the note on the simplified entry): a site name is a glossary term,
+    // and a glossary term without a per-locale override is what the proofreading ratchet counts.
+    loginNoDiscovery: 'this machine has no way to look up an account of this kind (it can find one login kind only), so it reports what is missing instead',
+    // Opening a generated file in an editor. The setting is a program plus optional arguments, and it is
+    // split without a shell (server/src/openfile.js), so it is never a shell fragment.
+    openInEditor: 'Open in editor',
+    openInEditorFailed: 'Could not open',
+    openEditorTitle: 'Opening files',
+    openEditorHint: 'Leave empty to use the VS Code `code` command when it is installed and the platform opener otherwise. The value is a program plus arguments and never goes through a shell; the request carries a file kind and name only, and the server resolves the path inside its own output directories.',
+    // The per-site editable body: which text the box holds, and the way back to the prepared one. The
+    // distinction is the point -- the app's text must never read as the person's own words.
+    shareTextEdited: 'this is your edited body (its own copy for this site)',
+    shareTextPrepared: "this is the app's prepared body (already cut to this site's limit)",
+    shareTextReset: 'back to the prepared body',
+    shareTextPrepare: 'regenerate the prepared body',
 
     llmTitle: 'LLM analysis',
     llmHint:

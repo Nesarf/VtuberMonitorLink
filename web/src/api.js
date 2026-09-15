@@ -85,6 +85,10 @@ export const api = {
   getWatch: () => j('/api/watch'),
   putWatch: (payload) => put('/api/watch', payload),
   checkWatch: (id) => post('/api/watch/check', id ? { id } : {}),
+  // "Does the configured wiki BotPassword still work?" -- one read-only request, and the answer carries a
+  // name or the site's own reason, never the password. The two fields are sent because the check has to
+  // work before they are saved; with only `id` the saved target is used and no secret leaves the page.
+  checkWatchLogin: (payload) => post('/api/watch/login-check', payload),
   watchHistory: (id, limit = 50) => j(`/api/watch/${encodeURIComponent(id)}/history?limit=${limit}`),
   clearBaseline: (id) => j(`/api/watch/${encodeURIComponent(id)}/baseline`, { method: 'DELETE' }),
 
@@ -117,6 +121,11 @@ export const api = {
   // the verification step of one site, measured against the site on demand (the server measures and stores it)
   shareVerify: ({ target, account } = {}) =>
     j(`/api/share/verify?target=${encodeURIComponent(target ?? '')}${account ? `&account=${encodeURIComponent(account)}` : ''}`),
+  // "Am I signed in to this site?" -- the site's own probe where one exists, otherwise the read-only
+  // cookie probe for the site's own host. Available for every posting site, including the ones whose
+  // publishing is unsupported, because the login stage is independent of the send stage.
+  shareCheckLogin: ({ target, account } = {}) =>
+    j(`/api/share/check-login?target=${encodeURIComponent(target ?? '')}${account ? `&account=${encodeURIComponent(account)}` : ''}`),
   shareAudit: () => j('/api/share/audit'),
 
   // image understanding tagging
@@ -146,6 +155,11 @@ export const api = {
   getReport: (name) => fetch(`/api/reports/${encodeURIComponent(name)}`).then((r) => r.text()),
   searchReports: (q) => j(`/api/reports/search?q=${encodeURIComponent(q)}`),
   diffReports: (from, to) => j(`/api/reports/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  // "Open this generated file in an editor on this machine." The request carries a **kind and an id**, never a
+  // path: the server resolves the path inside its own output roots and refuses anything else, so this cannot
+  // become "run a program on whatever file the client names". The answer says what was opened and with which
+  // program, or why nothing was.
+  openFile: (kind, id) => post('/api/open', { kind, id }),
   exportUrl: (name, format = 'html') =>
     `/api/reports/${encodeURIComponent(name)}/export?format=${format}`,
 

@@ -405,7 +405,30 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   // ── diagnostics for a user-added source ──────────────────────────
   // A healthy connection produces no file at all; only a clear anomaly generates a human-readable diagnostic markdown.
-  app.post('/api/sources/:id/diagnose', async (req, res) => {
+  // ── long operations must not run twice at once ───────────────────
+  // Both halves of this were observed, not imagined. The nodes panel's probe button had no disabled
+  // state, so someone who saw nothing happen clicked it four or five times and started four or five
+  // real probes (the request log shows exactly that, twice). A full probe-all takes about three and a
+  // half minutes; a second one is not a retry, it is the same work done twice on the same network at
+  // the same time. A duplicate is answered with code 'busy' and the age of the run already going,
+  // rather than being queued behind it, because the caller can decide what to do with that answer.
+  const inFlight = new Map();
+  const busyGuard = (name) => (req, res, next) => {
+    const startedAt = inFlight.get(name);
+    if (startedAt) {
+      res.status(409).json({
+        ok: false,
+        code: 'busy',
+        error: `${name} is already running (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`,
+      });
+      return;
+    }
+    inFlight.set(name, Date.now());
+    res.on('close', () => inFlight.delete(name));
+    next();
+  };
+
+  app.post('/api/sources/:id/diagnose', busyGuard('source diagnose'), async (req, res) => {
     const cfg = getConfig();
     const source = effectiveSources(cfg).find((s) => s.id === req.params.id);
     if (!source) return res.status(404).json({ error: `unknown source: ${req.params.id}` });
@@ -519,7 +542,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ cache: loadCache(cfg), ttlMinutes: cfg.ui?.probeTtlMinutes ?? 30 });
   });
 
-  app.post('/api/probe', async (req, res) => {
+  app.post('/api/probe', busyGuard('probe'), async (req, res) => {
     const cfg = getConfig();
     const samples = Math.max(1, Math.min(10, Number(req.body?.samples) || cfg.ui?.probeSamples || DEFAULT_SAMPLES));
     const modes = Array.isArray(req.body?.modes) && req.body.modes.length ? req.body.modes : ['direct', 'proxy'];
@@ -745,7 +768,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // the latency from every node to **one specific site** — "pick the fastest node per site" leans on exactly this
-  app.post('/api/proxy/nodes/test', async (req, res) => {
+  app.post('/api/proxy/nodes/test', busyGuard('proxy node test'), async (req, res) => {
     const cfg = getConfig();
     const { group, nodes, url, timeout } = req.body ?? {};
     if (!group || !Array.isArray(nodes) || !nodes.length) return res.status(400).json({ error: 'group and nodes are required' });
@@ -932,7 +955,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // ── feature extraction (needs an LLM) ────────────────────────────
   app.get('/api/features', (_req, res) => res.json(featureStats(getConfig())));
 
-  app.post('/api/features/extract', async (req, res) => {
+  app.post('/api/features/extract', busyGuard('feature extraction'), async (req, res) => {
     const cfg = getConfig();
     const items = applyFeatures(latestIntel(cfg, 400).items ?? [], loadFeatureCache(cfg));
     const r = await extractFeatures(cfg, items, log);

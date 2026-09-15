@@ -263,6 +263,34 @@ try {
   problems.push(`could not read the source catalogue: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5c. long operations are guarded
+//
+// The request log on this machine showed one real trap and one false alarm. The false alarm is worth
+// recording as a rule of its own: five calls to /api/proxy/nodes/test inside three seconds looked like a
+// person hammering a dead button, and the code said otherwise - each group's probe takes about 600ms and
+// the button disables while busy, so those five were five different groups tested in turn. The real trap
+// is that a React button cannot stop two clicks inside one frame, two browser tabs, or a client that
+// retries; the server has to. So: every expensive POST carries an in-flight guard, and the nodes probe
+// button keeps the disabled state that makes the ordinary case impossible.
+try {
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const guarded = [
+    "/api/sources/:id/diagnose",
+    "/api/probe",
+    "/api/proxy/nodes/test",
+    "/api/features/extract",
+  ].filter((route) => !new RegExp(`app\\.post\\('${route.replace(/[/:]/g, (c) => '\\' + c)}', busyGuard\\(`).test(serverSrc));
+  if (guarded.length) problems.push(`expensive route(s) with no in-flight guard: ${guarded.join(', ')}`);
+  else process.stdout.write(`   [ok]   ${4} long operation(s) refuse to run twice at once\n`);
+
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/src/pages/Settings.jsx'), 'utf8');
+  const button = /testNodes\(g\);[\s\S]{0,120}?disabled=\{busy\}/.test(settingsSrc);
+  if (!button) problems.push('the nodes probe button no longer disables while busy');
+  else process.stdout.write('   [ok]   the nodes probe button disables while a probe is running\n');
+} catch (e) {
+  problems.push(`could not read the long-operation guards: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

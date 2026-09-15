@@ -238,7 +238,8 @@ export const DEFAULT_CONFIG = {
     intelPerSource: 24,
     probeSamples: 3,
     probeTtlMinutes: 30,
-    // Presentation layout for reports / intel (adjustable in the web UI; think of a card listing such as the one on xiaojicidian)
+    // Presentation layout for reports / intel (adjustable in the web UI; 'cards' lays each entry out as
+    // a tile in a multi-column wall)
     layout: {
       mode: 'cards', // cards | list | compact | timeline | table
       columns: 'auto', // auto | 1 | 2 | 3 | 4

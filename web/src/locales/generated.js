@@ -1,7 +1,7 @@
 // 本文件由 tools/i18n-hant.mjs 生成，请勿手改 / GENERATED — do not edit by hand.
 // 数据来源：OpenCC 词典（构建期转换），因此不存在「漏字导致简繁混排」的问题。
 // 重新生成：node tools/i18n-hant.mjs
-// 生成时间：2026-09-13T12:03:08.679Z
+// 生成时间：2026-09-15T17:25:52.304Z
 export const GENERATED = {
   "zh-Hant": {
     "appTitle": "Vtuber's Monitor Link",
@@ -515,7 +515,7 @@ export const GENERATED = {
     "layoutTitle": "排版",
     "layoutHint": "報告與情報卡的呈現方式，改完立刻生效（也算即時預覽）。",
     "layoutMode": "呈現方式",
-    "layout_cards": "卡片牆（小雞詞典式羅列）",
+    "layout_cards": "卡片牆",
     "layout_list": "列表",
     "layout_compact": "緊湊",
     "layout_timeline": "時間線",
@@ -1201,7 +1201,7 @@ export const GENERATED = {
     "layoutTitle": "排版",
     "layoutHint": "報告與情報卡的呈現方式，改完立刻生效（也算即時預覽）。",
     "layoutMode": "呈現方式",
-    "layout_cards": "卡片牆（小雞詞典式羅列）",
+    "layout_cards": "卡片牆",
     "layout_list": "列表",
     "layout_compact": "緊湊",
     "layout_timeline": "時間線",
@@ -1887,7 +1887,7 @@ export const GENERATED = {
     "layoutTitle": "排版",
     "layoutHint": "報告與情報卡的呈現方式，改完立刻生效（也算即時預覽）。",
     "layoutMode": "呈現方式",
-    "layout_cards": "卡片牆（小雞詞典式羅列）",
+    "layout_cards": "卡片牆",
     "layout_list": "列表",
     "layout_compact": "緊湊",
     "layout_timeline": "時間線",

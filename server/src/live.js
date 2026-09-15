@@ -35,7 +35,7 @@ function headers() {
   };
 }
 
-/** where the uid list comes from: the live.uids config + the uids of bilibili dynamic sources + bilibili uids among the watch targets */
+/** where the uid list comes from: the live.uids config + the uids of bilibili dynamic sources that did not opt out + bilibili uids among the watch targets */
 export function liveUids(cfg, sources) {
   const out = new Map();
   for (const u of cfg?.live?.uids ?? []) {
@@ -43,6 +43,10 @@ export function liveUids(cfg, sources) {
     if (/^\d+$/.test(uid)) out.set(uid, typeof u === 'object' ? u.name ?? '' : '');
   }
   for (const s of sources ?? []) {
+    // A source may opt out of the live check with liveCheck: false. Its dynamics are still monitored; it
+    // just does not decide what the Live tab shows by default. Which sources those are, and why, is
+    // written next to them in sources.js.
+    if (s.liveCheck === false) continue;
     if (s.uid && /^\d+$/.test(String(s.uid))) out.set(String(s.uid), s.name?.zh ?? s.id);
   }
   for (const t of cfg?.watch?.targets ?? []) {

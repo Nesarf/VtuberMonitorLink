@@ -93,6 +93,12 @@ export const BUILTIN_SOURCES = [
     name: { zh: 'YouTube 官方频道公告', en: 'YouTube official channels' },
     category: 'video',
     fetch: 'search-only',
+    // This was the only built-in source without a url, and the consequence was visible in the UI: the
+    // probe skips a source that has no address to measure (server.js: `if (s.url)`), so asking for this
+    // one alone answered 400 "nothing to probe" and the panel showed it as untestable. It has no single
+    // feed - it spans several official channels - but its fetches go to youtube.com, which is what a
+    // latency probe measures, so the site it actually talks to is the honest target.
+    url: 'https://www.youtube.com/',
     login: 'optional',
     defaultEnabled: true,
   },
@@ -156,6 +162,11 @@ export const BUILTIN_SOURCES = [
 //   • api.bilibili.com works on a direct connection while a proxy gives a steady 412 / -352, so proxy is always 'direct'
 //   • the opus/feed/space endpoint needs no login and no wbi signature, and reliably returns text/image dynamics (body plus like count)
 //   • feed/space (full dynamics with attached images) is under very strict risk control and is only obtainable by reusing a login session → login: 'required'
+//
+// **No built-in source here decides the Live tab.** Every one of them carries liveCheck: false, so the
+// live check reads the uids the user chose - live.uids, or a bilibili watch target - and starts with an
+// empty Live tab instead of the shipped example accounts. Dynamics monitoring is unaffected, and a
+// source added by hand is live-checked as before.
 const BILI_OPUS = [
   ['jaran', '嘉然今天吃什么（A-SOUL）', '672328094'],
   ['asoul', 'A-SOUL 官方', '703007996'],
@@ -171,6 +182,12 @@ export const BILIBILI_SOURCES = [
     fetch: 'bili-opus',
     url: `https://space.bilibili.com/${uid}/dynamic`,
     uid,
+    // These four ship enabled, and their live status used to be the whole default content of the Live
+    // tab. They are *dynamics* sources: two of them are group accounts rather than a person whose
+    // stream one follows, and the set as a whole is a starter example nobody chose. So they no longer
+    // feed the live check - a uid in live.uids, or a watch target, still does, which keeps the feature
+    // and drops the default. See docs/LIVE.md.
+    liveCheck: false,
     proxy: 'direct',
     login: 'none',
     rateLimit: { gapSeconds: 3, retries: 2 },
@@ -188,6 +205,9 @@ export const BILIBILI_SOURCES = [
     // by default it points at an UP who really does post images, so "with images" is visible out of the box; the uid can be changed in the web UI
     url: 'https://space.bilibili.com/282994/dynamic',
     uid: '282994',
+    // Same rule as the four above: a built-in source does not decide the Live tab. This one points at the
+    // same person as bili-opus-yousa, so leaving it in would have kept that account in the default list.
+    liveCheck: false,
     proxy: 'direct',
     login: 'required',
     defaultEnabled: false,

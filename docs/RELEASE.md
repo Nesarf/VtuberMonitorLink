@@ -377,8 +377,8 @@ Real problems from this round (details in `docs/BUGS.md` 68-70):
    self-check. **If it connects, it is left alone**; only a clear anomaly produces a human-readable diagnostic
    file (conclusion / measured data / raw error / suggested items to investigate), and clicking it under
    `诊断文件` (diagnostic files) in the web UI opens a readable page.
-9. **Layout DIY** (`web/src/layout.js`): card wall (`小鸡词典` (Xiaoji Cidian, a slang-dictionary site)-style
-   listing) / list / compact / timeline / table; column count, density, font scaling, theme colour and which
+9. **Layout DIY** (`web/src/layout.js`): card wall (a multi-column wall of entry tiles) / list / compact /
+   timeline / table; column count, density, font scaling, theme colour and which
    fields to show are all adjustable, effective immediately.
 10. **Intel starring and read state**, **this run vs last run comparison** (added / changed / disappeared),
     **line-by-line report comparison**.

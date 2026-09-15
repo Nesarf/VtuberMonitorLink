@@ -223,6 +223,46 @@ for (const f of ['README.md', 'LICENSE', 'docs/DESIGN.md', 'docs/PRIVACY.md', 'd
 }
 process.stdout.write(`   [ok]   all key files present\n`);
 
+// ───────────────────────────────────────────── 5b. the source catalogue
+//
+// Two real defects lived in this catalogue and neither had a check, so both had to be found by hand:
+// the one built-in source without a url could not be probed at all (the probe skips a source with no
+// address, so asking for that one alone answered "nothing to probe" and the UI called it untestable),
+// and every built-in bilibili source fed the Live tab, so the app shipped showing example rooms nobody
+// chose. Both invariants cost three lines to state, which is the whole argument for stating them.
+try {
+  const { pathToFileURL } = await import('node:url');
+  const sourcesUrl = pathToFileURL(path.join(ROOT, 'server/src/sources.js')).href;
+  const liveUrl = pathToFileURL(path.join(ROOT, 'server/src/live.js')).href;
+  const { BUILTIN_SOURCES } = await import(sourcesUrl);
+  const { liveUids } = await import(liveUrl);
+
+  const noUrl = (BUILTIN_SOURCES ?? []).filter((s) => !s.url);
+  const unparsable = (BUILTIN_SOURCES ?? []).filter((s) => {
+    try {
+      void new URL(s.url);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (noUrl.length) problems.push(`built-in source(s) with no url, so the probe cannot measure them: ${noUrl.map((s) => s.id).join(', ')}`);
+  if (unparsable.length) problems.push(`built-in source(s) whose url does not parse: ${unparsable.map((s) => s.id).join(', ')}`);
+  if (!noUrl.length && !unparsable.length) process.stdout.write(`   [ok]   ${BUILTIN_SOURCES.length} built-in sources, every one with a usable address\n`);
+
+  const biliInLive = (BUILTIN_SOURCES ?? []).filter((s) => s.category === 'bili' && s.liveCheck !== false);
+  if (biliInLive.length) problems.push(`built-in bilibili source(s) would decide the Live tab: ${biliInLive.map((s) => s.id).join(', ')} (each needs liveCheck: false)`);
+
+  // And the mechanism itself: the flag must actually be honoured, and live.uids must still be read.
+  const fromDefaults = liveUids({ live: { uids: [] } }, BUILTIN_SOURCES);
+  if (fromDefaults.length) problems.push(`the Live tab would start with rooms from built-in sources: ${fromDefaults.map((u) => u.uid).join(', ')}`);
+  const explicit = liveUids({ live: { uids: ['12345'] } }, BUILTIN_SOURCES);
+  if (!explicit.some((u) => u.uid === '12345')) problems.push('a uid in live.uids is no longer honoured');
+  if (!fromDefaults.length && explicit.some((u) => u.uid === '12345')) process.stdout.write('   [ok]   the Live tab starts empty, and a uid the user chose still counts\n');
+} catch (e) {
+  problems.push(`could not read the source catalogue: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

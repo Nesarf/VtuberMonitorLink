@@ -158,9 +158,37 @@ export const DEFAULT_CONFIG = {
   share: {
     // Default format when downloading a share bundle
     defaultFormat: 'html',
-    // Post targets already verified with a real account and cleared for public use (written in automatically after the first successful publish)
-    // Why this list exists: posting outward is irreversible, and an unverified code path should not be treated as usable
-    verifiedTargets: [],
+    // Post targets already verified for a specific account, as { targetId: { accountId: { at, ok, ... } } }.
+    // Written by /api/share/verify, which measures the credential against the site on demand.
+    // Why the account is part of the key: the credential decides whether a post lands, so "this target
+    // worked once" is not the same statement as "this account can post" (an older config may still hold
+    // the plain list of target ids; that shape is still read, see verificationStore in share.js).
+    verifiedTargets: {},
+    // Which account each posting target uses, as { targetId: accountId }. A machine often holds more than one
+    // login for the same site, and posting under whichever profile was scanned first is not a choice anybody
+    // made; the share page writes this when the chooser is used and falls back to the automatic pick otherwise.
+    accounts: {},
+    // Image attachment. This is a setting rather than "whatever the items happened to carry": a bundle with
+    // remote images can go blank in front of the recipient (hotlink protection), and a post that suddenly
+    // carries pictures is a different act from one that carries text.
+    //   mode none   -- attach nothing (default)
+    //        source -- keep the original image URLs in the data only
+    //        inline -- embed data: URIs (the only shape a single-file HTML may reference without going external)
+    images: {
+      mode: 'none',
+      // How many images one bundle may carry in total
+      maxPerBundle: 4,
+      // How many images one public post may carry
+      maxPerPost: 1,
+      // Cap on a single inlined image; anything larger is left out and counted in the bundle
+      inlineMaxBytes: 204800,
+    },
+    // Sites the user adds by hand, in the same shape as SHARE_SITES in server/src/share.js:
+    //   { id, name: { zh, en }, loginKind, credential: { zh, en }, requirements: [...], implemented }
+    // Declaring a site does not make it able to post: it lists what the site needs, and the app measures
+    // that against the real accounts (see /api/share/verify). With no `implemented`, sending reports
+    // "not implemented" instead of pretending.
+    sites: [],
   },
   // image understanding tagging
   // Note: **off by default**. Turning it on means sending the images attached to intel to the model service you configured.

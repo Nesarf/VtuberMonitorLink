@@ -101,8 +101,22 @@ export const api = {
 
   // one-click sharing
   shareTargets: () => j('/api/share/targets'),
-  shareText: ({ scope, note } = {}) => post('/api/share/bundle', { scope, format: 'text', note }),
+  shareText: ({ scope, note, images } = {}) => post('/api/share/bundle', { scope, format: 'text', note, images }),
+  // The body and the account list for one target: the body is cut to that site's own limit, and the accounts
+  // come with what each of them already satisfies (see accountsForTarget in server/src/share.js).
+  sharePrepare: (body) => post('/api/share/prepare', body),
+  // The hand-off for a site this build cannot post to. With `handoff: true` the server records it as a manual
+  // step; nothing is ever sent by this path.
+  shareHandoff: (body) => post('/api/share/handoff', body),
+  shareSettings: (body) => j('/api/share/settings', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  }),
   sharePost: (body) => post('/api/share/post', body),
+  // the verification step of one site, measured against the site on demand (the server measures and stores it)
+  shareVerify: ({ target, account } = {}) =>
+    j(`/api/share/verify?target=${encodeURIComponent(target ?? '')}${account ? `&account=${encodeURIComponent(account)}` : ''}`),
   shareAudit: () => j('/api/share/audit'),
 
   // image understanding tagging

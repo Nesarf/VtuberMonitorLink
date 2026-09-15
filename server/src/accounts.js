@@ -110,6 +110,11 @@ export async function listAccounts(cfg) {
       // (e.g. `QzpcVXNlcnNc` decodes to a Windows home path prefix). The id is returned to the
       // client, so it must not carry the path (BUGS #69).
       id: crypto.createHash('sha256').update(dir).digest('base64url').slice(0, 16),
+      // The login kind is part of the account record because more than one site reads credentials now:
+      // the share layer asks "which account satisfies this site's declared requirements", and matching
+      // accounts to sites by kind is what keeps a bilibili cookie from being offered to Weibo. This file
+      // currently discovers bilibili logins only; other kinds have to be added here to become visible.
+      kind: 'bilibili',
       profile: dir,
       browser,
       hasSession,

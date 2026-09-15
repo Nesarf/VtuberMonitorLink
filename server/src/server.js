@@ -69,18 +69,33 @@ import { budgetStatus, costSummary, loadUsage, summarizeUsage } from './cost.js'
 import { loadObservationState } from './observe.js';
 import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } from './vdb.js';
 import {
+  accountsForTarget,
+  applyShareSettings,
   appendAudit,
   buildBundle,
+  buildHandoff,
   bundleFilename,
   contentDisposition,
   getAccounts,
   guardPost,
+  IMAGE_COUNT_LABEL,
+  IMAGE_MODES,
+  LOGIN_KINDS,
+  measureVerification,
+  pickAccountId,
   postBilibiliDynamic,
   readAudit as readShareAudit,
   readinessReport,
+  recordVerification,
   renderBundle,
+  renderSiteText,
+  shareImageSetting,
+  siteProfileById,
+  stagesReport,
   targetById,
   toPlainText,
+  truncateForSite,
+  verificationStore,
 } from './share.js';
 import { checkLive, liveUids, searchRoster } from './live.js';
 import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
@@ -1252,19 +1267,68 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── one-click sharing ────────────────────────────────────────────
-  // The target registry lives in share.js: every target states honestly whether login is needed and whether it is usable right now;
-  // self-tested by tools/share-test.mjs (single-file HTML with zero external references / login requirements / the post gates / the audit).
+  // The target registry and the per-site profiles live in share.js: every target states honestly what it
+  // needs (account / verification / send) and which of those is missing; self-tested by tools/share-test.mjs
+  // (single-file HTML with zero external references / the three stages / the per-site detection / the post
+  // gates / the audit).
+  //
+  // `stages` is the shape the share page renders: three independent steps per site instead of one status,
+  // because "which account", "is what the site needs satisfied" and "can it actually send" are answered by
+  // three different things and collapsing them hides exactly the missing one.
   app.get('/api/share/targets', async (_req, res) => {
     const cfg = getConfig();
     // use the cache: reading login state is blocking, and reading it fresh on every page open would freeze the service (the reason is in share.js)
     const { accounts, cached, error } = await getAccounts(cfg);
     res.json({
       ok: true,
-      targets: readinessReport(accounts, cfg.share?.verifiedTargets ?? []),
+      targets: stagesReport(accounts, verificationStore(cfg), cfg),
+      // the flattened readiness view is kept because callers other than the share page read it
+      readiness: readinessReport(accounts, verificationStore(cfg), cfg),
       accounts: accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, canSend: a.canSend })),
+      images: shareImageSetting(cfg),
+      // The wording of the attachment setting travels with the setting itself, so the page renders it
+      // instead of restating what each mode means (see IMAGE_MODES in share.js).
+      imageModes: IMAGE_MODES,
+      imageCountLabel: IMAGE_COUNT_LABEL,
+      // The login kinds the add-site form may offer, each with what this build can measure for it
+      loginKinds: LOGIN_KINDS,
       accountsCached: !!cached,
       accountsError: error ?? null,
     });
+  });
+
+  // The verification step, run on demand.
+  //
+  // Why on demand: the verification stage is an app-level state, and this is the measurement that moves it.
+  // It costs a request to the site, so it does not run on page open; and it deliberately **posts nothing** --
+  // for bilibili it reads the credential and asks the site which account it is, which is as close as one can
+  // get to "this credential can post" without putting text in public.
+  //
+  // The result is stored per (target, account): a pass measured with one account says nothing about another
+  // account, and the old list-of-target-ids shape could not express that.
+  //
+  // The in-flight guard is the same discipline the other long operations use: this one sends a real request to
+  // the site, and a second click (or a second tab) is not a retry, it is the same work done twice.
+  app.get('/api/share/verify', busyGuard('share verify'), async (req, res) => {
+    const cfg = getConfig();
+    const target = String(req.query.target ?? '');
+    if (!targetById(target, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${target}` });
+    // the credential is read fresh here: verifying against a cached login state is verifying nothing
+    const { accounts } = await getAccounts(cfg, { force: true });
+    const r = await measureVerification(cfg, target, { accounts, accountId: String(req.query.account ?? '') || null });
+    if (r.accountId) {
+      const store = recordVerification(verificationStore(cfg), target, r.accountId, {
+        at: r.at ?? new Date().toISOString(),
+        ok: !!r.ok,
+        method: r.probe,
+        detail: r.detail ?? null,
+        reason: r.reason ?? null,
+        measured: r.measured ?? null,
+      });
+      patchConfig(cfg, { share: { ...(cfg.share ?? {}), verifiedTargets: store } });
+    }
+    appendAudit(cfg, { action: 'verify', target, ok: !!r.ok, account: r.accountName ?? r.accountId ?? null, method: r.probe ?? null, error: r.reason ?? null });
+    res.json({ ok: !!r.ok, ...r });
   });
 
   /** collect items by scope: latest / day / person */
@@ -1306,18 +1370,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   }
 
   // build the share bundle (returns a file download; format=text returns plain text to copy)
+  // The image attachment is part of the request now (it used to be "whatever the items happened to carry,
+  // up to four"): the setting decides the mode and the count, and the bundle reports what was attached and
+  // what was left out instead of dropping images quietly.
   app.post('/api/share/bundle', (req, res) => {
     const cfg = getConfig();
     const format = String(req.body?.format ?? cfg.share?.defaultFormat ?? 'html');
     const scope = collectScope(cfg, req.body?.scope ?? {});
+    const images = req.body?.images ? { ...shareImageSetting(cfg), ...req.body.images } : shareImageSetting(cfg);
     const bundle = buildBundle({
       ...scope,
       scopeKind: req.body?.scope?.kind ?? 'latest',
       note: String(req.body?.note ?? '').slice(0, 300),
+      images,
     });
     const out = renderBundle(bundle, format);
-    appendAudit(cfg, { action: 'bundle', scope: bundle.scope, format, items: bundle.items.length });
-    if (format === 'text') return res.json({ ok: true, text: out.body, items: bundle.items.length, title: bundle.title });
+    appendAudit(cfg, {
+      action: 'bundle',
+      scope: bundle.scope,
+      format,
+      items: bundle.items.length,
+      images: bundle.images?.attached ?? 0,
+      imageMode: bundle.images?.mode ?? 'none',
+    });
+    if (format === 'text') {
+      return res.json({ ok: true, text: out.body, items: bundle.items.length, title: bundle.title, images: bundle.images });
+    }
     // the filename may contain Chinese → it must go through RFC 5987 encoding, otherwise the HTTP header throws ERR_INVALID_CHAR
     res.setHeader('content-disposition', contentDisposition(bundleFilename(bundle, out.ext)));
     res.type(out.mime).send(out.body);
@@ -1325,23 +1403,152 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   app.get('/api/share/audit', (_req, res) => res.json({ ok: true, entries: readShareAudit(getConfig(), 50) }));
 
-  // speaking in public: confirmation + capability + a trail, all three gates are required (see share.js guardPost)
+  // The body a site would carry, plus the accounts that could carry it.
+  //
+  // Why a route of its own: the per-site body is not the page's plain-text version -- it is cut to the site's
+  // own limit, and the chooser needs to see which accounts satisfy that site's declared requirements before one
+  // of them is picked. Both answers come from the same profile, so they are served together.
+  app.post('/api/share/prepare', busyGuard('share prepare'), async (req, res) => {
+    const cfg = getConfig();
+    const targetId = String(req.body?.target ?? '');
+    if (!targetById(targetId, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${targetId}` });
+    const { accounts } = await getAccounts(cfg, { force: true });
+    const scope = collectScope(cfg, req.body?.scope ?? {});
+    const bundle = buildBundle({
+      ...scope,
+      scopeKind: req.body?.scope?.kind ?? 'latest',
+      images: shareImageSetting(cfg),
+    });
+    const profile = siteProfileById(targetId, cfg);
+    const text = renderSiteText(bundle);
+    const whole = truncateForSite(text, profile?.textLimit);
+    const perSite = truncateForSite(text, profile?.maxPerPost ? profile.maxPerPost : whole.limit);
+    // Two truncations, because they answer two different questions: what one post may carry (the site's own
+    // ceiling) and how much of it this build would actually send (the setting). Reporting both keeps the
+    // "prepared" body from quietly being the wrong one of the pair.
+    res.json({
+      ok: true,
+      target: targetId,
+      text: perSite.text,
+      textLength: perSite.text.length,
+      truncated: perSite.truncated,
+      droppedLines: perSite.droppedLines,
+      textLimit: profile?.textLimit ?? null,
+      wholeLength: text.length,
+      wholeTruncated: whole.truncated,
+      images: { mode: shareImageSetting(cfg).mode, limit: profile?.maxImages ?? 0, attached: bundle.images?.attached ?? 0 },
+      accounts: accountsForTarget(targetId, accounts, cfg),
+      accountId: pickAccountId(targetId, accounts, cfg),
+      site: profile
+        ? {
+            credential: profile.credential,
+            requirements: profile.requirements,
+            textLimit: profile.textLimit,
+            maxImages: profile.maxImages,
+            probe: profile.verify,
+            implemented: profile.implemented,
+          }
+        : null,
+    });
+  });
+
+  // The hand-off for a site this app cannot post to.
+  //
+  // Everything here is prepared and nothing is sent: the body comes back cut to the site's limit, the compose
+  // link is returned only when the whole body fits (a truncated compose box is how half a post gets published),
+  // and the copy/download path is what covers the rest. The audit records a **manual** step, never a post --
+  // this program did not post there, and no line of it may read as if it did.
+  app.post('/api/share/handoff', busyGuard('share handoff'), async (req, res) => {
+    const cfg = getConfig();
+    const targetId = String(req.body?.target ?? '');
+    if (!targetById(targetId, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${targetId}` });
+    const { accounts } = await getAccounts(cfg, { force: true });
+    const scope = collectScope(cfg, req.body?.scope ?? {});
+    const bundle = buildBundle({
+      ...scope,
+      scopeKind: req.body?.scope?.kind ?? 'latest',
+      images: shareImageSetting(cfg),
+    });
+    const h = buildHandoff({
+      targetId,
+      bundle,
+      cfg,
+      accountId: req.body?.accountId ?? pickAccountId(targetId, accounts, cfg),
+    });
+    if (!h.ok) return res.status(400).json(h);
+    // record the hand-off only when the page says a person is taking it from here (pressing the compose or copy
+    // button); a preview must not fill the log with clicks that never happened
+    if (req.body?.handoff === true) {
+      let host = null;
+      try {
+        host = h.composeUrl ? new URL(h.composeUrl).host : null;
+      } catch {
+        host = null;
+      }
+      appendAudit(cfg, {
+        action: 'manual',
+        target: targetId,
+        host,
+        chars: h.textLength,
+        textLimit: h.textLimit,
+        truncated: h.truncated,
+        images: h.images?.mode ?? 'none',
+        ok: true,
+      });
+    }
+    res.json({ ...h, accounts: accountsForTarget(targetId, accounts, cfg) });
+  });
+
+  // Changing what the share page can change.
+  //
+  // Three things live here and all three are settings a person owns: the image attachment, which account a
+  // target uses, and the sites they added by hand. The route writes the config (so the choice survives a
+  // reload) and answers with the settings as they now stand, rather than with "ok" -- a partial write that
+  // silently kept the old value is exactly the failure a settings form cannot show.
+  app.patch('/api/share/settings', (req, res) => {
+    const cfg = getConfig();
+    const patch = {
+      images: req.body?.images,
+      accounts: req.body?.accounts,
+      sites: req.body?.sites,
+      removeSites: req.body?.removeSites,
+    };
+    const next = applyShareSettings(cfg, patch);
+    const saved = patchConfig(cfg, { share: next.share });
+    res.json({
+      ok: true,
+      images: shareImageSetting(saved),
+      accounts: saved.share?.accounts ?? {},
+      sites: saved.share?.sites ?? [],
+      sitesError: next.sitesError ?? null,
+    });
+  });
+
+  // speaking in public: confirmation + all three stages + a trail are required (see share.js guardPost)
   app.post('/api/share/post', async (req, res) => {
     const cfg = getConfig();
     const target = String(req.body?.target ?? '');
     // before speaking in public, **force a fresh read** of the login state: posting on a stale verdict is opening a new lock with an old key
     const { accounts } = await getAccounts(cfg, { force: true });
-    const verified = cfg.share?.verifiedTargets ?? [];
-    // verify:true means "this attempt exists precisely to verify this target" — on success it is recorded in the verified list
-    const isVerifyAttempt = req.body?.verify === true && targetById(target)?.status === 'needs-verification';
-    const allowed = isVerifyAttempt ? [...verified, target] : verified;
+    const store = verificationStore(cfg);
+    const accountId = String(req.body?.accountId ?? '') || null;
 
+    // Autofill: with no text given, the post body comes from the bundle of the chosen scope. Plain text only
+    // (the bilibili create endpoint takes no images), and images are only attached when the setting asks for
+    // them **and** the site profile allows at least one -- a planned site must not silently gain images.
     let body = String(req.body?.text ?? '').trim();
+    let images = 0;
     if (!body && req.body?.scope) {
       const scope = collectScope(cfg, req.body.scope);
-      body = toPlainText(buildBundle({ ...scope, scopeKind: req.body.scope.kind ?? 'latest' }));
+      const bundle = buildBundle({
+        ...scope,
+        scopeKind: req.body.scope.kind ?? 'latest',
+        images: shareImageSetting(cfg),
+      });
+      body = toPlainText(bundle);
+      images = bundle.images?.attached ?? 0;
     }
-    const g = guardPost(cfg, { target, accounts, verified: allowed, text: body, confirm: req.body?.confirm === true });
+    const g = guardPost(cfg, { target, accounts, verified: store, text: body, confirm: req.body?.confirm === true, accountId });
     if (!g.ok) {
       appendAudit(cfg, { action: 'post-refused', target, error: g.error, status: g.status ?? null });
       return res.status(400).json({ ok: false, error: g.error, status: g.status ?? null });
@@ -1349,7 +1556,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
     let result = { ok: false, error: '尚未实现该目标' };
     if (target === 'bilibili-dynamic') {
-      result = await postBilibiliDynamic(cfg, { accountId: req.body?.accountId, text: g.body, log });
+      result = await postBilibiliDynamic(cfg, { accountId: accountId ?? g.accountId, text: g.body, log });
     }
     appendAudit(cfg, {
       action: 'post',
@@ -1357,13 +1564,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       ok: !!result.ok,
       error: result.error ?? null,
       chars: g.body.length,
+      images,
       account: result.account ?? null,
-      verifyAttempt: isVerifyAttempt,
     });
-    if (result.ok && isVerifyAttempt) {
-      patchConfig(cfg, { share: { ...(cfg.share ?? {}), verifiedTargets: [...new Set([...verified, target])] } });
-    }
-    res.json({ ok: !!result.ok, error: result.error ?? null, account: result.account ?? null, verified: result.ok && isVerifyAttempt ? true : undefined });
+    res.json({ ok: !!result.ok, error: result.error ?? null, account: result.account ?? null, images });
   });
 
   // ── incremental archive & charts ─────────────────────────────────

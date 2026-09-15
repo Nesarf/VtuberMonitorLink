@@ -5,6 +5,11 @@
 // (stored in config.customSources).
 //
 // fetch values: rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
+//
+// `region` (optional, an ISO country code) is what a source wants to *appear from*. It is only used by
+// automatic egress selection, and only as a weight: an exit measured in another country pays a penalty
+// rather than being ruled out, so a region-bound source still works on a day when nothing in that region
+// answers. Sources that do not set it behave exactly as they did before the field existed.
 // login values: none | optional | required
 //   none -- public data
 //   optional -- logging in gives more (e.g. the Twitch following list)
@@ -57,6 +62,8 @@ export const BUILTIN_SOURCES = [
     category: 'wiki',
     fetch: 'browser',
     url: 'https://zh.moegirl.org.cn/',
+    // The site is Chinese; a fast exit somewhere else is still the wrong door.
+    region: 'CN',
     pages: ['hololive', '虚拟UP主'],
     login: 'none',
     defaultEnabled: true,
@@ -107,12 +114,13 @@ export const BUILTIN_SOURCES = [
   ...R([
     ['ann', 'Anime News Network', 'https://www.animenewsnetwork.com/'],
     ['kaiyou', 'KAI-YOU', 'https://kai-you.net/'],
-    ['4gamers', '4Gamers', 'https://www.4gamers.com.tw/'],
-    ['kaori', 'KAORI Nusantara', 'https://www.kaorinusantara.or.id/'],
+    ['4gamers', '4Gamers', 'https://www.4gamers.com.tw/', 'TW'],
+    ['kaori', 'KAORI Nusantara', 'https://www.kaorinusantara.or.id/', 'ID'],
     ['moguravr', 'MoguraVR', 'https://www.moguravr.com/'],
     ['dengeki', '電撃オンライン', 'https://dengekionline.com/'],
-  ]).map(([id, label, url]) => ({
+  ]).map(([id, label, url, region]) => ({
     id: `news-${id}`,
+    ...(region ? { region } : {}),
     name: { zh: label, en: label },
     category: 'news',
     fetch: 'browser',
@@ -245,7 +253,7 @@ export function findSource(id) {
 }
 
 /** Field whitelist for custom sources (cleaned on create/edit so arbitrary values cannot be stuffed into the config) */
-export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'uid', 'proxy', 'enabled'];
+export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'uid', 'proxy', 'enabled', 'region'];
 
 export function sanitizeCustomSource(input) {
   const out = {};

@@ -49,7 +49,46 @@ function tcpPing(host, port, timeoutMs) {
   });
 }
 
-/** Time to first byte of a single HTTP request (which egress is used is decided by netFetch) */
+/**
+ * Where does an egress come out?
+ *
+ * The judgement about an egress used to be speed and loss alone, which cannot tell "a fast route to the
+ * wrong country" from "a slightly slower route to the right one". Cloudflare's trace endpoint answers with
+ * the country of the *exit* (`loc=`) and its address, asked **through the egress itself** - so the answer is
+ * about the path, not about how a provider named a node in its own list.
+ *
+ * It is only ever used as a weight, never as a filter: a source that declares a region still goes through
+ * whatever the probe found, it just pays more for landing somewhere else. And a measurement that fails
+ * changes nothing (no region, no penalty).
+ */
+export const TRACE_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
+
+/** The two lines of that endpoint worth keeping. Pure, so a test can pin the format without a network. */
+export function parseTrace(text) {
+  const loc = /^loc=([A-Za-z]{2})\s*$/m.exec(text ?? '')?.[1] ?? null;
+  const ip = /^ip=(\S+)\s*$/m.exec(text ?? '')?.[1] ?? null;
+  return { loc: loc ? loc.toUpperCase() : null, ip };
+}
+
+/** Measure one egress's exit country. Never throws: a failure is an answer too. */
+export async function exitCountry(cfg, mode, { timeoutMs = 8000 } = {}) {
+  try {
+    const res = await netFetch(
+      TRACE_URL,
+      { headers: { accept: 'text/plain' }, signal: AbortSignal.timeout(timeoutMs) },
+      { cfg, mode }
+    );
+    if (!res.ok) return { loc: null, error: `HTTP ${res.status}` };
+    const { loc, ip } = parseTrace(await res.text());
+    if (!loc) return { loc: null, error: 'the trace answer carried no loc' };
+    return { loc, ip, at: new Date().toISOString() };
+  } catch (e) {
+    const cause = e?.cause?.code ?? '';
+    return { loc: null, error: cause ? `${e.message}(${cause})` : e.message };
+  }
+}
+
+
 async function httpTtfb(url, cfg, mode, timeoutMs) {
   const t0 = process.hrtime.bigint();
   try {
@@ -168,6 +207,17 @@ export async function probeUrl(url, opts = {}) {
         if (i < samples - 1) await sleep(150);
       }
       out.tor = { mode: 'tor', method: 'socks-ttfb', socks: cfg.proxy.torSocks, url, ...stats(s) };
+    }
+  }
+
+  // The exit's country, per egress, measured through that egress. Only for egresses that answered: a path
+  // that does not work has no exit to describe, and inventing one would be worse than saying nothing.
+  // This costs one extra small request per working egress, which is why it can be switched off.
+  if (opts.exitLocality !== false) {
+    for (const m of [out.direct, out.proxy, out.tor]) {
+      if (!m || m.skipped || !m.ok) continue;
+      const exit = await exitCountry(cfg, m.mode, { timeoutMs });
+      m.exit = exit?.loc ? exit : { loc: null, error: exit?.error ?? 'unknown' };
     }
   }
 

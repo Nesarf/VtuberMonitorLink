@@ -5,7 +5,8 @@
 // These checks pin the parts a person can reason about - the score's terms, the fallbacks, and the
 // hysteresis - without touching the network.
 import assert from 'node:assert/strict';
-import { scoreMode, decide, LOSS_COST, JITTER_COST, SWITCH_MARGIN } from '../server/src/egress.js';
+import { scoreMode, decide, localityFactor, LOSS_COST, JITTER_COST, SWITCH_MARGIN, LOCALITY_BONUS, LOCALITY_PENALTY } from '../server/src/egress.js';
+import { parseTrace } from '../server/src/probe.js';
 
 let pass = 0;
 let fail = 0;
@@ -124,6 +125,82 @@ t('the outcome history can outvote a fast path that keeps failing', () => {
     fallback: 'direct',
   });
   assert.equal(d.mode, 'proxy', `history should have moved the choice, reason was: ${d.reason}`);
+});
+
+process.stdout.write('\negress: where the traffic comes out\n');
+
+t('a source that declares no region, or an egress nobody measured, changes nothing', () => {
+  // The compatibility claim, and the reason every number this file produced before locality existed is
+  // still the same number: two absences both mean a factor of one.
+  assert.deepEqual(localityFactor(null, { loc: 'JP' }), { factor: 1, note: '' });
+  assert.deepEqual(localityFactor('CN', null), { factor: 1, note: '' });
+  assert.deepEqual(localityFactor('CN', { loc: null, error: 'timeout' }), { factor: 1, note: '' });
+  assert.deepEqual(localityFactor('', { loc: 'CN' }), { factor: 1, note: '' });
+});
+
+t('landing in the wanted country is a small bonus, landing elsewhere a real penalty', () => {
+  const same = localityFactor('jp', { loc: 'JP' });
+  const other = localityFactor('JP', { loc: 'US' });
+  assert.equal(same.factor, LOCALITY_BONUS);
+  assert.equal(other.factor, LOCALITY_PENALTY);
+  assert.ok(same.factor < 1 && other.factor > 1);
+  assert.ok(other.factor > 1 / same.factor, 'the penalty should outweigh the bonus');
+  assert.match(same.note, /JP/);
+  assert.match(other.note, /US/);
+  assert.match(other.note, /JP/, 'the note says what was wanted, not only what happened');
+});
+
+t('the region is a weight: at the same speed the right country wins', () => {
+  const probe = {
+    modes: {
+      direct: mode({ avg: 200, exit: { loc: 'US' } }),
+      proxy: mode({ avg: 200, exit: { loc: 'JP' } }),
+    },
+  };
+  const d = decide({ probe, region: 'JP', fallback: 'direct' });
+  assert.equal(d.mode, 'proxy', d.reason);
+  assert.match(d.reason, /JP/);
+});
+
+t('the region is not a veto: a much faster wrong country still wins', () => {
+  // 25% is a penalty, not a prohibition - which is what makes the setting usable on a day when nothing in
+  // the wanted region answers.
+  const probe = {
+    modes: {
+      direct: mode({ avg: 400, exit: { loc: 'US' } }),
+      proxy: mode({ avg: 100, exit: { loc: 'JP' } }),
+    },
+  };
+  assert.equal(decide({ probe, region: 'JP', fallback: 'direct' }).mode, 'proxy');
+  const flipped = {
+    modes: {
+      direct: mode({ avg: 100, exit: { loc: 'US' } }),
+      proxy: mode({ avg: 400, exit: { loc: 'JP' } }),
+    },
+  };
+  assert.equal(decide({ probe: flipped, region: 'JP', fallback: 'direct' }).mode, 'direct', 'a 4x faster wrong country must still win');
+});
+
+t('without a declared region the same two paths are decided by speed alone', () => {
+  const probe = {
+    modes: {
+      direct: mode({ avg: 200, exit: { loc: 'US' } }),
+      proxy: mode({ avg: 150, exit: { loc: 'JP' } }),
+    },
+  };
+  assert.equal(decide({ probe, fallback: 'direct' }).mode, 'proxy');
+  assert.equal(decide({ probe, region: null, fallback: 'direct' }).mode, 'proxy');
+});
+
+t('the trace endpoint is read by its own lines, and only those', () => {
+  const body = ['fl=abc', 'h=www.cloudflare.com', 'ip=203.0.113.7', 'ts=1.0', 'loc=jp', 'colo=NRT', ''].join('\n');
+  assert.deepEqual(parseTrace(body), { loc: 'JP', ip: '203.0.113.7' });
+  // A body without a country is not a country of "undefined", and anything resembling the key elsewhere
+  // in the text must not be picked up: the match is anchored to its own line.
+  assert.deepEqual(parseTrace('loc=SOMEWHERE\n'), { loc: null, ip: null });
+  assert.deepEqual(parseTrace('xloc=JP\n'), { loc: null, ip: null });
+  assert.deepEqual(parseTrace(''), { loc: null, ip: null });
+  assert.deepEqual(parseTrace(undefined), { loc: null, ip: null });
 });
 
 fsCheck();

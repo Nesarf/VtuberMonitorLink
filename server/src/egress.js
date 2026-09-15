@@ -32,6 +32,30 @@ export const LOSS_COST = 4;
 export const JITTER_COST = 0.5;
 /** a challenger must be 20% cheaper than the incumbent before it takes over, to avoid flapping */
 export const SWITCH_MARGIN = 0.2;
+/**
+ * Landing in the right country is worth something, and landing in the wrong one costs something.
+ *
+ * A site that only serves - or only behaves properly for - one region is a case the latency number cannot
+ * express: a proxy exit in another country can be faster and still be the wrong door. The factor is
+ * deliberately modest (3% of a bonus, 25% of a penalty) because this is a *weight* beside speed and
+ * stability, not a filter. A hard filter would make a region-pinned source unusable on a day when nothing
+ * in that region answers, and the user's own words were to judge by speed and stability *including* the
+ * IP's locality - which is a comparison, not a veto.
+ *
+ * Two absences change nothing, and that is what keeps every number this file produced before the locality
+ * measurement existed exactly as it was: a source that declares no region, or an egress whose country was
+ * not measured.
+ */
+export const LOCALITY_BONUS = 0.97;
+export const LOCALITY_PENALTY = 1.25;
+
+export function localityFactor(region, exit) {
+  const want = String(region ?? '').trim().toUpperCase();
+  const got = String(exit?.loc ?? '').trim().toUpperCase();
+  if (!want || !got) return { factor: 1, note: '' };
+  if (want === got) return { factor: LOCALITY_BONUS, note: `落地 ${got}，正是来源所在地区` };
+  return { factor: LOCALITY_PENALTY, note: `落地 ${got}，来源期望 ${want}` };
+}
 /** below this many samples no high-confidence verdict is given */
 const MIN_SAMPLES = 3;
 /** freshness window of a verdict (minutes): once expired, wait for the next probe instead of propping it up with stale data */
@@ -133,9 +157,10 @@ function historyPenalty(hist) {
  * @param {object} o.probe   probe results (what probe.js returns: {modes:{direct,proxy}, ...})
  * @param {object} o.history {mode: [{ok, at}]}
  * @param {string} o.current the egress currently in use (for hysteresis)
+ * @param {string} o.region  the country the subject wants to appear from, if it declared one
  * @returns {{mode:string, reason:string, scores:object, changed:boolean, confidence:string}}
  */
-export function decide({ probe, history = {}, current = null, fallback = 'direct' }) {
+export function decide({ probe, history = {}, current = null, fallback = 'direct', region = null }) {
   const modes = probe?.modes ?? {};
   const direct = scoreMode(modes.direct);
   const proxy = scoreMode(modes.proxy);
@@ -145,7 +170,15 @@ export function decide({ probe, history = {}, current = null, fallback = 'direct
   const consider = (name, sc) => {
     if (!sc.usable) return;
     const h = historyPenalty(history[name]);
-    candidates.push({ name, effective: sc.effective * h.factor, raw: sc, note: h.note, factor: h.factor });
+    const l = localityFactor(region, modes[name]?.exit);
+    candidates.push({
+      name,
+      effective: sc.effective * h.factor * l.factor,
+      raw: sc,
+      note: [h.note, l.note].filter(Boolean).join('；'),
+      factor: h.factor * l.factor,
+      locality: l,
+    });
   };
   consider('direct', direct);
   consider('proxy', proxy);
@@ -212,7 +245,7 @@ export function recordProbe(cfg, { subject, probe, fallback }) {
   const data = db(cfg);
   const prev = data.decisions[key];
   const current = prev?.mode ?? null;
-  const out = decide({ probe, history: data.history?.[key]?.byMode ?? {}, current, fallback: fallback ?? 'direct' });
+  const out = decide({ probe, history: data.history?.[key]?.byMode ?? {}, current, fallback: fallback ?? 'direct', region: subject?.region ?? null });
   data.decisions[key] = {
     key,
     label: subject?.name?.zh ?? subject?.name ?? subject?.id ?? key,

@@ -87,8 +87,8 @@ t('unrelated events are not merged in', () => {
 });
 
 t('same person + similar title -> relaxed threshold (posts about one person often differ a lot in wording)', () => {
-  const a = { id: 'p1', sourceId: 'bili-opus-jaran', title: '嘉然 新动态', publishedAt: at('2026-03-01T10:00:00Z'), people: ['jaran'] };
-  const b = { id: 'p2', sourceId: 'x-twitter', title: '嘉然 新动态 转推', publishedAt: at('2026-03-01T11:00:00Z'), people: ['jaran'] };
+  const a = { id: 'p1', sourceId: 'official-hololive', title: '嘉然 新动态', publishedAt: at('2026-03-01T10:00:00Z'), people: ['jaran'] };
+  const b = { id: 'p2', sourceId: 'news-ann', title: '嘉然 新动态 转推', publishedAt: at('2026-03-01T11:00:00Z'), people: ['jaran'] };
   const cs = cluster([a, b], { weight: () => 1 });
   assert.equal(cs[0].items.length, 2);
   assert.deepEqual(cs[0].people, ['jaran']);

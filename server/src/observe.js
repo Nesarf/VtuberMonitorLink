@@ -14,14 +14,12 @@
 //   2. **Jitter**: the interval and the start instant are random, so the timing does not carry the
 //      machine-like signature of a fixed rhythm;
 //   3. **Egress by log ownership**: an agency self-hosted site (official-*) is **the only class where the logs are on their side**,
-//      so it goes over Tor; for platform sources (bilibili / Reddit / Fandom) the agency cannot see your IP,
-//      so it goes direct or through a self-built proxy
-// -- and bilibili measured 8x slower over Tor, with some endpoints rate-limiting straight to -799;
+//      so it goes over Tor; for platform sources (Reddit / Fandom) the agency cannot see your IP,
+//      so it goes direct or through a self-built proxy;
 //   4. **No identity sent**: sources that need a login session do not run in this mode (binding a real
 //      identity to observation behaviour is the strongest correlation signal, far worse than an IP).
 //
-// Measurement basis (2026-09-12, see docs/LIVE.md):
-//   - bilibili dynamics: direct 321ms / tor 2521ms, 20 items each (measured with this project's signed fetcher);
+// Measurement basis (2026-09-12):
 //   - swapping egress: a different SOCKS user name -> a different exit IP (Tor's IsolateSOCKSAuth);
 //   - agency self-hosted sites over Tor: hololivepro 200 / vspo 200 / cover-corp 200,
 //     anycolor **403 (Cloudflare blocks Tor)**, brave-group timeout.
@@ -31,7 +29,7 @@ import { resolveDir } from './config.js';
 
 /**
  * Domains where "the logs are on their side" — that is, entry points **the agency hosts itself**.
- * Only for this class does Tor really make sense: when you scrape a platform (bilibili/Reddit/Fandom)
+ * Only for this class does Tor really make sense: when you scrape a platform (Reddit/Fandom)
  * the agency cannot obtain that log; when you scrape its own site the log is sitting on its server.
  * This list is a whitelist: anything not listed is treated as a platform, which errs on the side of
  * using Tor too little rather than using it where it does not belong.

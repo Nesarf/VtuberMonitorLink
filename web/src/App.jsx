@@ -7,7 +7,6 @@ import { api } from './api.js';
 import Intel from './pages/Intel.jsx';
 import Search from './pages/Search.jsx';
 import Llm from './pages/Llm.jsx';
-import Live from './pages/Live.jsx';
 import Run from './pages/Run.jsx';
 import Sources from './pages/Sources.jsx';
 import Watch from './pages/Watch.jsx';
@@ -18,7 +17,7 @@ import Calendar from './pages/Calendar.jsx';
 import People from './pages/People.jsx';
 import About from './About.jsx';
 
-const TABS = ['intel', 'search', 'live', 'people', 'calendar', 'run', 'sources', 'watch', 'browser', 'llm', 'settings', 'reports'];
+const TABS = ['intel', 'search', 'people', 'calendar', 'run', 'sources', 'watch', 'browser', 'llm', 'settings', 'reports'];
 
 export default function App() {
   const { t, tn, localeCode, setLang } = useI18n();
@@ -95,7 +94,6 @@ export default function App() {
   const labels = {
     intel: t('tab_intel'),
     search: t('tab_search'),
-    live: t('tab_live'),
     calendar: t('tab_calendar'),
     people: t('tab_people'),
     llm: t('tab_llm'),
@@ -156,7 +154,6 @@ export default function App() {
       <main>
         {tab === 'intel' && <Intel layout={layout} />}
         {tab === 'search' && <Search layout={layout} />}
-        {tab === 'live' && <Live />}
         {tab === 'llm' && <Llm />}
         {tab === 'run' && <Run />}
         {tab === 'sources' && <Sources />}

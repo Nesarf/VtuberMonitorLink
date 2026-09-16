@@ -16,6 +16,7 @@
            ├─ net.js       network layer: proxy (Node fetch does not read the system proxy by default)
            ├─ sources.js   source adapter catalogue (declarative)
            ├─ fetchers/    rss / mediawiki-api / browser / search-only
+           ├─ cookies.js   reading a browser's own cookie store, read-only (DPAPI + AES-GCM)
            ├─ digest.js    raw feed -> condensed digest (token control)
            ├─ analyze.js   LLM analysis (OpenAI-compatible)
            ├─ runner.js    orchestration: preflight -> fetch -> write feeds -> analyze -> write report
@@ -56,7 +57,7 @@ What `fetch` means:
 | --- | --- | --- |
 | `rss` | Atom/RSS subscription | on Reddit only `.rss` works; rate limiting is per IP, so **deliberately spacing requests out** beats hammering retries |
 | `mediawiki-api` | MediaWiki API | Fandom's `Special:RecentChanges` is blocked by Cloudflare, the API goes straight through |
-| `browser` | browser rendering | SPAs (Twitch/X) and Cloudflare-protected sites (Moegirlpedia) have to go through a browser |
+| `browser` | browser rendering | SPAs (Twitch) and Cloudflare-protected sites (Moegirlpedia) have to go through a browser |
 | `search-only` | handed to the analysis layer to search | YouTube, Fanbox, BOOTH etc. have no stable directly scrapable endpoint |
 
 ### 2.3 Login requirements
@@ -65,7 +66,7 @@ What `fetch` means:
 | --- | --- | --- |
 | `none` | green | Reddit, Fandom, the official NEWS sites |
 | `optional` | yellow | Twitch (shows `正在关注`, the "following" list, once logged in) |
-| `required` | **red** | X/Twitter (logged out you only get a login wall) |
+| `required` | **red** | no built-in source in this build: the tier stays for a source you declare yourself that is unreadable while logged out |
 
 **Login always happens in the user's own browser; the tool only borrows the profile and never bundles or uploads credentials.**
 
@@ -128,7 +129,7 @@ dist/VtuberMonitorLink/
 ```bash
 npm run verify        # proofread: required files / ASCII / UTF-8 / privacy and secret residue / runtime data
 npm run traverse      # traversal: every HTTP endpoint, SPA fallback, error paths
-npm run traverse:ui   # traversal: click through all six pages in a real browser + one real run with a mock LLM
+npm run traverse:ui   # traversal: click through all eleven pages in a real browser + one real run with a mock LLM
 npm run release       # all of the above
 ```
 
@@ -141,7 +142,7 @@ The list of private names is **not hard-coded in the code** (otherwise the check
 Measured: both directions come apart:
 
 - **without the proxy**: every site where direct connections are blocked (Reddit, Fandom ...) gives ECONNRESET / timeouts;
-- **through the proxy**: Bilibili instead returns a steady 412 / -352 risk-control block.
+- **through the proxy**: one site answered a bare 4xx (risk control) to every proxied request while the direct route worked, which is exactly why the setting cannot be all-or-nothing.
 
 So `net.js` offers three egress settings, and sources and watch targets can each override them:
 
@@ -186,17 +187,17 @@ Alert decisions are centralised in `applyRules()`:
 Keyword matching for URL-type targets uses the added lines plus the first 1500 characters of the new
 content; looking at added lines alone misses the case where a word is changed without adding a line.
 
-## 8. Bilibili dynamics
+## 8. Reading a browser's cookie store
 
-See the "Bilibili dynamics" section of the README. The code is in `server/src/fetchers/bilibili.js`, with three paths in priority order:
-
-1. **Logged-in state + JSON API** (preferred): extract cookies **read-only** from the configured profile
-   (`cookies.js`), then call `feed/space`. The data is the cleanest - body text, attached images, publish
-   time and like count are all there, and **the browser does not have to be closed**.
-2. **Browser rendering**: when the logged-in state is unavailable, render `space.bilibili.com/<uid>/dynamic`
-   with Playwright and scrape the DOM. It requires the target browser to be closed; when the profile is
-   locked, Playwright's error is translated into plain language before being thrown.
-3. **Login-free opus API**: used only by the `bili-opus` source; it returns body text and like count, with no attached images.
+`server/src/cookies.js` is the one place that opens a browser's own cookie store, and it is deliberately
+**generic**: the caller names a host, the store is copied and decrypted read-only, and what comes back is
+cookie **names** (and, in memory only, the header those names would form). No caller in this build sends that
+header - the login surfaces report names and counts, which is what "is this host signed in?" needs - and no
+value is ever written to a file, a log or a report. It holds no per-site knowledge either: which host is worth
+reading is the caller's decision, and the only thing in the module that looks site-shaped is the *shape* of a
+session-cookie name (`SESSION_COOKIE` / `hasSessionCookie`), a list of generic names rather than a per-site
+table. The per-site uses this started with went with the platform that needed them; the mechanism did not,
+because none of it was ever about that site.
 
 Measured points about `cookies.js`:
 
@@ -211,16 +212,14 @@ Measured points about `cookies.js`:
 - copy `-wal`/`-shm` along with the database, otherwise the SQLite view may be inconsistent;
 - the original profile is **never modified** throughout, so this runs even with the browser open.
 
-Parsing points for `feed/space` (all of them learned the hard way):
+Two consumers are worth naming, because both stayed for reasons that are not about any one site:
 
-- `features=itemOpusStyle` is required. Without it, `major` on the newer image-and-text posts is
-  `MAJOR_TYPE_DRAW` with an empty `items` and a null `desc` (the body text is lost entirely); with it,
-  the type becomes `MAJOR_TYPE_OPUS`, the body sits in `major.opus.summary.text`, and **the number and
-  URLs of the attached images are completely unchanged** (verified by comparison: body coverage
-  3->11 / 0->7, and for 5 posts with 14 images both modes agree).
-- the discriminating field is `major.type`, not `it.type`.
-- the body of a repost lives in the reposted `it.orig` and has to be assembled as `//@原作者: …`
-  (`//@` + the original author + `: …`).
+- the **Browser** page's *Check login* probe (`/api/cookies/check`), which reports how many cookies were
+  read for the named host and whether one of them looks like a session - three outcomes kept apart
+  (`session` / `cookies` / `none`), because they send a person in different directions;
+- the **share table's login stage** (`share.js`), which measures the site's own host with the same probe and
+  is independent of the send stage - it still answers "am I signed in there?" on a site this build cannot
+  post to at all, which is exactly where a person is about to paste by hand.
 
 ## 9. LLM tiers
 
@@ -239,9 +238,9 @@ Parsing points for `feed/space` (all of them learned the hard way):
 { id, kind, sourceId, sourceName, title, text, url, time, images[], stats{}, keywords[] }
 ```
 
-The web card stream, the report's source list, keyword highlighting and follower growth all consume this
-one structure, persisted at `<app>/feeds/<date>/_items.json`. That way the presentation layer no longer
-has to understand the differences between fetch methods.
+The web card stream, the report's source list and keyword highlighting all consume this one structure,
+persisted at `<app>/feeds/<date>/_items.json`. That way the presentation layer no longer has to understand
+the differences between fetch methods.
 
 ## 11. Localisation / i18n
 
@@ -331,8 +330,8 @@ A few rules taught by real incidents (details in `docs/BUGS.md` 41-52, 54, 64-66
 To judge the real state of an agency you have to look at several of its members at the same time; but
 sweeping a whole agency at one instant is itself a trace, and that is **independent of which IP you come
 from**. So the trade-off in this area is: **Tor only solves "who is looking"; sampling and jitter are what
-solve "what is being looked at, and when"**. The full threat model, the measured data (Bilibili is about
-8x slower through Tor, the agency's self-hosted site anycolor returns Cloudflare 403, the measured IPs of
+solve "what is being looked at, and when"**. The full threat model, the measured data (the agency's
+self-hosted site anycolor returns Cloudflare 403 to Tor, brave-group times out, the measured IPs of
 rotated exits) and the configuration notes are all in `docs/OBSERVE.md`; the pure logic is in
 `server/src/observe.js`, with the self-check in `tools/observe-test.mjs` (a fixed random source pins the behaviour).
 
@@ -387,12 +386,15 @@ Three design trade-offs:
    The full tarball is 0.54 MB / 10035 records / 215 circles, and one `codeload` request takes a second or
    two; calling the GitHub API record by record would take thousands of requests, burn through quota and
    produce noisy logs. The roster changes very slowly, so the TTL is 7 days.
-2. **Platform independence is a hard requirement**, not "supporting platforms beyond Bilibili as a bonus".
+2. **Platform independence is a hard requirement**, not "supporting the platforms we happen to read as a bonus".
    Whatever platform appears in `accounts` is accepted (`PLATFORM_URLS` has 27: bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico /
    showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon /
    line / github ...). Alias generation, search and import all follow the generic "platform -> id" shape,
-   and there is no `if (platform === 'bilibili')` branch anywhere in the code. A search matches the id or
-   the link form of **any platform**.
+   and no branch anywhere in the code special-cases a platform. A search matches the id or
+   the link form of **any platform**. These fields are **data about people**: the platform names are the
+   roster's own vocabulary, matched locally against text this app already collected, and none of them makes
+   this build talk to that site - which is why the roster and its account fields survived intact while every
+   platform-specific fetcher was removed.
 3. **The licence is part of the data**. The VDB data is **CC BY-NC-SA 4.0** and its code is GPL, while
    this project is MIT: so it is **fetched at runtime only**, cached in `app/vdb/`, and **never enters the
    repository or the release package** (`.gitignore` + the `make-zip` exclusion list + the

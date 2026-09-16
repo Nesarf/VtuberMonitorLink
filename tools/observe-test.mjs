@@ -42,7 +42,7 @@ t("an agency's own site vs a platform: decided by the domain", () => {
   assert.equal(logOwnerOf({ url: 'https://hololivepro.com/talents/' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://www.anycolor.co.jp/news' }), 'agency');
   assert.equal(logOwnerOf({ url: 'https://vspo.jp/' }), 'agency');
-  assert.equal(logOwnerOf({ url: 'https://api.bilibili.com/x/…' }), 'platform');
+  assert.equal(logOwnerOf({ url: 'https://www.reddit.com/r/x/.rss' }), 'platform');
   assert.equal(logOwnerOf({ url: 'https://www.reddit.com/r/VirtualYoutubers/.rss' }), 'platform');
   assert.equal(logOwnerOf({ url: 'not a url' }), 'platform', 'unrecognized counts as platform (better to use Tor less often)');
   assert.equal(urlHost('https://HoloLivePro.com/x'), 'hololivepro.com', 'domains must be lowercased and normalized');
@@ -51,18 +51,18 @@ t("an agency's own site vs a platform: decided by the domain", () => {
 t('observation mode: agency sites go through Tor, platforms keep their own egress setting', () => {
   const cfg = { observation: { enabled: true } };
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', id: 'official-cover' }, cfg).mode, 'tor');
-  assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', id: 'bili' }, cfg), null, 'a platform source must not have its egress forced');
+  assert.equal(resolveEgress({ url: 'https://www.reddit.com/r/x/.rss', id: 'platform' }, cfg), null, 'a platform source must not have its egress forced');
 });
 
 t('a source that pinned its own egress keeps it (the per-source override)', () => {
   const cfg = { observation: { enabled: true } };
-  assert.equal(resolveEgress({ url: 'https://api.bilibili.com/x/y', proxy: 'tor' }, cfg).mode, 'tor');
+  assert.equal(resolveEgress({ url: 'https://www.reddit.com/r/x/.rss', proxy: 'tor' }, cfg).mode, 'tor');
   assert.equal(resolveEgress({ url: 'https://cover-corp.com/', proxy: 'direct' }, cfg).mode, 'direct');
 });
 
 t('observation mode does NOT run sources that need a login, and gives the reason', () => {
   const cfg = { observation: { enabled: true } };
-  const r = resolveEgress({ url: 'https://api.bilibili.com/x/y', login: 'required' }, cfg);
+  const r = resolveEgress({ url: 'https://www.reddit.com/r/x/.rss', login: 'required' }, cfg);
   assert.equal(r.skip, true, JSON.stringify(r));
   // the reason string is diagnostic output (it reaches logs, not the UI), so it is English
   assert.match(r.reason, /login required/);
@@ -144,7 +144,7 @@ t('proportional jitter: floats above and below base, never goes negative', () =>
 process.stdout.write('\nobserve: one round plan\n');
 
 t('with observation mode off everything stays as before (no sampling, no egress change)', () => {
-  const sources = [{ id: 'a', url: 'https://api.bilibili.com/x' }, { id: 'b', url: 'https://cover-corp.com/' }];
+  const sources = [{ id: 'a', url: 'https://www.reddit.com/r/x' }, { id: 'b', url: 'https://cover-corp.com/' }];
   const plan = observationPlan({ cfg: { observation: { enabled: false } }, sources, watchTargets: [{ id: 'w1' }] });
   assert.equal(plan.enabled, false);
   assert.equal(plan.sources.length, 2);
@@ -157,8 +157,8 @@ t('with observation mode on: it samples a subset, agency sites move to Tor, and 
     observation: { enabled: true, sampleRatio: 0.5, minSources: 1, minWatch: 1, torForAgency: true },
   };
   const sources = [
-    { id: 'bili-opus-jaran', url: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=1' },
-    { id: 'bili-dynamic-login', url: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space', login: 'required' },
+    { id: 'reddit-VirtualYoutubers', url: 'https://www.reddit.com/r/VirtualYoutubers/.rss' },
+    { id: 'login-gated', url: 'https://www.reddit.com/r/x/.rss', login: 'required' },
     { id: 'official-hololive', url: 'https://hololivepro.com/talents/' },
     { id: 'official-cover', url: 'https://cover-corp.com/' },
     { id: 'reddit-VirtualYoutubers', url: 'https://www.reddit.com/r/VirtualYoutubers/.rss' },
@@ -169,8 +169,8 @@ t('with observation mode on: it samples a subset, agency sites move to Tor, and 
 
   assert.equal(plan.enabled, true);
   assert.equal(plan.sources.length, 3, 'half of the 6 (after the login-state one is dropped first, 5 remain and 3 are picked)');
-  assert.ok(plan.skippedLogin.some((x) => x.id === 'bili-dynamic-login'), 'the login-state source should be dropped');
-  assert.ok(!plan.sources.some((x) => x.id === 'bili-dynamic-login'));
+  assert.ok(plan.skippedLogin.some((x) => x.id === 'login-gated'), 'the login-state source should be dropped');
+  assert.ok(!plan.sources.some((x) => x.id === 'login-gated'));
   assert.ok(plan.egress['official-hololive'] === 'tor' || plan.sampling.tor.length >= 0);
   for (const s of plan.sources) {
     if (logOwnerOf(s) === 'agency') assert.equal(s.proxy, 'tor', s.id + ' is agency self-hosted, so it should use Tor');
@@ -191,12 +191,12 @@ t('when Tor is down: the sources that need Tor are skipped this round, and the r
   const cfg = { observation: { enabled: true, sampleRatio: 1, minSources: 1, torForAgency: true } };
   const sources = [
     { id: 'official-hololive', url: 'https://hololivepro.com/talents/' },
-    { id: 'bili-opus-jaran', url: 'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=1' },
+    { id: 'reddit-VirtualYoutubers', url: 'https://www.reddit.com/r/VirtualYoutubers/.rss' },
   ];
   const down = observationPlan({ cfg, sources, rng: seeded(2), torReachable: false });
   assert.deepEqual(down.sampling.skippedTor, ['official-hololive'], JSON.stringify(down.sampling));
   assert.ok(!down.sources.some((s) => s.id === 'official-hololive'), 'if Tor is down it must not be scheduled into this round');
-  assert.ok(down.sources.some((s) => s.id === 'bili-opus-jaran'), 'platform sources are unaffected');
+  assert.ok(down.sources.some((s) => s.id === 'reddit-VirtualYoutubers'), 'platform sources are unaffected');
   assert.match(down.skippedTor[0].reason, /not counted as a source failure/);
 
   // When Tor is reachable, go through Tor as usual

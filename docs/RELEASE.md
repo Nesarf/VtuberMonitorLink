@@ -1,5 +1,67 @@
 # Release notes
 
+## v1.0.3
+
+**This build no longer knows Twitter/X or bilibili.** They are gone from the product rather than disabled: no
+source, route, fetch kind, tab or site profile names them any more.
+
+The reason is not tidiness. The owner's accounts on those platforms were attacked - one lost, one frozen - and a
+tool that reads a browser's login state for a site is a tool that carries a credential wherever it goes. Removing
+the relationship does not undo a breach (rotating passwords and ending sessions does that); it means this build
+can no longer be the thing that touches those accounts.
+
+### Removed
+
+1. **Six of the twenty-nine built-in sources** - the four `bili-opus-*` feeds, `bili-dynamic-login` and
+   `x-twitter`. The catalogue offers 23; `fetch` kinds went 6 → 4 and categories 9 → 6.
+2. **The whole Live feature**: live-state checks through bilibili's batch API, the embedded player, and
+   **danmaku sending** with its WBI signing. Tab, page, route and documentation are gone (12 → 11 tabs).
+3. **Account discovery** (`accounts.js`), which only ever found bilibili logins by reading that site's cookies.
+4. **The two share targets that published there** (`bilibili-dynamic`, `x-post`), including X's manual hand-off
+   profile. Weibo, YouTube community, Mastodon and Reddit remain.
+5. **Routes**: `/api/live`, `/api/live/roster`, `/api/accounts`, `/api/danmaku`, `/api/danmaku/audit` and
+   `/api/share/verify`, plus the bilibili watch kind, the bilibili digest and the two bilibili fetch-ladder steps.
+6. **Seven files and fifty-five dictionary keys**, each key retired only where its call site went with it.
+7. **Seven live strings that still claimed a relationship** were rewritten rather than left to contradict the
+   build: the proxy, share, custom-source, observation-rotation, intel, vision and browser hints.
+
+### Kept, deliberately
+
+- **The manual hand-off** and the **three-stage share table** (account / verification / send) - built for exactly
+  this situation, and what remains when a platform cannot be posted to from here.
+- **`/api/share/post` with its confirm-and-audit gate.** No site here declares publish code, so every call is
+  refused with that reason; the refusal is the honest answer, and deleting the route would have deleted the
+  discipline along with the feature.
+- **The generic read-only cookie probe.** Reading a browser's own store for a host the caller names is a
+  mechanism; the bilibili-specific *uses* of it are gone, the mechanism is not.
+- **The VDB roster and the per-platform account fields** in People: data about people, not a relationship - a
+  person's bilibili uid is a field name for their account.
+- The egress, observation and monitoring work from earlier releases.
+
+### Verification evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Fast self-check | `npm run verify:fast` | exit 0, every component suite green |
+| Share / login / browser suites | `share-test`, `login-check-test`, `browser-config-test` | 103/103, 59, 36 |
+| Release traversal (packaged build) | `npm run traverse` | **86/86** |
+| UI traversal (real browser, 11 tabs) | `npm run traverse:ui` | **242/242** |
+| Flow traversal (webhook, config, tasks, assistant) | `node tools/traverse-flows.cjs` | **36/36** |
+| Pre-publish scans | `sanitize-check`, `sanitize:history` | clean; no new traces in any commit |
+| Locale ratchets | `locale-coverage`, `i18n-proofread` | coverage flat at its new denominator, structural 0 |
+
+The gates learned the shape of this change: the catalogue is asserted to name no retired platform, the removals
+themselves are pinned (seven files gone, three route prefixes absent, eleven tabs each rendering a page), and
+**no built-in source may declare `login: 'required'`** - so a build of this kind cannot quietly reintroduce one.
+
+### Not yet verified
+
+The same two as 1.0.1: posting from a real account and vision tagging with a real key need the owner's own
+credentials, so the self-checks use local fakes. And no site in this build can post anywhere - the four
+remaining targets declare no publish code, which is stated rather than implied.
+
+---
+
 ## v1.0.2
 
 **An egress that knows where it lands, a share flow that can be finished by hand, and checks that stopped lying

@@ -100,29 +100,21 @@ const noHostWeibo = { share: { sites: [{ id: 'weibo-no-host', loginKind: 'weibo'
 process.stdout.write('\nlogin check: the host a source would read\n');
 
 t('a source with a url takes the host of that url (www. is dropped: cookies live on the registrable domain)', () => {
-  assert.equal(sourceLoginHost({ id: 'a', url: 'https://space.bilibili.com/123/dynamic', category: 'bili' }), 'space.bilibili.com');
   assert.equal(sourceLoginHost({ id: 'b', url: 'https://www.pixiv.net/ranking.php' }), 'pixiv.net');
   assert.equal(sourceLoginHost({ id: 'c', url: 'http://example.com:8080/feed.xml' }), 'example.com:8080');
-});
-
-t('a bilibili source falls back to bilibili.com, and it says why: its urls live on subdomains the cookie is not stored against', () => {
-  // no url at all, but it is a bilibili source: the login lives on the parent domain
-  assert.equal(sourceLoginHost({ id: 'bili-opus-x', category: 'bili', fetch: 'bili-opus' }), 'bilibili.com');
-  assert.equal(sourceLoginHost({ id: 'bili-dynamic-login', fetch: 'bili-dynamic' }), 'bilibili.com');
+  // A subdomain is kept as it is: the host is a property of the source's own url, and nothing rewrites it to
+  // a parent domain any more (the one fallback that did so belonged to a source that was removed).
+  assert.equal(sourceLoginHost({ id: 'a', url: 'https://zh.moegirl.org.cn/' }), 'zh.moegirl.org.cn');
 });
 
 t('a source with no usable host answers null instead of guessing a domain', () => {
   assert.equal(sourceLoginHost({ id: 'x', category: 'community', fetch: 'rss' }), null);
   assert.equal(sourceLoginHost({ id: 'y', url: 'not a url', category: 'merch' }), null);
   assert.equal(sourceLoginHost({}), null);
+  // The control for the removal: a source that merely *looks* like the retired platform's gets no host by
+  // category or fetch kind either -- the only source of a host is the url.
+  assert.equal(sourceLoginHost({ id: 'ghost', category: 'social', fetch: 'browser' }), null);
 });
-
-vacuously(
-  'the bilibili fallback applies to bilibili sources only (wrong input: a non-bilibili source with no url)',
-  (host) => (host === 'bilibili.com' ? [] : [`expected the bilibili fallback, got ${JSON.stringify(host)}`]),
-  () => sourceLoginHost({ id: 'bili-opus-x', category: 'bili', fetch: 'bili-opus' }),
-  () => sourceLoginHost({ id: 'rss-x', category: 'community', fetch: 'rss' }),
-);
 
 vacuously(
   'the host of a source comes from its own url (wrong input: the source for another site)',
@@ -136,7 +128,7 @@ vacuously(
 process.stdout.write('\nlogin check: the cookie probe reports counts and names only\n');
 
 /** A readBrowserCookies-shaped answer whose values are unmistakable, so a leak cannot hide in a fixture */
-const SECRET = 'SESSDATA-VALUE-MUST-NEVER-APPEAR-9f3a';
+const SECRET = 'SESSIONID-VALUE-MUST-NEVER-APPEAR-9f3a';
 const cookieAnswer = (names) => ({
   ok: names.length > 0,
   names,
@@ -146,21 +138,21 @@ const cookieAnswer = (names) => ({
 });
 
 const cookieCheck = (names, { ok = undefined } = {}) =>
-  checkLoginState(cfg, 'x-post', { readCookies: async () => ({ ...cookieAnswer(names), ok: ok ?? names.length > 0 }) });
+  checkLoginState(cfg, 'reddit-post', { readCookies: async () => ({ ...cookieAnswer(names), ok: ok ?? names.length > 0 }) });
 
 await ta('a session cookie is reported as a logged-in state, with the count and the names', async () => {
-  const r = await cookieCheck(['SESSDATA', 'bili_jct', 'buvid3']);
+  const r = await cookieCheck(['sessionid', 'csrftoken', '_ga']);
   assert.equal(r.ok, true);
   assert.equal(r.status, 'session');
   assert.equal(r.cookieCount, 3);
-  assert.deepEqual(r.names, ['SESSDATA', 'bili_jct', 'buvid3']);
+  assert.deepEqual(r.names, ['sessionid', 'csrftoken', '_ga']);
   assert.equal(r.hasSession, true);
   assert.equal(r.probe, 'cookie-probe');
-  assert.equal(r.domain, 'x.com');
+  assert.equal(r.domain, 'reddit.com');
 });
 
 await ta('cookies without a session cookie are reported as "probably not signed in", not as success', async () => {
-  const r = await cookieCheck(['buvid3', 'buvid4', '_ga']);
+  const r = await cookieCheck(['_ga', '_gid', 'locale']);
   assert.equal(r.ok, false);
   assert.equal(r.status, 'cookies');
   assert.equal(r.cookieCount, 3);
@@ -176,21 +168,21 @@ await ta('no cookies for the host is "nothing found", with the reason the read g
 });
 
 await ta('a cookie store that cannot be read is reported with its own reason (not as "not logged in")', async () => {
-  const r = await checkLoginState(cfg, 'x-post', { readCookies: async () => ({ ok: false, error: 'no cookie store under C:/x' }) });
+  const r = await checkLoginState(cfg, 'reddit-post', { readCookies: async () => ({ ok: false, error: 'no cookie store under C:/x' }) });
   assert.equal(r.ok, false);
   assert.equal(r.status, 'none');
   assert.ok(r.reason.includes('no cookie store'), r.reason);
 });
 
 await ta('NO cookie value can appear in the answer -- not in a field, not in the JSON', async () => {
-  const r = await cookieCheck(['SESSDATA', 'bili_jct']);
+  const r = await cookieCheck(['sessionid', 'csrftoken']);
   const json = JSON.stringify(r);
   assert.ok(!json.includes(SECRET), 'the cookie value must not be anywhere in the answer');
   assert.ok(!('cookieHeader' in r), 'the cookie header must not be copied into the answer');
   assert.ok(!json.includes('C:/secret/profile/path'), 'the profile path is not part of a login-state answer either');
   // The names are what a person reads, so they must be there -- otherwise "no value" could be satisfied by
   // answering nothing at all.
-  assert.deepEqual(r.names, ['SESSDATA', 'bili_jct']);
+  assert.deepEqual(r.names, ['sessionid', 'csrftoken']);
 });
 
 vacuously(
@@ -198,12 +190,12 @@ vacuously(
   (r) => (JSON.stringify(r).includes(SECRET) ? ['the cookie value leaked into the answer'] : []),
   () => {
     // What the production path returns: fields copied out one by one, no header among them.
-    const names = ['SESSDATA'];
+    const names = ['sessionid'];
     return { ok: true, cookieCount: names.length, names };
   },
   () => {
     // The shortcut this guards against: handing the probe's own answer straight back.
-    const raw = cookieAnswer(['SESSDATA']);
+    const raw = cookieAnswer(['sessionid']);
     return { ok: raw.ok, cookieCount: raw.names.length, names: raw.names, cookieHeader: raw.cookieHeader };
   },
 );
@@ -219,38 +211,44 @@ vacuously(
 
 process.stdout.write('\nlogin check: every posting site, including the ones that cannot post\n');
 
-t('every posting target resolves to a probe: its own where one exists, the cookie probe otherwise', () => {
+t('every posting target resolves to a login check: its own where one is declared, the cookie probe otherwise', () => {
   const posts = shareTargets(cfg).filter((x) => x.kind === 'post');
-  assert.ok(posts.length >= 6, `expected the six posting sites, got ${posts.length}`);
+  // Four built-in posting sites remain. The two that were removed (a bilibili dynamic and an X post) went
+  // with the sites themselves, so the count is pinned rather than merely lower-bounded: a fifth site coming
+  // back through a helper nobody meant to keep is exactly what this number is here to notice.
+  assert.equal(posts.length, 4, `expected the four posting sites, got ${posts.length}: ${posts.map((x) => x.id).join(', ')}`);
   for (const x of posts) {
     const plan = resolveLoginProbe(x, cfg);
     assert.equal(plan.target, x.id);
-    assert.ok(['login-probe', 'token-scope', 'http-probe', 'cookie-probe'].includes(plan.probe), `${x.id} resolves to ${plan.probe}`);
+    assert.ok(['token-scope', 'http-probe', 'cookie-probe'].includes(plan.probe), `${x.id} resolves to ${plan.probe}`);
     assert.equal(plan.checkable, true, `${x.id} must be checkable`);
   }
-  // The site-specific probes keep their own method
-  assert.equal(resolveLoginProbe('bilibili-dynamic', cfg).probe, 'login-probe');
+  // A site that declares a probe of its own keeps it named (this build cannot run it, and says so).
   assert.equal(resolveLoginProbe('mastodon-post', cfg).probe, 'token-scope');
+  // Every one of them is a real hand-off target: none of them has publishing code, which is why the manual
+  // path is the one that matters here.
+  for (const x of posts) assert.equal(x.status, 'unimplemented', `${x.id} should declare no publish code`);
 });
 
-t('an unsupported target (X) still offers a real login check -- the login stage is independent of the send stage', () => {
-  const x = shareTargets(cfg).find((y) => y.id === 'x-post');
-  assert.equal(x.status, 'unsupported', 'the fixture is only meaningful while X is declared unsupported');
-  const plan = resolveLoginProbe(x, cfg);
-  assert.equal(plan.checkable, true, 'X must still be checkable: a hand-off to X is exactly when this matters');
-  assert.equal(plan.probe, 'cookie-probe');
-  assert.equal(plan.host, 'x.com');
-  // And the stage report agrees: the check is actionable even though sending is not.
-  const stage = stagesReport([], {}, cfg).find((y) => y.id === 'x-post');
-  assert.equal(stage.stages.verification.actionable, true, 'the verification stage must be actionable for X');
-  assert.equal(stage.stages.verification.fallbackProbe, 'cookie-probe');
-  assert.equal(stage.stages.send.actionable, false, 'sending to X stays impossible');
-  assert.equal(stage.site.host, 'x.com', 'the host travels with the profile so the page renders what was decided');
+t('a target whose publishing is impossible still offers a real login check -- the login stage is independent of the send stage', () => {
+  // The built-in unsupported target (an X post) was removed with the platform. The property it pinned has to
+  // hold for the sites that remain, so it is asserted on all of them at once: the login check is available
+  // and the send step is not.
+  const stages = stagesReport([], {}, cfg).filter((y) => y.kind === 'post');
+  for (const stage of stages) {
+    const plan = resolveLoginProbe(stage.id, cfg);
+    assert.equal(plan.checkable, true, `${stage.id} must still be checkable: a hand-off is exactly when this matters`);
+    assert.equal(stage.stages.verification.actionable, plan.host != null, `${stage.id}: verification actionable must follow the readable host`);
+    assert.equal(stage.stages.send.actionable, false, `${stage.id}: sending stays impossible without publish code`);
+  }
+  const reddit = stages.find((y) => y.id === 'reddit-post');
+  assert.equal(reddit.site.host, 'reddit.com', 'the host travels with the profile so the page renders what was decided');
+  assert.equal(reddit.stages.verification.fallbackProbe, 'cookie-probe');
 });
 
 t('a site of a login kind nothing discovers says so, and its check is still available where a host exists', () => {
   const stage = stagesReport([], {}, cfg).find((y) => y.id === 'weibo-post');
-  assert.equal(stage.site.accountDiscovery, false, 'accounts.js discovers bilibili logins only, and the page has to know');
+  assert.equal(stage.site.accountDiscovery, false, 'nothing in this build enumerates logins, and the page has to know');
   assert.equal(stage.stages.verification.actionable, true);
   assert.equal(stage.site.host, 'weibo.com');
 });
@@ -277,7 +275,7 @@ await ta('a target with no host is measured as "unavailable" without any request
   const r = await checkLoginState(hostlessCfg, 'my-site', {
     readCookies: async () => {
       called = true;
-      return { ok: true, names: ['SESSDATA'] };
+      return { ok: true, names: ['sessionid'] };
     },
   });
   assert.equal(r.ok, false);
@@ -289,8 +287,8 @@ await ta('a target with no host is measured as "unavailable" without any request
 vacuously(
   'the cookie probe is the fallback, chosen by the module rather than invented in the page (wrong input: a site that has a probe of its own)',
   (probe) => (probe === 'cookie-probe' ? [] : [`expected the cookie probe, got ${probe}`]),
-  () => resolveLoginProbe('x-post', cfg).probe,
-  () => resolveLoginProbe('bilibili-dynamic', cfg).probe,
+  () => resolveLoginProbe('reddit-post', cfg).probe,
+  () => resolveLoginProbe('mastodon-post', cfg).probe,
 );
 
 vacuously(
@@ -628,6 +626,28 @@ const longBundle = {
   items: Array.from({ length: 40 }, (_, i) => ({ id: 'x' + i, title: `一条很长的标题 ${i}`, url: `https://example.com/${i}` })),
 };
 
+/**
+ * A hand-added site with a **concrete** compose page and a 280-character limit.
+ *
+ * The hand-off rules are about the text, and the built-in sites cannot exercise all of them: Mastodon's
+ * compose template is `https://{instance}/publish`, whose host is the user's own, so no link can be built
+ * from it (a fact the checks below assert rather than paper over). A declared site has a real host and a
+ * real limit, which is what the compose-link rules need.
+ */
+const composeSiteCfg = {
+  share: {
+    sites: [
+      {
+        id: 'my-compose',
+        loginKind: 'mastodon',
+        textLimit: 280,
+        host: 'example.social',
+        manual: { compose: 'https://example.social/publish?text={text}' },
+      },
+    ],
+  },
+};
+
 t('the prepared body is cut to the site limit, and says it was cut', () => {
   const body = resolveSiteBody({ text: null, bundle: longBundle, profile: { textLimit: 280 } });
   assert.equal(body.source, 'prepared');
@@ -668,7 +688,11 @@ t('an emptied body is an edit too (it means "do not send the app’s report")', 
 });
 
 t('a body edited to fit produces a compose link; one edited to exceed the limit does not', () => {
-  const fits = buildHandoff({ targetId: 'x-post', bundle: longBundle, cfg: {}, text: 'a short edited body' });
+  // The site is declared here rather than taken from the built-ins: what this family pins is the rule, and
+  // the rule needs a compose page whose host is concrete. Of the built-in sites, Mastodon's compose template
+  // is `https://{instance}/publish` -- the instance is the user's own -- so the hand-off deliberately returns
+  // no link there, which the next check asserts instead of pretending otherwise.
+  const fits = buildHandoff({ targetId: 'my-compose', bundle: longBundle, cfg: composeSiteCfg, text: 'a short edited body' });
   assert.equal(fits.ok, true);
   assert.equal(fits.textSource, 'edited');
   assert.equal(fits.text, 'a short edited body');
@@ -676,7 +700,7 @@ t('a body edited to fit produces a compose link; one edited to exceed the limit 
   const u = new URL(fits.composeUrl);
   assert.equal(u.searchParams.get('text'), 'a short edited body', 'and it carries the edited body, not the prepared one');
 
-  const over = buildHandoff({ targetId: 'x-post', bundle: longBundle, cfg: {}, text: 'y'.repeat(400) });
+  const over = buildHandoff({ targetId: 'my-compose', bundle: longBundle, cfg: composeSiteCfg, text: 'y'.repeat(400) });
   assert.equal(over.textSource, 'edited');
   assert.equal(over.fits, false);
   assert.equal(over.composeUrl, null, 'no compose link for a body over the limit');
@@ -684,8 +708,19 @@ t('a body edited to fit produces a compose link; one edited to exceed the limit 
   assert.equal(over.text, 'y'.repeat(400), 'the hand-off still carries what the person wrote');
 });
 
+t('a compose page whose host is a placeholder gets no link, and says so rather than offering a broken one', () => {
+  // `{instance}` is unfilled, and the rule for an unfilled placeholder is "no link at all": a compose box at
+  // a domain nobody owns would be worse than the copy button, which is right there.
+  const h = buildHandoff({ targetId: 'mastodon-post', bundle: longBundle, cfg: {}, text: 'a short edited body' });
+  assert.equal(h.fits, true, 'the body does fit the site limit');
+  assert.equal(h.composeUrl, null, 'but no link can be built from a placeholder host');
+  assert.equal(h.sent, false);
+  assert.equal(h.posted, false);
+  assert.equal(h.text, 'a short edited body');
+});
+
 t('with no edit the hand-off carries the prepared body and says so', () => {
-  const h = buildHandoff({ targetId: 'x-post', bundle: longBundle, cfg: {} });
+  const h = buildHandoff({ targetId: 'mastodon-post', bundle: longBundle, cfg: {} });
   assert.equal(h.textSource, 'prepared');
   assert.ok(h.text.length <= h.textLimit, `${h.text.length} > ${h.textLimit}`);
   // The app's own text travels with the answer, so the page can offer "back to the prepared body" and can
@@ -694,7 +729,7 @@ t('with no edit the hand-off carries the prepared body and says so', () => {
   assert.ok(h.preparedText.length >= h.text.length);
   // `fullLength` is the whole report's length before any cutting (what the page says when the body does not
   // fit); `preparedText` is the prepared body itself, already cut to this site's limit. Keeping them apart is
-  // the point: "the site only takes 280 of your 1499 characters" is a different sentence from "here is the
+  // the point: "the site only takes 500 of your 1499 characters" is a different sentence from "here is the
   // text", and only the page that has both numbers can say the first one.
   assert.ok(h.fullLength > h.preparedText.length, `${h.fullLength} should be the whole report, ${h.preparedText.length} the cut body`);
   assert.equal(h.text, h.preparedText, 'with no edit, the body carried IS the prepared body');
@@ -711,9 +746,9 @@ t('the copy/hand-off path carries the edited text rather than the prepared one',
 
 vacuously(
   'the compose link follows the edited body (wrong input: a body edited past the limit)',
-  (h) => (h.composeUrl ? [] : ['no compose link was produced']),
-  () => buildHandoff({ targetId: 'x-post', bundle: longBundle, cfg: {}, text: 'short enough' }),
-  () => buildHandoff({ targetId: 'x-post', bundle: longBundle, cfg: {}, text: 'z'.repeat(300) }),
+  (h) => (h.composeUrl ? [] : [`no compose link was produced (${h.composeNote?.en ?? 'no note'})`]),
+  () => buildHandoff({ targetId: 'my-compose', bundle: longBundle, cfg: composeSiteCfg, text: 'short enough' }),
+  () => buildHandoff({ targetId: 'my-compose', bundle: longBundle, cfg: composeSiteCfg, text: 'z'.repeat(300) }),
 );
 
 vacuously(
@@ -733,8 +768,11 @@ t('every page that renders a login setting also renders the check affordance', (
     // the check that exercises it now live together in Browser.jsx, and Settings links there instead of
     // keeping a second copy. The intent of this check is unchanged - every place that configures a login must
     // offer a way to check it - so the name moved with the affordance rather than the check being relaxed.
+    //
+    // The Live page was the fifth entry and is gone (the tab, its route and the live feature were removed
+    // together), so its danmaku account check went with it. An entry naming a file that no longer exists
+    // would make this check fail with an ENOENT instead of saying anything about logins.
     'web/src/pages/Browser.jsx': 'LoginCheckButton',
-    'web/src/pages/Live.jsx': 'checkLogin',
     'web/src/pages/Share.jsx': 'LoginCheckButton',
     'web/src/pages/Sources.jsx': 'LoginCheckButton',
     'web/src/pages/Watch.jsx': 'checkLogin',
@@ -743,6 +781,9 @@ t('every page that renders a login setting also renders the check affordance', (
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
     assert.ok(src.includes(needle), `${file} does not render the login check (${needle})`);
   }
+  // The control for "an entry whose file is gone": the old list's fifth name is not a file any more, so a
+  // reader of the pages map really would have thrown here.
+  assert.equal(fs.existsSync(path.join(ROOT, 'web/src/pages/Live.jsx')), false, 'the removed page must not come back into this list');
 });
 
 t('the routes those affordances call exist on the server', () => {

@@ -60,7 +60,6 @@ export const runState = {
   alerts: 0,
   advice: [],
   features: null,
-  live: null,
   lastResult: null,
   lastError: null,
   tail: [],
@@ -122,7 +121,6 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     itemCount: 0,
     alerts: 0,
     features: null,
-    live: null,
     lastError: null,
     tail: [],
   });
@@ -212,34 +210,6 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       runState.watchDone = watchResults.length;
     }
 
-    // 3.5) Live monitoring — the most time-sensitive intel there is: a stream going live is worth knowing about at once, more than any keyword hit
-    if (cfg?.live?.enabled !== false && cfg?.live?.checkWithRun !== false) {
-      runState.step = 'live';
-      try {
-        const { checkLive } = await import('./live.js');
-        const lr = await checkLive(cfg, sources, log);
-        runState.live = {
-          live: lr.live?.length ?? 0,
-          round: lr.round?.length ?? 0,
-          wentLive: (lr.wentLive ?? []).map((x) => x.name || x.uname || x.uid),
-          error: lr.error ?? null,
-        };
-        if (lr.wentLive?.length && cfg?.live?.notifyOnLive !== false) {
-          await pushNotify(
-            `${lr.wentLive.length} 个开播了`,
-            lr.wentLive
-              .slice(0, 8)
-              .map((x) => `${x.name || x.uname}${x.title ? `：${x.title}` : ''} ${x.url ?? ''}`)
-              .join('\n'),
-            'alert'
-          );
-        }
-      } catch (err) {
-        log.warn(`live check skipped — ${err.message}`);
-        runState.live = { live: 0, round: 0, wentLive: [], error: err.message };
-      }
-    }
-
     // 4) Intel items (used by both the web card stream and the report)
     runState.step = 'saving-feeds';
     const date = new Date().toISOString().slice(0, 10);
@@ -286,6 +256,9 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
         ok: !!r.ok,
         changed: !!r.changed,
         summary: r.summary ?? r.error ?? '',
+        // Future-facing field, kept deliberately: no watch handler sets `growth` any more, so this is null
+        // on every entry today. It is the sibling of the `follower` baseline in server.js and is kept for
+        // the same reason (see the comment there).
         growth: r.growth ?? null,
         events: (r.events ?? []).slice(0, 100),
       })),

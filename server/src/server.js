@@ -77,17 +77,12 @@ import {
   bundleFilename,
   checkLoginState,
   contentDisposition,
-  getAccounts,
   guardPost,
   IMAGE_COUNT_LABEL,
   IMAGE_MODES,
   LOGIN_KINDS,
-  measureVerification,
   pickAccountId,
-  postBilibiliDynamic,
   readAudit as readShareAudit,
-  readinessReport,
-  recordVerification,
   renderBundle,
   renderSiteText,
   resolveLoginProbe,
@@ -100,9 +95,7 @@ import {
   truncateForSite,
   verificationStore,
 } from './share.js';
-import { checkLive, liveUids, searchRoster } from './live.js';
 import { openResolvedPath, openResultNote, resolveEditorCommand, resolveOpenPath } from './openfile.js';
-import { MAX_LEN, MIN_INTERVAL_MS, readAudit, sendDanmaku } from './danmaku.js';
 import { spawn } from 'node:child_process';
 import {
   NOTIFY_KINDS,
@@ -227,7 +220,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const s = sanitizeCustomSource(req.body ?? {});
     if (!s.id) return res.status(400).json({ error: 'id is required' });
-    if (!s.url && !s.uid) return res.status(400).json({ error: 'url or uid is required' });
+    // Every fetch kind this build offers reads a url: the uid-only kind (an account-id feed) was removed
+    // with its platform, and a source that carries nothing to fetch would be refused by the fetch stage anyway.
+    if (!s.url) return res.status(400).json({ error: 'url is required' });
     if (effectiveSources(cfg).some((x) => x.id === s.id)) return res.status(409).json({ error: `source already exists: ${s.id}` });
     cfg.customSources = [...(cfg.customSources ?? []), s];
     setConfig(cfg);
@@ -284,8 +279,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.post('/api/cookies/check', async (req, res) => {
     const cfg = getConfig();
     const profile = resolveProfileTarget(cfg, { profileDir: req.body?.profileDir });
-    const domains = Array.isArray(req.body?.domains) && req.body.domains.length ? req.body.domains : ['bilibili.com'];
-    const { readBrowserCookies } = await import('./cookies.js');
+    const domains = Array.isArray(req.body?.domains) && req.body.domains.length ? req.body.domains : ['reddit.com'];
+    const { readBrowserCookies, hasSessionCookie } = await import('./cookies.js');
     const r = await readBrowserCookies(profile.dir, domains);
     res.json({
       ok: r.ok,
@@ -297,7 +292,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       profileReason: profile.dir ? null : 'no-profile-configured',
       domains,
       cookieCount: (r.names ?? []).length,
-      hasSession: (r.names ?? []).includes('SESSDATA'),
+      // The same predicate every other login check uses (server/src/cookies.js), so this route cannot answer
+      // "signed in" while the share page answers "probably not" about the same store.
+      hasSession: hasSessionCookie(r.names),
       names: r.names ?? [],
     });
   });
@@ -414,6 +411,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
               at: b.updatedAt,
               kind: b.kind,
               revid: b.revid,
+              // Future-facing field, kept deliberately: no watch handler writes a `follower` baseline any
+              // more (it came from a platform this build no longer knows), so this is always `undefined`
+              // today. The field and the count key that renders it are kept together because the key is
+              // pinned by name in tools/i18n-plural-test.mjs (its per-locale plural forms are documented and
+              // tested), so the data layer keeps the slot for the handler that fills it again.
               follower: b.follower,
               ids: Array.isArray(b.ids) ? b.ids.length : undefined,
               lastTimestamp: b.lastTimestamp,
@@ -1133,54 +1135,6 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── live status ──────────────────────────────────────────────────
-  // Feature origin: dd-center/bilibili-dd-monitor (MIT). The vtbs.moe /v1/live that upstream uses is 404 now,
-  // so the bilibili batch live endpoint that does work here is used instead, and "live" is kept apart from "carousel".
-  app.get('/api/live', async (req, res) => {
-    const cfg = getConfig();
-    const sources = effectiveSources(cfg).filter((s) => s.enabled);
-    if (req.query.fresh === '1') {
-      return res.json(await checkLive(cfg, sources, log));
-    }
-    const wanted = liveUids(cfg, sources);
-    const r = await checkLive(cfg, sources, log);
-    res.json({ ...r, monitored: wanted.length, uids: wanted.map((w) => w.uid) });
-  });
-
-  app.get('/api/live/roster', async (req, res) => {
-    res.json(await searchRoster(getConfig(), req.query.q));
-  });
-
-  // ── accounts & danmaku ───────────────────────────────────────────
-  // Account discovery is read-only; sending speaks publicly as the user, so it is gated layer by layer (see danmaku.js).
-  //
-  // **The 60-second cache is mandatory**: listAccounts is a blocking call (synchronous SQLite + execFileSync to
-  // unlock DPAPI) that takes 3~4 seconds, and during that time the whole Node event loop is stopped — the live
-  // page requests this endpoint the moment it mounts, so "open the live page → the whole console freezes for 4
-  // seconds and every other page sits at loading". This is not "slow", it is one endpoint freezing the service
-  // (the same category as BUGS #37).
-  // Before speaking in public (danmaku / posting) a fresh read is still forced, see danmaku.js and /api/share/post.
-  app.get('/api/accounts', async (req, res) => {
-    const cfg = getConfig();
-    const { accounts, cached, error } = await getAccounts(cfg, { force: req.query.force === '1' });
-    res.json({
-      accounts,
-      cached: !!cached,
-      ...(error ? { error } : {}),
-      // once more, for emphasis: only identity information and capabilities are returned here, never any cookie value
-      canSendAny: accounts.some((a) => a.canSend),
-      limits: { maxLen: MAX_LEN, minIntervalMs: MIN_INTERVAL_MS },
-    });
-  });
-
-  app.post('/api/danmaku', async (req, res) => {
-    const cfg = getConfig();
-    const r = await sendDanmaku(cfg, log, req.body ?? {});
-    res.status(r.ok ? 200 : 400).json(r);
-  });
-
-  app.get('/api/danmaku/audit', (_req, res) => res.json({ entries: readAudit(getConfig(), 50) }));
-
   // ── client error beacon ──────────────────────────────────────────
   // When a page throws, the whole tree gets unmounted and the page turns blank, while the server knew nothing about it.
   // The frontend already installs the listener in index.html; this side only persists to disk + writes the server log.
@@ -1387,14 +1341,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // three different things and collapsing them hides exactly the missing one.
   app.get('/api/share/targets', async (_req, res) => {
     const cfg = getConfig();
-    // use the cache: reading login state is blocking, and reading it fresh on every page open would freeze the service (the reason is in share.js)
-    const { accounts, cached, error } = await getAccounts(cfg);
+    // `accounts` is empty in this build: nothing here enumerates logins, so every posting site's account
+    // stage says what it needs instead of listing candidates. The shape is unchanged, which is what lets a
+    // caller that *has* credentials hand them in without this route having to change.
+    const accounts = [];
     res.json({
       ok: true,
       targets: stagesReport(accounts, verificationStore(cfg), cfg),
-      // the flattened readiness view is kept because callers other than the share page read it
-      readiness: readinessReport(accounts, verificationStore(cfg), cfg),
-      accounts: accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, canSend: a.canSend })),
+      accounts: [],
       images: shareImageSetting(cfg),
       // The wording of the attachment setting travels with the setting itself, so the page renders it
       // instead of restating what each mode means (see IMAGE_MODES in share.js).
@@ -1402,62 +1356,25 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       imageCountLabel: IMAGE_COUNT_LABEL,
       // The login kinds the add-site form may offer, each with what this build can measure for it
       loginKinds: LOGIN_KINDS,
-      accountsCached: !!cached,
-      accountsError: error ?? null,
     });
-  });
-
-  // The verification step, run on demand.
-  //
-  // Why on demand: the verification stage is an app-level state, and this is the measurement that moves it.
-  // It costs a request to the site, so it does not run on page open; and it deliberately **posts nothing** --
-  // for bilibili it reads the credential and asks the site which account it is, which is as close as one can
-  // get to "this credential can post" without putting text in public.
-  //
-  // The result is stored per (target, account): a pass measured with one account says nothing about another
-  // account, and the old list-of-target-ids shape could not express that.
-  //
-  // The in-flight guard is the same discipline the other long operations use: this one sends a real request to
-  // the site, and a second click (or a second tab) is not a retry, it is the same work done twice.
-  app.get('/api/share/verify', busyGuard('share verify'), async (req, res) => {
-    const cfg = getConfig();
-    const target = String(req.query.target ?? '');
-    if (!targetById(target, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${target}` });
-    // the credential is read fresh here: verifying against a cached login state is verifying nothing
-    const { accounts } = await getAccounts(cfg, { force: true });
-    const r = await measureVerification(cfg, target, { accounts, accountId: String(req.query.account ?? '') || null });
-    if (r.accountId) {
-      const store = recordVerification(verificationStore(cfg), target, r.accountId, {
-        at: r.at ?? new Date().toISOString(),
-        ok: !!r.ok,
-        method: r.probe,
-        detail: r.detail ?? null,
-        reason: r.reason ?? null,
-        measured: r.measured ?? null,
-      });
-      patchConfig(cfg, { share: { ...(cfg.share ?? {}), verifiedTargets: store } });
-    }
-    appendAudit(cfg, { action: 'verify', target, ok: !!r.ok, account: r.accountName ?? r.accountId ?? null, method: r.probe ?? null, error: r.reason ?? null });
-    res.json({ ok: !!r.ok, ...r });
   });
 
   // "Check login state" for a posting site, on demand.
   //
-  // Why this exists next to /api/share/verify: verify is the **send-stage** measurement and only a site
-  // whose publishing has a probe implements it, so the sites with no probe (X, Weibo, YouTube, Reddit)
-  // had no way to answer "am I signed in there?" -- exactly the question a person about to paste a post
-  // in by hand is asking. This route measures the login state itself: the site's own probe where one
-  // exists, and otherwise the read-only cookie probe for the site's own host. It stores nothing, because
-  // a login state is not a verification result, and it never reports a pass it did not measure.
+  // This is the measurement that remains for every posting site: the read-only cookie probe for the site's
+  // own host -- a real answer to "is there a session cookie here?", which is exactly the question a person
+  // about to paste a post in by hand is asking. It stores nothing, because a login state is not a
+  // verification result, and it never reports a pass it did not measure. A site that declares a probe of its
+  // own says so instead of being silently probed with something else (see resolveLoginProbe in share.js).
+  //
+  // The in-flight guard is the same discipline the other long operations use: reading a cookie store copies a
+  // SQLite database and unwraps DPAPI, so a second click (or a second tab) is not a retry, it is the same
+  // work done twice.
   app.get('/api/share/check-login', busyGuard('share login check'), async (req, res) => {
     const cfg = getConfig();
     const target = String(req.query.target ?? '');
     if (!targetById(target, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${target}` });
-    // A fresh read: a check answered from a cached login state is not a check. The site's own probe needs
-    // the accounts for that; the cookie probe reads the store directly and needs none.
-    const plan = resolveLoginProbe(target, cfg);
-    const accounts = plan.needsAccount ? (await getAccounts(cfg, { force: true })).accounts : [];
-    const r = await checkLoginState(cfg, target, { accounts, accountId: String(req.query.account ?? '') || null });
+    const r = await checkLoginState(cfg, target, { accountId: String(req.query.account ?? '') || null });
     res.json(r);
   });
 
@@ -1552,7 +1469,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const targetId = String(req.body?.target ?? '');
     if (!targetById(targetId, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${targetId}` });
-    const { accounts } = await getAccounts(cfg, { force: true });
+    // No credential is looked up (nothing in this build enumerates logins), so the account list of every
+    // site comes back empty and the account stage reports what the site needs. The fields stay because they
+    // are the shape a caller with credentials gets.
+    const accounts = [];
     const scope = collectScope(cfg, req.body?.scope ?? {});
     const bundle = buildBundle({
       ...scope,
@@ -1608,7 +1528,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const targetId = String(req.body?.target ?? '');
     if (!targetById(targetId, cfg)) return res.status(400).json({ ok: false, error: `unknown target: ${targetId}` });
-    const { accounts } = await getAccounts(cfg, { force: true });
+    const accounts = [];
     const scope = collectScope(cfg, req.body?.scope ?? {});
     const bundle = buildBundle({
       ...scope,
@@ -1676,18 +1596,24 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     });
   });
 
-  // speaking in public: confirmation + all three stages + a trail are required (see share.js guardPost)
+  // speaking in public: confirmation + all three stages + a trail are required (see share.js guardPost).
+  //
+  // No site in this build publishes automatically, so every call today is refused by the guard with "there is
+  // no publish code for this site yet". The route is kept because the refusal is the honest answer and the
+  // gate is the shape a real implementation has to pass through: confirm -> three stages -> audit. Deleting
+  // it would delete the discipline along with the feature.
   app.post('/api/share/post', async (req, res) => {
     const cfg = getConfig();
     const target = String(req.body?.target ?? '');
-    // before speaking in public, **force a fresh read** of the login state: posting on a stale verdict is opening a new lock with an old key
-    const { accounts } = await getAccounts(cfg, { force: true });
     const store = verificationStore(cfg);
     const accountId = String(req.body?.accountId ?? '') || null;
+    // No credential is read: nothing in this build enumerates logins, and a post decided on a login state
+    // this build cannot see would be a guess. The guard below is what refuses; the accounts list is empty.
+    const accounts = [];
 
-    // Autofill: with no text given, the post body comes from the bundle of the chosen scope. Plain text only
-    // (the bilibili create endpoint takes no images), and images are only attached when the setting asks for
-    // them **and** the site profile allows at least one -- a planned site must not silently gain images.
+    // Autofill: with no text given, the post body comes from the bundle of the chosen scope. Plain text only,
+    // and images are only attached when the setting asks for them **and** the site profile allows at least
+    // one -- a planned site must not silently gain images.
     //
     // A text the page **did** send is used exactly as sent, including an emptied box: it is the text a person
     // edited and is about to publish under their own name, so replacing it with the app's prepared report (the
@@ -1711,21 +1637,20 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       return res.status(400).json({ ok: false, error: g.error, status: g.status ?? null });
     }
 
-    let result = { ok: false, error: '尚未实现该目标' };
-    if (target === 'bilibili-dynamic') {
-      result = await postBilibiliDynamic(cfg, { accountId: accountId ?? g.accountId, text: g.body, log });
-    }
+    // Unreachable while no site declares `implemented: true`, and deliberately not a stub that reports
+    // success: a caller that ever gets here without a publish code must be told so.
+    const result = { ok: false, error: '尚未实现该目标' };
     appendAudit(cfg, {
       action: 'post',
       target,
-      ok: !!result.ok,
-      error: result.error ?? null,
+      ok: false,
+      error: result.error,
       chars: g.body.length,
       textSource: bodySource,
       images,
-      account: result.account ?? null,
+      account: null,
     });
-    res.json({ ok: !!result.ok, error: result.error ?? null, account: result.account ?? null, images });
+    res.json({ ok: false, error: result.error, account: null, images });
   });
 
   // ── incremental archive & charts ─────────────────────────────────

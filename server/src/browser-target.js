@@ -4,7 +4,7 @@
 //
 //   The browser and its profile used to be configured in the Settings page's Browser section, while the
 //   features that depend on it read it wherever they happened to be — the fetchers, the read-only cookie
-//   probe behind every login check, the Live page's danmaku accounts, the share page's login stage, and the
+//   probe behind every login check, the share page's login stage, and the
 //   probe route itself. That arrangement has one failure mode, and the owner hit it: the share page's login
 //   check answered `profileDir is empty` and named nothing he could act on from where he was standing. The
 //   setting was on another page, in another section, behind a condition, and the sentence he got was the
@@ -33,8 +33,53 @@
 // discovery shape, the picker's mapping and the resolution offline, and tools/integrity-check.mjs can read
 // browserConsumerProblems() to prove no module went back to reading the raw key.
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import { browserRoots as machineBrowserRoots, profilesUnder as machineProfilesUnder, listAccounts } from './accounts.js';
+
+/**
+ * userData roots of the common browsers (never hard-coded to one machine; all derived from env vars).
+ *
+ * This enumeration used to live in server/src/accounts.js, a module whose only job was to turn these
+ * directories into "accounts" by reading their cookie stores for one site. That module is gone; the
+ * directory discovery is not site-specific, and it belongs next to the rest of the profile targeting
+ * (this module enumerates profiles, resolves the configured one and offers the picker).
+ */
+export function browserRoots() {
+  const home = os.homedir();
+  const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
+  const roaming = process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming');
+  const list = [
+    ['Chrome', path.join(local, 'Google', 'Chrome', 'User Data')],
+    ['Chrome Beta', path.join(local, 'Google', 'Chrome Beta', 'User Data')],
+    ['Edge', path.join(local, 'Microsoft', 'Edge', 'User Data')],
+    ['Brave', path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data')],
+    ['Vivaldi', path.join(local, 'Vivaldi', 'User Data')],
+    ['Opera', path.join(roaming, 'Opera Software', 'Opera Stable')],
+    ['Opera GX', path.join(roaming, 'Opera Software', 'Opera GX Stable')],
+    ['Chromium', path.join(local, 'Chromium', 'User Data')],
+  ];
+  return list.filter(([, p]) => fs.existsSync(p));
+}
+
+/** Expand every profile directory under one userData root (a root that holds a cookie store is itself one) */
+export function profilesUnder(root) {
+  const out = [];
+  const hasCookies = (p) => fs.existsSync(path.join(p, 'Network', 'Cookies')) || fs.existsSync(path.join(p, 'Cookies'));
+  if (hasCookies(root)) return [root];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const p = path.join(root, e.name);
+    if (hasCookies(p)) out.push(p);
+  }
+  return out;
+}
 
 /**
  * The config key every consumer resolves. Exported so nothing has to spell it out from memory: the
@@ -96,8 +141,7 @@ export function normalizeProfile(entry, { fs = null } = {}) {
   const browser = String(entry.browser ?? '').trim() || 'unknown';
   const name = String(entry.name ?? '').trim() || path.basename(absolute);
   return {
-    // Same reasoning as the account id in accounts.js (BUGS #69): the id is handed to the client, so it is a
-    // one-way digest and never the path itself.
+    // The id is handed to the client, so it is a one-way digest and never the path itself (BUGS #69).
     id: createHash('sha256').update(absolute).digest('base64url').slice(0, 16),
     browser,
     name,
@@ -122,11 +166,11 @@ export function normalizeProfiles(entries, opts = {}) {
 /**
  * Enumerate the browser profiles on this machine, in the shape the picker uses.
  *
- * The enumeration itself belongs to server/src/accounts.js (it already knew which browsers this machine has
- * and which subdirectories hold a cookie store); what this adds is (a) the reference-browser rows for the
- * browsers that are installed but have no profile subdirectory yet, so the page can still say "Chrome is here
- * but nothing is signed in", and (b) the normalisation above, so an incomplete discovery is dropped instead
- * of offered. Nothing is written and no cookie is read (the read-only floor is unchanged).
+ * The enumeration itself is browserRoots()/profilesUnder() in this module (they already knew which browsers
+ * this machine has and which subdirectories hold a cookie store); what this adds is (a) the reference-browser
+ * rows for the browsers that are installed but have no profile subdirectory yet, so the page can still say
+ * "Chrome is here but nothing is signed in", and (b) the normalisation above, so an incomplete discovery is
+ * dropped instead of offered. Nothing is written and no cookie is read (the read-only floor is unchanged).
  *
  * @param {{roots?:Function, profiles?:Function, fs?:object}={}} opts  all injectable, so the shape is pinned offline
  * @returns {{profiles:Array<{id,browser,name,path,absolute,present,hasProfiles}>, dropped:Array<{browser,path,reason}>}}
@@ -134,8 +178,8 @@ export function normalizeProfiles(entries, opts = {}) {
  *   machine has fewer browsers", which is the kind of quiet difference this round is about.
  */
 export function listProfiles(opts = {}) {
-  const roots = opts.roots ?? machineBrowserRoots;
-  const under = opts.profiles ?? machineProfilesUnder;
+  const roots = opts.roots ?? browserRoots;
+  const under = opts.profiles ?? profilesUnder;
   const fs = opts.fs ?? null;
   const profiles = [];
   const dropped = [];
@@ -178,7 +222,7 @@ export function configuredProfileDir(cfg) {
  *   such directory exists on this machine
  */
 export function defaultProfileDir(cfg, opts = {}) {
-  const roots = opts.roots ?? machineBrowserRoots;
+  const roots = opts.roots ?? browserRoots;
   const fs = opts.fs ?? null;
   const want = browserFromExecutable(cfg?.browser?.executablePath);
   if (want === 'bundled') return '';
@@ -315,23 +359,6 @@ export function applyPickProfile(cfg, entry) {
   const r = pickProfile(entry);
   if (!r.ok) return { ok: false, reason: r.reason };
   return { ok: true, config: { ...(cfg ?? {}), browser: { ...(cfg?.browser ?? {}), profileDir: r.value } }, value: r.value };
-}
-
-/**
- * The accounts this machine can actually use, for the status line on the page and for the share page's
- * chooser. Kept here rather than in the route so the inventory in browser-consumers.js and the route report
- * the same thing.
- *
- * This is the expensive call (synchronous SQLite plus a DPAPI unwrap, measured 3-4s, see server.js), so it is
- * never made by the resolver itself: only a route that was asked for it pays for it.
- */
-export async function discoverAccounts(cfg, opts = {}) {
-  const list = opts.listAccounts ?? listAccounts;
-  try {
-    return await list(cfg);
-  } catch (e) {
-    return { accounts: [], scanned: 0, errors: [{ profile: null, error: e.message }] };
-  }
 }
 
 // ───────────────────────────────────────────── source-level structure

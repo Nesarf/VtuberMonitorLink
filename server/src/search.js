@@ -17,7 +17,7 @@ const DAY_MS = 86_400_000;
 // ───────────────────────────────────────── time normalization
 
 /**
- * bilibili hands back relative times (Chinese strings such as "8 hours ago", "3 days ago",
+ * Some sources hand back relative times (Chinese strings such as "8 hours ago", "3 days ago",
  * "August 29"), so range filtering requires normalizing them first. The reference point is
  * **the run's generation time**, not "now" - otherwise revisiting history computes it wrong.
  */
@@ -157,8 +157,8 @@ export function buildIndex(cfg, { days = 60, flags = {} } = {}) {
             ...it,
             runDate: d,
             runAt,
-            // Some sources carry no publish time (bilibili's login-free image/text dynamics come
-            // back with an empty pub_time). Fall back to "which run first saw it", otherwise a
+            // Some sources carry no publish time (a feed whose entries omit it comes back with an
+            // empty field). Fall back to "which run first saw it", otherwise a
             // time range would exclude these items as a batch.
             ts: own ?? runAt,
             tsSource: own ? 'item' : 'run',

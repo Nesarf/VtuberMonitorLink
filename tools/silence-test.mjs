@@ -208,7 +208,7 @@ t('fetch members by agency; infer the agency domain from an official source URL'
   assert.equal(membersOfAgency(people, 'Box-B').length, 0);
   assert.equal(agencyFromSourceUrl('https://hololivepro.com/talents/'), 'hololivepro.com');
   assert.equal(agencyFromSourceUrl('https://vspo.jp/'), 'vspo.jp');
-  assert.equal(agencyFromSourceUrl('https://api.bilibili.com/x'), null);
+  assert.equal(agencyFromSourceUrl('https://www.reddit.com/r/x/.rss'), null);
 });
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);

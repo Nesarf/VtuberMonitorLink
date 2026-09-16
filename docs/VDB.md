@@ -1,7 +1,7 @@
 # VDB roster / VDB 花名册
 
 > This page explains how the agency (circle) roster capability is wired in, why it is wired that way, and where its boundaries are.
-> It is not an eleventh item next to the ten capabilities; it **supplies the missing dimension** for "follow by person" and "agency view": the agency.
+> It is not a tenth item next to the nine capabilities; it **supplies the missing dimension** for "follow by person" and "agency view": the agency.
 
 ---
 
@@ -74,8 +74,18 @@ Ownership and final say over this data rest with upstream. We only read it, cach
 weiboByName · acfun · niconico · showroom · pixiv · afdian · ci-en · booth · fantia · marshmallow ·
 userlocal · instagram · telegram · patreon · peing · 163music · line · github · web · other.
 
-The code **does not assume bilibili**: whatever platforms exist under `accounts` are accepted, and both matching and display go through the generic "platform -> id" shape.
-When searching, the account id or link form on **any platform** (a Twitch name, a YouTube channel, an X handle...) matches.
+The code **does not special-case any platform**: whatever platforms exist under `accounts` are accepted, and both matching and display go through the generic "platform -> id" shape.
+When searching, the account id or link form on **any platform** (a Twitch name, a YouTube channel, a Weibo id...) matches.
+
+Two boundaries matter here, because they are easy to misread:
+
+- These account fields are **data about people, not a connection to those sites**. A `bilibili` or `twitter`
+  entry is a field name in somebody's roster record, matched **locally** against text this app already
+  collected; nothing here fetches, queries or posts to that platform. The platform names are the roster's
+  own vocabulary - which is why the roster kept its full platform set while every platform-specific fetcher
+  in this build was removed.
+- The alias layer reads `PLATFORM_URLS` as its allowlist (`LINK_KEYS`), so the list of platform keys is
+  defined once: an account on a platform outside that table gets no alias rather than an invented one.
 
 ### Import goes through the same sanitising path
 

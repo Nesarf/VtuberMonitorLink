@@ -379,8 +379,11 @@ t('vi-VN needs no table either - and the tier it lands in is a measurement, not 
   for (const [key, [n, label]] of Object.entries(expected)) {
     assert.equal(countLabel(pickPlural({ ...bases }, key, 'vi-VN', n), n), label, `${key}: the rendered count label moved`);
   }
-  // One is not a special case in Vietnamese, and neither is a signed follower delta: the UI passes
-  // "+12" straight through `tn('followersCount', ...)` on the Watch and Intel pages.
+  // One is not a special case in Vietnamese, and neither is a signed follower delta: the delta is passed
+  // through as a string ("+12") by whoever renders it. No page passes `followersCount` any more -- the
+  // render sites went with the platform that produced the reading -- but the form is pinned here because
+  // the key is still in the dictionary, and a wording that broke would break quietly (see the `follower`
+  // comment in server/src/server.js).
   assert.equal(countLabel(pickPlural({ ...bases }, 'items', 'vi-VN', 1), 1), '1 mục');
   assert.equal(countLabel(pickPlural({ ...bases }, 'followersCount', 'vi-VN', '+12'), '+12'), '+12 người theo dõi');
   // Every pinned label is a number, a space and a Vietnamese unit word -- a base value reduced to a

@@ -28,7 +28,7 @@ const PLAYBOOK = [
     zh: [
       'Neither egress works: first confirm the address itself is correct (open it by hand in a browser to compare).',
       'When direct fails, use `ping` / `curl -v <url>` to see whether it is a DNS failure, a reset connection, or a timeout.',
-      'If only the proxy works, set that source\'s "egress" to "force proxy"; if the opposite, set it to "force direct" (bilibili is this kind).',
+      'If only the proxy works, set that source\'s "egress" to "force proxy"; if the opposite, set it to "force direct" (a site that risk-controls a proxy is this kind).',
       'If the target site is overseas while the local proxy is domestic (or the reverse), the node\'s own location may be what the target site rejects.',
     ],
   },
@@ -37,7 +37,7 @@ const PLAYBOOK = [
     when: (d) => d.probe.direct?.ok && d.probe.proxy && !d.probe.proxy.skipped && !d.probe.proxy.ok,
     zh: [
       'Direct works but the proxy does not — this kind of site needs **force direct** (pick direct for "egress" in the source settings).',
-      'Common for domestic sites being risk-controlled when reached through an overseas node (bilibili returns 412 / -352 outright).',
+      'Common for domestic sites being risk-controlled when reached through an overseas node (such a site answers a bare 4xx instead of the page).',
       'Use the "proxy nodes" panel to see that node\'s latency to this site, or switch to a node landing in the target region.',
     ],
   },
@@ -79,7 +79,7 @@ const PLAYBOOK = [
     when: (d) => d.fetch.contentType && !/json/i.test(d.fetch.contentType) && /json/i.test(d.source.url ?? ''),
     zh: [
       'The address looks like an API but what came back is not JSON (commonly a redirect to the home page or a verification page). Compare with the browser Network panel to confirm the real endpoint address.',
-      'If the endpoint needs signed parameters (bilibili\'s wbi, for example), the "browser render" method is less trouble.',
+      'If the endpoint needs signed parameters (a signature its own page computes), the "browser render" method is less trouble.',
     ],
   },
   {

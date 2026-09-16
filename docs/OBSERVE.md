@@ -13,7 +13,7 @@ To judge the real state of an agency (team), you have to look at what several of
 | Your real IP | The site being visited | **Yes** (replaced by a Tor exit) |
 | Request content: which uids and which members were queried at once | The site being visited | **No** |
 | Timing: the same moment every day, intervals exactly equal, fixed order | The site being visited | **No** |
-| Login state (SESSDATA / BotPassword / account) | The platform, and it is bound to your real-world identity | **No** (worse, in fact: it links the identity to the observation) |
+| Login state (a session cookie / BotPassword / an account) | The platform, and it is bound to your real-world identity | **No** (worse, in fact: it links the identity to the observation) |
 | Access logs on the agency's own site | **The agency itself** | **Yes** -- this is the only category where the logs are in the other party's hands |
 
 Conclusion: Tor only solves the first row. What really reduces sensitivity is **sampling (changing "how much is looked at in one pass")** and **jitter (changing "when it is looked at")**,
@@ -25,16 +25,17 @@ is still in the other party's logs -- which is exactly why sampling and jitter a
 
 ## 2. Measured boundaries (2026-09-12, local machine)
 
-Measured with **the project's own signed fetcher** (this point matters: hitting bilibili's API directly with curl returns 412,
-which is "unsigned" rather than "blocked by Tor"; that was my first misjudgement):
+Measured with **the project's own fetch stack**, which is the point: a hand-rolled request measures the
+hand-rolled part, not the product, and taking a bare 4xx as "this egress is blocked" is exactly the
+misjudgement BUGS #59 records.
 
 | Target | Direct | Via Tor |
 | --- | --- | --- |
-| `api.bilibili.com` space dynamics (bili-opus source) | `ok=true items=20`, 321ms | **`ok=true items=20`, 2521ms** |
-| `api.live.bilibili.com` batch stream-start status | `code=0` | `code=0` |
-| `api.bilibili.com/x/web-interface/nav` (fetch the WBI key) | Works | Works |
-| `api.bilibili.com/x/space/acc/info` | Works | **`-799 请求过于频繁`** (transient: "requests too frequent") |
 | Agency self-hosted sites | — | hololivepro 200 / vspo 200 / cover-corp 200, **anycolor 403 (Cloudflare blocks Tor)** / brave-group timeout |
+
+The rows this table used to carry for the removed platform's endpoints went with it: nothing in this build
+fetches that site any more, and a measurement of an endpoint nobody calls is not evidence for a rule. What
+remains is the class the rule is actually about - entry points the agency hosts itself.
 
 Changing exits (Tor's `IsolateSOCKSAuth`, isolating circuits by SOCKS username):
 
@@ -71,14 +72,17 @@ When `base = 0` there is **no jitter** (an explicit "do not wait" wins -- the di
 - **Agency self-hosted sites -> Tor.** The allowlist is `AGENCY_HOSTS` in `observe.js` (hololivepro / anycolor /
   nijisanji / brave-group / vspo / cover-corp / a-soul / yousa...). Only for this kind of entry point do the logs
   sit on the other party's server, which is where Tor means anything.
-- **Platform sources (bilibili / Reddit / Fandom) are left alone** -- the agency cannot see those logs, and via Tor they measured 8 times slower,
-  with individual endpoints getting rate-limited. If the user has explicitly pinned `tor` on the source page, that is still respected (it is an explicit intent).
+- **Platform sources (Reddit / Fandom) are left alone** -- the agency cannot see those logs, and that, not
+  speed, is what decides where Tor belongs. If the user has explicitly pinned `tor` on the source
+  page, that is still respected (it is an explicit intent).
 - Any domain not on the allowlist is treated as a platform: **better to use Tor less than to apply it indiscriminately**.
 
 ### 3.4 Login-required sources are not run (`skipLoginSources`)
 
 Sources with `login: required` are **skipped outright** in this mode, and the reason is written into both the logs and the report.
 Binding a real-world identity to observation behaviour is far more serious than an IP.
+No built-in source declares `required` in this build, so in practice this bites on a source the user declared
+themselves - which is exactly the case where the rule is worth having.
 
 ### 3.5 Changing exits (`rotateExit`)
 

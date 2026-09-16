@@ -3,7 +3,6 @@ import { fetchRss } from './rss.js';
 import { fetchMediaWiki } from './mediawiki.js';
 import { fetchBrowser } from './browser.js';
 import { fetchSearchOnly } from './search.js';
-import { fetchBilibiliOpus, fetchBilibiliDynamic } from './bilibili.js';
 import { gapWithJitter } from '../observe.js';
 import { QUARANTINE_DEFAULTS, fetchLadder, loadQuarantine, planFetch, recordOutcome, saveQuarantine } from '../fetchplan.js';
 import { resolveProxyMode } from '../net.js';
@@ -14,8 +13,6 @@ const TABLE = {
   'mediawiki-api': fetchMediaWiki,
   browser: fetchBrowser,
   'search-only': fetchSearchOnly,
-  'bili-opus': fetchBilibiliOpus,
-  'bili-dynamic': fetchBilibiliDynamic,
 };
 
 /** the fetch kinds offered on the web page (used by the custom-source editor) */
@@ -23,16 +20,14 @@ export const FETCH_KINDS = [
   { id: 'rss', zh: 'RSS / Atom 订阅', en: 'RSS / Atom feed' },
   { id: 'mediawiki-api', zh: 'MediaWiki API（最近更改）', en: 'MediaWiki API (recent changes)' },
   { id: 'browser', zh: '浏览器渲染（可复用登录）', en: 'Browser render (can reuse a login)' },
-  { id: 'bili-opus', zh: 'B 站图文动态（免登录）', en: 'bilibili image/text dynamics (no login)' },
-  { id: 'bili-dynamic', zh: 'B 站完整动态（需登录，含配图）', en: 'bilibili full dynamics (login, with pictures)' },
   { id: 'search-only', zh: '仅交给检索阶段', en: 'Search stage only' },
 ];
 
 /**
  * Whether a failure should be retried over the other egress.
- * Only switch when the source **has no explicitly pinned egress** — for a source like bilibili,
- * where the rule is "pin it to direct, otherwise risk control kicks in", auto-switching to the proxy
- * only makes it worse.
+ * Only switch when the source **has no explicitly pinned egress** — where a source pins one deliberately
+ * (risk control that only lifts on a direct connection, say), auto-switching to the other egress only makes
+ * it worse.
  */
 function otherEgress(cfg, source) {
   if (cfg?.run?.autoFailover === false) return null;

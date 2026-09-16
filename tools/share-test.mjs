@@ -23,6 +23,7 @@ import path from 'node:path';
 import { readDicts } from './lib/i18n-source.mjs';
 import {
   DEFAULT_IMAGES,
+  LOGIN_KINDS,
   SHARE_SITES,
   SHARE_TARGETS,
   STAGE_I18N,
@@ -32,11 +33,9 @@ import {
   buildBundle,
   buildHandoff,
   bundleFilename,
-  checkReadiness,
   contentDisposition,
   guardPost,
   imagePlan,
-  measureVerification,
   pickAccountId,
   readAudit,
   recordVerification,
@@ -124,6 +123,22 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-share-'));
 const cfg = { paths: { logsDir: tmp } };
 /** The shipped dictionaries, read once (the UI entries the stage mapping points at have to exist there) */
 const DICTS = readDicts();
+
+/**
+ * One credential of a given login kind, shaped the way the account stage reads it.
+ *
+ * This used to be a single hand-written bilibili account, because one built-in site could actually be posted
+ * to and it was that one. Nothing in this build enumerates credentials any more, so the fixtures are built
+ * here instead: the account stage's rules (declared requirements checked against a credential, the choice of
+ * account, the staleness of a measurement) are still exercised, and exercised on **supplied** credentials
+ * rather than on discovered ones.
+ */
+function accountOf(kind, extra = {}) {
+  const base = { id: 'acc-1', kind, name: `a ${kind} account` };
+  if (kind === 'weibo') return { ...base, hasSession: true, hasCsrf: true, canSend: true, ...extra };
+  if (kind === 'mastodon') return { ...base, hasToken: true, hasScope: true, ...extra };
+  return { ...base, hasToken: true, hasScope: true, ...extra };
+}
 
 const items = [
   {
@@ -258,7 +273,7 @@ t('the setting decides how many images one bundle carries (it is no longer alway
   assert.equal(none.items[0].images.length, 0);
 });
 
-t('a site\'s own image limit caps the setting (bilibili takes 9, a chat-length post takes the setting)', () => {
+t('a site\'s own image limit caps the setting (Weibo takes 9, a chat-length post takes the setting)', () => {
   const plan = imagePlan({ mode: 'source', maxPerBundle: 4 }, 9);
   assert.equal(plan.limit, 4, 'the setting is the smaller of the two');
   const wide = imagePlan({ mode: 'source', maxPerBundle: 12 }, 9);
@@ -312,16 +327,18 @@ t('every target honestly declares whether a login is needed', () => {
   }
 });
 
-t('a posting site is in exactly one of three situations: implemented, planned, or not allowed at all', () => {
+t('a posting site is in exactly one of two situations: planned, or not allowed at all', () => {
   for (const site of SHARE_SITES) {
     assert.equal(typeof site.implemented, 'boolean', site.id);
     assert.equal(typeof site.unsupported, 'boolean', site.id);
     // the two may not both be true: "we wrote it" and "it must never be done" cannot hold at once
     assert.ok(!(site.implemented && site.unsupported), site.id + ' is both implemented and unsupported');
   }
-  // X is the one site that is deliberately refused rather than merely unfinished, and that has to survive
-  const x = targetById('x-post');
-  assert.equal(x.status, 'unsupported', 'X must stay "unsupported", not drift into "not implemented yet"');
+  // No built-in site has publish code any more: the only implementation this project had was the one site
+  // that was removed with its platform. That is a fact worth pinning — "there is no publish code" and "the
+  // code was deleted by accident" look identical on the page, and only one of them is intended.
+  const implemented = SHARE_SITES.filter((s) => s.implemented).map((s) => s.id);
+  assert.deepEqual(implemented, [], 'no built-in site may claim publish code: ' + implemented.join(', '));
   const mastodon = targetById('mastodon-post');
   assert.equal(mastodon.status, 'unimplemented', 'a site that is merely unfinished must not be called unsupported');
 });
@@ -332,60 +349,36 @@ t('a target that needs login must declare the login kind and how it is checked',
   }
 });
 
+t('the retired platforms are not offered as login kinds any more', () => {
+  const kinds = LOGIN_KINDS.map((k) => k.id);
+  assert.ok(!kinds.includes('bilibili'), 'a bilibili login kind came back');
+  assert.ok(!kinds.includes('twitter'), 'an X/Twitter login kind came back');
+  // The control: the kinds that remain are still there, so "the list is empty" cannot satisfy the check.
+  assert.deepEqual(kinds.filter(Boolean).sort(), ['mastodon', 'reddit', 'weibo', 'youtube']);
+  assert.ok(kinds.includes(null), 'the "no login" option must stay in the list');
+});
+
 t('a target that needs no login is independent of login state and always available', () => {
   for (const target of SHARE_TARGETS.filter((x) => !x.needsLogin)) {
-    assert.equal(checkReadiness(target, []).ok, true, target.id);
+    const r = stageReport(target, [], {});
+    assert.equal(r.send.status, 'ready', target.id);
+    assert.equal(r.send.actionable, true, target.id);
   }
 });
 
-t('with no login state it says honestly what is missing instead of pretending to be available', () => {
-  const t1 = targetById('bilibili-dynamic');
-  const r = checkReadiness(t1, []);
-  assert.equal(r.ok, false);
-  assert.equal(r.status, 'needs-login');
-  assert.ok(r.reason.includes('SESSDATA'), r.reason);
-});
-
-t('a usable account alone is no longer enough: the send stage stays unverified until it was measured', () => {
-  const t1 = targetById('bilibili-dynamic');
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
-  const r = checkReadiness(t1, accounts, {});
-  assert.equal(r.ok, false, 'it must not be allowed before verification');
-  assert.equal(r.status, 'needs-verification');
-  assert.equal(r.account, 'someone');
-});
-
-t('and it is only ready when the measurement exists for **that** account', () => {
-  const t1 = targetById('bilibili-dynamic');
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
-  const store = recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true });
-  assert.equal(checkReadiness(t1, accounts, store).ok, true);
-  const otherAccount = [{ id: 'acc-2', kind: 'bilibili', name: 'someone else', hasSession: true, hasCsrf: true, canSend: true }];
-  assert.equal(
-    checkReadiness(t1, otherAccount, store).ok,
-    false,
-    'a pass measured with one account says nothing about another account'
-  );
-});
-
-t('a platform that cannot be done is explicitly marked unsupported', () => {
-  const x = targetById('x-post');
-  assert.equal(x.status, 'unsupported');
-  assert.equal(checkReadiness(x, [{ kind: 'twitter', canSend: true }]).status, 'unsupported');
+t('with no credential the account stage is the one that is missing, and it names what the site needs', () => {
+  const r = stageReport(targetById('mastodon-post'), [], {});
+  assert.equal(r.account.status, 'missing');
+  assert.equal(r.send.status, 'unimplemented', 'no publish code, so the send stage says that');
 });
 
 process.stdout.write('\nshare: the three separate stages (account / verification / send)\n');
-t('every posting site is represented, in the order the work is done (bilibili first)', () => {
+t('every posting site is represented, and every one of them declares no publish code', () => {
   const posts = SHARE_TARGETS.filter((x) => x.kind === 'post').map((x) => x.id);
-  assert.deepEqual(posts, [
-    'bilibili-dynamic',
-    'x-post',
-    'weibo-post',
-    'youtube-community',
-    'mastodon-post',
-    'reddit-post',
-  ]);
-  // every posting target points at a profile, and every profile at a target: the two cannot drift
+  // Four built-in posting sites. The two that were removed with their platforms are not in the list, and the
+  // count is pinned rather than lower-bounded: a fifth entry coming back through a helper nobody meant to
+  // keep is exactly what this number is here to notice.
+  assert.deepEqual(posts, ['weibo-post', 'youtube-community', 'mastodon-post', 'reddit-post']);
   for (const id of posts) assert.ok(siteProfileById(id), id + ' has no per-site profile');
   assert.equal(SHARE_SITES.length, posts.length, 'one profile per posting site');
 });
@@ -397,37 +390,39 @@ t('a site declares what it needs before sharing (login kind + credential + named
     assert.ok(Array.isArray(site.requirements) && site.requirements.length, site.id + ' declares no requirements');
     assert.ok(Number.isFinite(site.textLimit) && site.textLimit > 0, site.id + ' declares no text limit');
     assert.ok(Number.isFinite(site.maxImages) && site.maxImages >= 0, site.id + ' declares no image limit');
-    assert.ok(['rest-csrf', 'form-post', 'rest-bearer', 'oauth2-api'].includes(site.publish), site.id + ' declares no publish method');
-    assert.ok(site.verify === null || ['login-probe', 'token-scope', 'http-probe'].includes(site.verify), site.id + ' declares an unknown probe');
   }
+  // Every login kind offered is one of the kinds a hand-added site may declare, and no retired platform is
+  // among them (a profile that declares a kind the module rejects would be a built-in the module refuses).
+  const kinds = new Set(LOGIN_KINDS.map((k) => k.id));
+  for (const site of SHARE_SITES) assert.ok(kinds.has(site.loginKind), `${site.id} declares the unknown kind ${site.loginKind}`);
 });
 
 t('the three stages are three independent answers, each with an id of its own', () => {
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
-  const r = stageReport(targetById('bilibili-dynamic'), accounts, {});
+  const accounts = [{ id: 'acc-1', kind: 'weibo', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
+  const r = stageReport(targetById('weibo-post'), accounts, {});
   assert.deepEqual(Object.keys(r).slice(0, 3).sort(), ['account', 'send', 'verification']);
   assert.equal(r.account.id, 'account');
   assert.equal(r.verification.id, 'verification');
   assert.equal(r.send.id, 'send');
   assert.equal(r.account.status, 'satisfied');
   assert.equal(r.verification.status, 'needed', 'having an account does not verify anything');
-  assert.equal(r.send.status, 'blocked');
+  assert.equal(r.send.status, 'unimplemented');
 });
 
 t('with no account the account stage is the one that is missing (and it names the credential)', () => {
-  const r = stageReport(targetById('bilibili-dynamic'), [], {});
+  const r = stageReport(targetById('weibo-post'), [], {});
   assert.equal(r.account.status, 'missing');
-  assert.ok(r.account.credential.zh.includes('SESSDATA'), r.account.credential.zh);
+  assert.ok(r.account.credential.zh.includes('cookie'), r.account.credential.zh);
   assert.equal(r.verification.status, 'needed');
-  assert.equal(r.send.status, 'blocked');
+  assert.equal(r.send.status, 'unimplemented');
 });
 
 t('a credential that is short of one declared requirement is reported as unsatisfied (not as "logged in")', () => {
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: false, canSend: false }];
-  const r = stageReport(targetById('bilibili-dynamic'), accounts, {});
+  const accounts = [{ id: 'acc-1', kind: 'weibo', name: 'someone', hasSession: true, hasCsrf: false, canSend: false }];
+  const r = stageReport(targetById('weibo-post'), accounts, {});
   assert.equal(r.account.status, 'missing');
-  assert.deepEqual(r.account.unsatisfied.map((u) => u.id), ['csrf', 'write-permission']);
-  assert.equal(r.send.status, 'blocked');
+  assert.deepEqual(r.account.unsatisfied.map((u) => u.id), ['csrf']);
+  assert.equal(r.send.status, 'unimplemented');
 });
 
 t('a site whose publish code does not exist says "not implemented" instead of offering a button', () => {
@@ -440,32 +435,31 @@ t('a site whose publish code does not exist says "not implemented" instead of of
   }
 });
 
-// Changed on purpose, at the owner's request: the login stage is independent of the send stage. A site with no
-// probe of its own used to be "blocked, and not actionable", which disabled the login check on exactly the
-// sites that have no site-specific probe. The honest measurement still exists for them -- the read-only cookie
-// probe against the site's own host -- so the stage now says which probe would run and is actionable, while
-// "verified" is still never claimed without the site's own measurement.
-t('a site with no site-specific probe is not "verified": the stage asks for the cookie probe instead', () => {
+// The login stage is independent of the send stage: a site whose publishing has no code (which is every site
+// in this build) still offers a real login check, because "am I signed in there?" is measurable on its own and
+// a hand-off is exactly the moment somebody wants to know. The measurement that remains is the read-only
+// cookie probe against the site's own host, and the stage has to say so -- while `verified` is never claimed
+// without a measurement that actually ran.
+t('a site with no site-specific measurement reports the cookie probe as the one that can run', () => {
   const accounts = [{ id: 'acc-1', kind: 'weibo', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
   const r = stageReport(targetById('weibo-post'), accounts, {});
-  assert.equal(r.verification.status, 'needed', 'it is measured, not blocked');
+  assert.equal(r.verification.status, 'needed', 'it is measurable, not blocked');
   assert.equal(r.verification.probe, 'cookie-probe', 'and it says which measurement it would use');
   assert.equal(r.verification.fallbackProbe, 'cookie-probe');
   assert.equal(r.verification.actionable, true, 'the login state can be checked on this site');
   assert.equal(r.verification.accountId, 'acc-1');
-  assert.equal(r.send.status, 'unimplemented', 'posting to it still has no code (weibo is not wired up)');
+  assert.equal(r.send.status, 'unimplemented', 'posting to it still has no code');
   assert.equal(r.send.actionable, false, 'and a login state on its own does not make it postable');
 });
 
-t('a platform that forbids the method is blocked where it sends, and still checkable where it logs in', () => {
-  const r = stageReport(targetById('x-post'), [{ id: 'a', kind: 'twitter', canSend: true }], {});
-  assert.equal(r.send.status, 'blocked', 'x must never be posted to');
-  assert.equal(r.send.actionable, false);
-  // The login stage is a different question: "am I signed in to X?" is measurable, and a hand-off to X is
-  // exactly when somebody wants to know.
-  assert.equal(r.verification.actionable, true, 'the login state of X is still checkable');
-  assert.equal(r.verification.probe, 'cookie-probe');
-  assert.equal(r.verification.probeHost, 'x.com');
+t('a site that declares a measurement of its own is named, and is not claimed runnable without a credential', () => {
+  // A declared profile, because no built-in site carries a probe of its own any more: the two that did were
+  // removed with the sites they belonged to, and both needed a credential this build does not look up.
+  const cfg = { share: { sites: [{ id: 'probe-site', loginKind: 'mastodon', verify: 'token-scope', manual: { compose: 'https://{instance}/publish?text={text}' } }] } };
+  const r = stageReport(targetById('probe-site', cfg), [{ id: 'm', kind: 'mastodon', hasToken: true, hasScope: true }], {}, { cfg });
+  assert.equal(r.verification.probe, 'token-scope', 'the site names its own measurement');
+  assert.equal(r.verification.actionable, false, 'running it would need a credential nothing here looks up');
+  assert.equal(r.verification.fallbackProbe, null, 'and there is no host to fall back to either');
 });
 
 t('a login kind with no probe and no host is the one case that has nothing to run, and it says so', () => {
@@ -489,11 +483,11 @@ t('the file/export targets need no login and no verification; their send stage i
 
 t('the API contract of the target list holds for every target (the page reads these fields directly)', () => {
   const accounts = [
-    { id: 'acc-1', kind: 'bilibili', name: 'b', hasSession: true, hasCsrf: true, canSend: true },
+    { id: 'acc-1', kind: 'mastodon', name: 'm', hasToken: true, hasScope: true },
     { id: 'acc-2', kind: 'weibo', name: 'w', hasSession: true, hasCsrf: true, canSend: true },
   ];
   const list = stagesReport(accounts, {}, {});
-  assert.ok(list.length >= 10, 'the list has the file targets plus the sites: ' + list.length);
+  assert.equal(list.length, 9, 'the five file targets plus the four sites: ' + list.map((x) => x.id).join(', '));
   for (const x of list) {
     assert.ok(x.id && x.name?.zh && x.name?.en, x.id + ' has no name');
     assert.equal(typeof x.declaredStatus, 'string', x.id + ' does not say what it declares');
@@ -569,23 +563,38 @@ t('the stage mappings are a table, not a function of the target (so a new site c
 });
 
 t('the verification store reads the old list-of-ids shape instead of dropping it (a working setup must not silently re-block)', () => {
-  const legacy = verificationStore({ share: { verifiedTargets: ['bilibili-dynamic'] } });
-  assert.equal(legacy['bilibili-dynamic']['*'].legacy, true);
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
-  const r = checkReadiness(targetById('bilibili-dynamic'), accounts, legacy);
-  assert.equal(r.ok, false, 'a legacy entry has no account and no date, so it cannot count as a fresh measurement');
-  assert.equal(r.status, 'needs-verification');
+  const legacy = verificationStore({ share: { verifiedTargets: ['weibo-post'] } });
+  assert.equal(legacy['weibo-post']['*'].legacy, true);
+  const accounts = [accountOf('weibo')];
+  const r = stageReport(targetById('weibo-post'), accounts, legacy);
+  // A legacy entry claims "this code path once worked", not "this account can post" -- it carries no account
+  // and no date, and an undated claim cannot be treated as a fresh measurement. So it does not open the send
+  // gate, and it is presented as something that has to be measured again.
+  assert.equal(r.verification.status, 'needed');
+  assert.equal(r.verification.lastOk, true, 'the old pass is still reported as the last known result');
+  assert.ok(r.verification.detail.en.includes('stale'), JSON.stringify(r.verification.detail));
+  const f = verificationFreshness(legacy['weibo-post']['*']);
+  assert.equal(f.verifiedAt, null);
+  assert.equal(f.ageMs, null);
+  assert.equal(f.stale, true, 'an undated entry is presented as stale rather than as fresh');
+  // A declared site is reached through its profile, and a target nobody declares has no profile at all --
+  // which is the shape the fixtures have to go through now that no built-in site carries one of its own.
+  const declared = { share: { sites: [{ id: 'declared', loginKind: 'weibo', host: 'weibo.com' }] } };
+  assert.equal(siteProfileById('declared', declared)?.loginKind, 'weibo');
+  assert.equal(siteProfileById('declared', {}), null);
 });
 
 t('a verification result older than the TTL is presented as stale rather than as done', () => {
   const old = { at: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(), ok: true };
   const f = verificationFreshness(old);
   assert.equal(f.stale, true);
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
-  const store = recordVerification({}, 'bilibili-dynamic', 'acc-1', old);
-  const r = stageReport(targetById('bilibili-dynamic'), accounts, store);
+  const accounts = [accountOf('weibo')];
+  const store = recordVerification({}, 'weibo-post', 'acc-1', old);
+  const r = stageReport(targetById('weibo-post'), accounts, store);
   assert.equal(r.verification.status, 'needed');
-  assert.equal(checkReadiness(targetById('bilibili-dynamic'), accounts, store).ok, false);
+  assert.equal(r.verification.lastOk, true, 'the old pass is still reported, marked as the last one');
+  assert.equal(r.verification.verifiedAt, old.at, 'and the date it was measured at travels with it');
+  assert.ok(r.verification.detail.en.includes('stale') || r.verification.detail.zh.includes('过期'), JSON.stringify(r.verification.detail));
 });
 
 process.stdout.write('\nshare: adding a site of your own (declared profile + measurement)\n');
@@ -595,13 +604,36 @@ const customCfg = {
       {
         id: 'my-site',
         name: { zh: '发到我的站点', en: 'Post to my site' },
-        loginKind: 'bilibili',
-        credential: { zh: '复用 B 站登录态', en: 'reuses the bilibili login' },
-        requirements: ['login', 'session', 'write-permission'],
-        verify: 'login-probe',
+        loginKind: 'weibo',
+        credential: { zh: '复用微博登录态', en: 'reuses the Weibo login' },
+        requirements: ['login', 'session', 'csrf'],
         implemented: false,
         textLimit: 500,
         maxImages: 2,
+      },
+    ],
+  },
+};
+
+/**
+ * A declared site with a **concrete** compose page and a 280-character limit.
+ *
+ * The hand-off's compose-link rules cannot be exercised on the built-in sites any more: the one built-in
+ * template with a `{text}` placeholder is Mastodon's, whose host is `{instance}` (the user's own), so no link
+ * can be built from it -- a fact two checks below assert rather than paper over. A declared site has a real
+ * host and a real limit, which is exactly what those rules need.
+ */
+const composeSiteCfg = {
+  share: {
+    sites: [
+      {
+        id: 'my-compose',
+        name: { zh: '发到我的实例', en: 'Post to my instance' },
+        loginKind: 'mastodon',
+        host: 'example.social',
+        manual: { compose: 'https://example.social/publish?text={text}' },
+        textLimit: 280,
+        maxImages: 4,
       },
     ],
   },
@@ -611,7 +643,7 @@ t('a config-declared site appears in the target list with its own profile', () =
   const ids = shareTargets(customCfg).map((x) => x.id);
   assert.ok(ids.includes('my-site'), 'the custom site is listed: ' + ids.join(', '));
   const p = siteProfileById('my-site', customCfg);
-  assert.equal(p.loginKind, 'bilibili');
+  assert.equal(p.loginKind, 'weibo');
   assert.equal(p.textLimit, 500);
   assert.equal(p.maxImages, 2);
   assert.equal(p.implemented, false);
@@ -621,139 +653,112 @@ t('a config-declared site appears in the target list with its own profile', () =
   assert.equal(targetById('my-site', {}), null);
 });
 
-t('a declared custom site is measured against the real accounts (its requirements are checked, not guessed)', () => {
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
+t('a declared custom site is measured against the credentials it is given (its requirements are checked, not guessed)', () => {
+  const accounts = [accountOf('weibo')];
   const stage = stagesReport(accounts, {}, customCfg).find((x) => x.id === 'my-site');
   assert.equal(stage.stages.account.status, 'satisfied');
   assert.equal(stage.stages.send.status, 'unimplemented');
-  const short = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: false, hasCsrf: false, canSend: false }];
+  const short = [accountOf('weibo', { hasCsrf: false, canSend: false })];
   const stage2 = stagesReport(short, {}, customCfg).find((x) => x.id === 'my-site');
   assert.equal(stage2.stages.account.status, 'missing');
-  assert.deepEqual(stage2.stages.account.unsatisfied.map((u) => u.id), ['session', 'write-permission']);
+  assert.deepEqual(stage2.stages.account.unsatisfied.map((u) => u.id), ['csrf']);
 });
 
 t('a site cannot be added twice, and a site with no login kind does not claim to need one', () => {
-  const dup = shareTargets({ share: { sites: [{ id: 'bilibili-dynamic' }, { id: 'no-login-site', loginKind: null }] } });
-  assert.equal(dup.filter((x) => x.id === 'bilibili-dynamic').length, 1, 'a declared id may not shadow a built-in');
+  const dup = shareTargets({ share: { sites: [{ id: 'weibo-post' }, { id: 'no-login-site', loginKind: null }] } });
+  assert.equal(dup.filter((x) => x.id === 'weibo-post').length, 1, 'a declared id may not shadow a built-in');
   assert.equal(dup.find((x) => x.id === 'no-login-site').needsLogin, false);
 });
 
 t('a custom site with no publish code cannot be posted to, whatever the config asks for', () => {
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
+  const accounts = [accountOf('weibo')];
   const store = recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true });
   const g = guardPost(customCfg, { target: 'my-site', accounts, verified: store, text: 'hi', confirm: true });
   assert.equal(g.ok, false);
   assert.equal(g.status, 'unimplemented');
 });
 
-process.stdout.write('\nshare: measuring the verification stage (on demand, against the site)\n');
-const biliAccount = {
-  id: 'acc-1',
-  kind: 'bilibili',
-  name: 'someone',
-  hasSession: true,
-  hasCsrf: true,
-  canSend: true,
-  // The credential the probe would read out of the browser profile. It is given here directly so the
-  // measurement can be exercised without touching a real browser cookie store (the probe has its own
-  // unit above: a credential that is short of a requirement is never sent anywhere).
-  cookieHeader: 'SESSDATA=x; bili_jct=y;',
-};
-
-await ta('a real measurement that the site answers -> the stage turns done, and it is stored for that account', async () => {
-  const r = await measureVerification(cfg, 'bilibili-dynamic', {
-    accounts: [biliAccount],
-    whoAmI: async () => ({ ok: true, isLogin: true, mid: '12345', uname: 'measured-name' }),
-  });
-  assert.equal(r.ok, true);
-  assert.equal(r.accountId, 'acc-1');
-  assert.equal(r.measured.mid, '12345');
-  assert.ok(r.detail.zh.includes('measured-name'), r.detail.zh);
-  const store = recordVerification({}, 'bilibili-dynamic', r.accountId, { at: r.at, ok: r.ok, detail: r.detail });
-  const stage = stageReport(targetById('bilibili-dynamic'), [biliAccount], store);
+process.stdout.write('\nshare: the verification stage is data the app owns (no probe can run in this build)\n');
+// The two site-specific probes this project implemented belonged to the two sites that were removed, and both
+// needed a credential that nothing here enumerates. What is left is not "no verification" but "the stage
+// still reports, per account and per measurement, what is known": these checks pin that it keeps doing so,
+// and that it never invents a pass.
+await ta('a stored pass for the chosen account turns the stage done, and the send stage still says there is no code', async () => {
+  const account = accountOf('weibo');
+  const store = recordVerification({}, 'weibo-post', account.id, { at: new Date().toISOString(), ok: true, method: 'a measurement', detail: { zh: '通过', en: 'pass' } });
+  const stage = stageReport(targetById('weibo-post'), [account], store);
   assert.equal(stage.verification.status, 'done');
-  assert.equal(stage.send.status, 'ready');
-  assert.equal(stage.send.actionable, true);
+  assert.equal(stage.verification.accountId, account.id);
+  assert.equal(stage.verification.actionable, false, 'the send-stage measurement cannot be run in this build, and says so');
+  assert.equal(stage.send.status, 'unimplemented', 'a verified login does not create publish code');
+  assert.equal(stage.send.actionable, false);
 });
 
-await ta('a site that refuses the credential -> not ok, with the reason the site gave', async () => {
-  const r = await measureVerification(cfg, 'bilibili-dynamic', {
-    accounts: [biliAccount],
-    whoAmI: async () => ({ ok: false, error: 'code=-352 risk control' }),
-  });
-  assert.equal(r.ok, false);
-  assert.ok(r.reason.includes('-352'), r.reason);
-  const store = recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: r.at, ok: r.ok, detail: r.detail });
-  const stage = stageReport(targetById('bilibili-dynamic'), [biliAccount], store);
-  assert.equal(stage.verification.status, 'needed', 'a failed measurement leaves the stage needing attention');
-  assert.ok(stage.verification.detail.zh.includes('-352'), stage.verification.detail.zh);
+await ta('a stored failure leaves the stage needing attention, with the reason the measurement gave', async () => {
+  const account = accountOf('weibo');
+  const store = recordVerification({}, 'weibo-post', account.id, { at: new Date().toISOString(), ok: false, reason: 'the site refused the credential', detail: { zh: '被拒绝', en: 'refused' } });
+  const stage = stageReport(targetById('weibo-post'), [account], store);
+  assert.equal(stage.verification.status, 'needed');
+  assert.equal(stage.verification.lastOk, false);
+  assert.ok(stage.verification.detail.en.includes('refused'), JSON.stringify(stage.verification.detail));
 });
 
-await ta('a credential the site says is logged out -> not ok (the login must be real, not merely present)', async () => {
-  const r = await measureVerification(cfg, 'bilibili-dynamic', {
-    accounts: [biliAccount],
-    whoAmI: async () => ({ ok: true, isLogin: false }),
-  });
-  assert.equal(r.ok, false);
-  assert.ok(r.reason.includes('logged-in'), r.reason);
+await ta('a pass measured for one account says nothing about another account', async () => {
+  const mine = accountOf('weibo', { id: 'acc-1', name: 'mine' });
+  const theirs = accountOf('weibo', { id: 'acc-2', name: 'theirs' });
+  const store = recordVerification({}, 'weibo-post', 'acc-1', { at: new Date().toISOString(), ok: true });
+  assert.equal(stageReport(targetById('weibo-post'), [mine], store).verification.status, 'done');
+  assert.equal(stageReport(targetById('weibo-post'), [theirs], store).verification.status, 'needed');
+  // and the stored result is looked up by (target, account), which is the whole reason the store is keyed
+  // that way rather than by target alone
+  assert.ok(verificationFor(store, 'weibo-post', 'acc-1'));
+  assert.equal(verificationFor(store, 'weibo-post', 'acc-2'), null);
 });
 
-await ta('a site with no probe reports that instead of inventing a pass', async () => {
-  const r = await measureVerification(cfg, 'weibo-post', { accounts: [{ id: 'w', kind: 'weibo', canSend: true }] });
-  assert.equal(r.ok, false);
-  assert.equal(r.implemented, false);
-  assert.ok(r.reason.includes('no probe'), r.reason);
+await ta('nothing here claims a pass it did not measure: a site with no account and no fallback is "not measured"', async () => {
+  const stage = stageReport(targetById('mastodon-post'), [], {});
+  assert.equal(stage.verification.status, 'needed');
+  assert.equal(stage.verification.actionable, false, 'a hostless site has no cookie probe to fall back to');
+  assert.equal(stage.verification.probe, 'token-scope', 'the site names the measurement it declares');
+  assert.equal(stage.verification.fallbackProbe, null, 'and there is nothing this build could run instead');
+  assert.equal(typeof stage.verification.notRunnable?.zh, 'string', 'and it carries the reason in words');
+  assert.equal(typeof stage.verification.notRunnable?.en, 'string');
 });
 
-await ta('with no account there is nothing to measure', async () => {
-  const r = await measureVerification(cfg, 'bilibili-dynamic', { accounts: [] });
-  assert.equal(r.ok, false);
-  assert.ok(r.reason.includes('no bilibili account'), r.reason);
+await ta('every stage that cannot be acted on carries a reason, and every one that can carries none', async () => {
+  // The rule this pins is the one from an earlier round: a disabled control must say why. `actionable:
+  // false` with nothing to read is exactly the dead cell that rule forbids, so the two fields are asserted
+  // together -- on every built-in target, and on a declared profile whose own probe cannot run here.
+  const declared = { share: { sites: [{ id: 'probe-site', loginKind: 'mastodon', verify: 'token-scope', host: 'example.social' }] } };
+  for (const x of [...stagesReport([], {}, {}), ...stagesReport([], {}, declared).filter((y) => y.custom)]) {
+    const v = x.stages.verification;
+    // File/export targets are a third case: their verification stage is `not-required`, which is a complete
+    // answer in itself and needs no reason. The rule is about a stage that describes work that cannot be done.
+    if (v.status === 'not-required') continue;
+    if (v.actionable) assert.equal(v.notRunnable ?? null, null, `${x.id} can be run, so it must not carry a "cannot run" reason`);
+    else assert.ok(v.notRunnable?.zh && v.notRunnable?.en, `${x.id} cannot be acted on and explains nothing`);
+  }
 });
 
-await ta('a credential short of a requirement is not measured at all (no request is sent)', async () => {
-  let called = false;
-  const r = await measureVerification(cfg, 'bilibili-dynamic', {
-    accounts: [{ id: 'acc-1', kind: 'bilibili', hasSession: true, hasCsrf: false, canSend: false }],
-    whoAmI: async () => {
-      called = true;
-      return { ok: true, isLogin: true };
-    },
-  });
-  assert.equal(r.ok, false);
-  assert.equal(called, false, 'it must not ask the site about a credential that is already known to be short');
-  assert.deepEqual(r.unsatisfied.map((u) => u.id), ['csrf', 'write-permission']);
-});
-
-await ta('the scope probe measures the stored token locally, without any network call', async () => {
-  const mastodon = { id: 'm1', kind: 'mastodon', name: 'me@example.social', hasToken: true, hasScope: true };
-  const ok = await measureVerification({}, 'mastodon-post', { accounts: [mastodon] });
-  assert.equal(ok.ok, true);
-  assert.equal(ok.probe, 'token-scope');
-  const missing = await measureVerification({}, 'mastodon-post', {
-    accounts: [{ id: 'm1', kind: 'mastodon', name: 'me', hasToken: true, hasScope: false }],
-  });
-  assert.equal(missing.ok, false);
-  assert.ok(missing.reason.includes('scope'), missing.reason);
-});
-
-await ta('an unknown target is refused rather than measured', async () => {
-  const r = await measureVerification(cfg, 'nope', { accounts: [] });
-  assert.equal(r.ok, false);
-  assert.ok(r.error.includes('unknown target'));
-});
 
 process.stdout.write('\nshare: gates for outbound posting\n');
+// No built-in site has publish code any more, so `guardPost` stops every one of them at "not implemented"
+// before it can look at a login. That is the honest answer of this build, and it is asserted below -- but the
+// login and verification gates behind it are the discipline a future implementation has to pass through, so
+// they are exercised on a **declared** site that claims publish code. The config is hand-written here on
+// purpose: it is the only shape that reaches those gates at all in this build.
+const implementedSiteCfg = { share: { sites: [{ ...customCfg.share.sites[0], implemented: true }] } };
+
 t('no explicit confirmation -> refused', () => {
-  const g = guardPost(cfg, { target: 'bilibili-dynamic', text: 'hi' });
+  const g = guardPost(implementedSiteCfg, { target: 'my-site', text: 'hi' });
   assert.equal(g.ok, false);
   assert.ok(g.error.includes('确认'));
 });
 
-t('an unverified account -> refused (even when already logged in)', () => {
-  const g = guardPost(cfg, {
-    target: 'bilibili-dynamic',
-    accounts: [biliAccount],
+t('an unverified account -> refused (even when the credential is complete)', () => {
+  const g = guardPost(implementedSiteCfg, {
+    target: 'my-site',
+    accounts: [accountOf('weibo')],
     text: 'hi',
     confirm: true,
   });
@@ -762,17 +767,17 @@ t('an unverified account -> refused (even when already logged in)', () => {
 });
 
 t('no account at all -> refused with the account stage as the reason', () => {
-  const g = guardPost(cfg, { target: 'bilibili-dynamic', accounts: [], text: 'hi', confirm: true });
+  const g = guardPost(implementedSiteCfg, { target: 'my-site', accounts: [], text: 'hi', confirm: true });
   assert.equal(g.ok, false);
   assert.equal(g.status, 'needs-login');
-  assert.ok(g.error.includes('SESSDATA'), g.error);
+  assert.ok(g.error.includes('微博'), 'the refusal names the login kind it is missing: ' + g.error);
 });
 
-t('verified + logged in + confirmed -> allowed through', () => {
-  const g = guardPost(cfg, {
-    target: 'bilibili-dynamic',
-    accounts: [biliAccount],
-    verified: recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true }),
+t('logged in + verified + confirmed -> allowed through', () => {
+  const g = guardPost(implementedSiteCfg, {
+    target: 'my-site',
+    accounts: [accountOf('weibo')],
+    verified: recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true }),
     text: '分享内容',
     confirm: true,
   });
@@ -782,10 +787,10 @@ t('verified + logged in + confirmed -> allowed through', () => {
 });
 
 t('verified for a different account -> still refused', () => {
-  const g = guardPost(cfg, {
-    target: 'bilibili-dynamic',
-    accounts: [{ ...biliAccount, id: 'acc-9' }],
-    verified: recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true }),
+  const g = guardPost(implementedSiteCfg, {
+    target: 'my-site',
+    accounts: [accountOf('weibo', { id: 'acc-9' })],
+    verified: recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true }),
     text: 'hi',
     confirm: true,
   });
@@ -793,16 +798,15 @@ t('verified for a different account -> still refused', () => {
   assert.equal(g.status, 'needs-verification');
 });
 
-t('unsupported platform -> refused', () => {
-  const g = guardPost(cfg, { target: 'x-post', text: 'hi', confirm: true });
-  assert.equal(g.ok, false);
-});
-
-t('a site that is declared but not implemented -> refused as unimplemented (no fake success)', () => {
-  const g = guardPost(cfg, { target: 'mastodon-post', text: 'hi', confirm: true });
-  assert.equal(g.ok, false);
-  assert.equal(g.status, 'unimplemented');
-  assert.ok(g.error.includes('还没实现'), g.error);
+t('every built-in site is refused as "no publish code", which is what this build ships', () => {
+  // The other half of the same fact: without a hand-written `implemented: true` the gate never reaches the
+  // login stage at all, so a caller cannot read "this site has no publish code" as "your login is the problem".
+  for (const id of ['weibo-post', 'youtube-community', 'mastodon-post', 'reddit-post']) {
+    const g = guardPost(cfg, { target: id, accounts: [accountOf('weibo')], text: 'hi', confirm: true });
+    assert.equal(g.ok, false, id);
+    assert.equal(g.status, 'unimplemented', id);
+    assert.ok(g.error.includes('还没实现'), id + ': ' + g.error);
+  }
 });
 
 t('not a posting target (for example a download) -> refused', () => {
@@ -811,16 +815,22 @@ t('not a posting target (for example a download) -> refused', () => {
 });
 
 t('empty content and over-long content are blocked', () => {
-  const base = { target: 'bilibili-dynamic', accounts: [biliAccount], verified: recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true }), confirm: true };
-  assert.equal(guardPost(cfg, { ...base, text: '   ' }).ok, false);
-  assert.equal(guardPost(cfg, { ...base, text: 'x'.repeat(2001) }).ok, false);
-  assert.equal(guardPost(cfg, { ...base, text: 'x'.repeat(2000) }).ok, true);
+  const base = {
+    target: 'my-site',
+    accounts: [accountOf('weibo')],
+    verified: recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true }),
+    confirm: true,
+  };
+  // my-site declares 500 characters, so these two bounds are the site's own numbers rather than a constant
+  assert.equal(guardPost(implementedSiteCfg, { ...base, text: '   ' }).ok, false);
+  assert.equal(guardPost(implementedSiteCfg, { ...base, text: 'x'.repeat(501) }).ok, false);
+  assert.equal(guardPost(implementedSiteCfg, { ...base, text: 'x'.repeat(500) }).ok, true);
 });
 
 t('the length gate uses the limit the site itself declares, not a hard-coded 2000', () => {
-  const accounts = [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }];
+  const accounts = [accountOf('weibo')];
   const store = recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true });
-  // my-site declares 500 characters, so this text is over its limit even though bilibili would take it
+  // my-site declares 500 characters, so this text is over its limit even though the other sites would take it
   const custom = { share: { sites: [{ ...customCfg.share.sites[0], implemented: true }] } };
   const g = guardPost(custom, { target: 'my-site', accounts, verified: store, text: 'x'.repeat(600), confirm: true });
   assert.equal(g.ok, false);
@@ -841,7 +851,7 @@ process.stdout.write('\nshare: the edited body per site (the app’s text is not
 const editedFixture = buildBundle({ items: Array.from({ length: 40 }, (_, i) => ({ id: 'e' + i, title: `一条很长的标题 ${i}` })) });
 
 t('an edited body that fits produces a compose link, and the link carries the edited text', () => {
-  const h = buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'edited short body' });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: editedFixture, cfg: composeSiteCfg, text: 'edited short body' });
   assert.equal(h.ok, true);
   assert.equal(h.textSource, 'edited');
   assert.equal(h.text, 'edited short body');
@@ -850,8 +860,8 @@ t('an edited body that fits produces a compose link, and the link carries the ed
 });
 
 t('a body edited past the limit gets no compose link, and is not cut to make one appear', () => {
-  const long = 'y'.repeat(300); // x-post takes 280
-  const h = buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: long });
+  const long = 'y'.repeat(300); // my-compose takes 280
+  const h = buildHandoff({ targetId: 'my-compose', bundle: editedFixture, cfg: composeSiteCfg, text: long });
   assert.equal(h.textSource, 'edited');
   assert.equal(h.fits, false);
   assert.equal(h.composeUrl, null, 'a truncated compose box is how half a post gets published');
@@ -886,8 +896,8 @@ t('an emptied body is an edit too (it means "do not send the app’s report"), n
 vacuously(
   'the compose link follows the edited body (wrong input: a body edited past the limit)',
   (h) => (h.composeUrl ? [] : ['no compose link was produced']),
-  () => buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'short edited body' }),
-  () => buildHandoff({ targetId: 'x-post', bundle: editedFixture, cfg: {}, text: 'z'.repeat(300) })
+  () => buildHandoff({ targetId: 'my-compose', bundle: editedFixture, cfg: composeSiteCfg, text: 'short edited body' }),
+  () => buildHandoff({ targetId: 'my-compose', bundle: editedFixture, cfg: composeSiteCfg, text: 'z'.repeat(300) })
 );
 
 vacuously(
@@ -917,31 +927,31 @@ vacuously(
 vacuously(
   'the account stage reports exactly which requirement is unsatisfied (wrong input: an account that satisfies everything)',
   (accounts) => {
-    const r = stageReport(targetById('bilibili-dynamic'), accounts, {});
+    const r = stageReport(targetById('weibo-post'), accounts, {});
     const missing = r.account.unsatisfied.map((u) => u.id).join(',');
-    return missing === 'csrf,write-permission' ? [] : [`expected the exact missing set, got "${missing}"`];
+    return missing === 'csrf' ? [] : [`expected the exact missing set, got "${missing}"`];
   },
-  () => [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: false, canSend: false }],
-  () => [{ id: 'acc-1', kind: 'bilibili', name: 'someone', hasSession: true, hasCsrf: true, canSend: true }]
+  () => [accountOf('weibo', { hasCsrf: false, canSend: false })],
+  () => [accountOf('weibo')]
 );
 
 vacuously(
   'the verification stage only turns done from a stored pass for that account (wrong input: a pass for another account)',
   (store) => {
-    const stage = stageReport(targetById('bilibili-dynamic'), [biliAccount], store);
+    const stage = stageReport(targetById('weibo-post'), [accountOf('weibo')], store);
     return stage.verification.status === 'done' ? [] : [`expected done for acc-1, got ${stage.verification.status}`];
   },
-  () => recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true }),
-  () => recordVerification({}, 'bilibili-dynamic', 'acc-2', { at: new Date().toISOString(), ok: true })
+  () => recordVerification({}, 'weibo-post', 'acc-1', { at: new Date().toISOString(), ok: true }),
+  () => recordVerification({}, 'weibo-post', 'acc-2', { at: new Date().toISOString(), ok: true })
 );
 
 vacuously(
   'the send gate opens exactly when the account has a fresh measured pass (wrong input: no pass at all)',
   (verified) => {
-    const g = guardPost(cfg, { target: 'bilibili-dynamic', accounts: [biliAccount], verified, text: 'hi', confirm: true });
+    const g = guardPost(implementedSiteCfg, { target: 'my-site', accounts: [accountOf('weibo')], verified, text: 'hi', confirm: true });
     return g.ok ? [] : [`expected the gate to open, it said: ${g.error}`];
   },
-  () => recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: new Date().toISOString(), ok: true }),
+  () => recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true }),
   () => ({})
 );
 
@@ -950,7 +960,7 @@ vacuously(
   (c) => {
     const g = guardPost(c, {
       target: 'my-site',
-      accounts: [biliAccount],
+      accounts: [accountOf('weibo')],
       text: 'hi',
       confirm: true,
       verified: recordVerification({}, 'my-site', 'acc-1', { at: new Date().toISOString(), ok: true }),
@@ -966,7 +976,7 @@ vacuously(
   (mapping) => {
     // The "missing account" state is used here on purpose: with a usable account the account stage maps to
     // shareReady, which even the deliberately narrowed mapping contains, and the control would be blind.
-    const r = stageReport(targetById('bilibili-dynamic'), [], {});
+    const r = stageReport(targetById('weibo-post'), [], {});
     return mapping.has(r.account.i18nKey) ? [] : [`"${r.account.i18nKey}" is not a UI entry`];
   },
   () => new Set(['shareReady', 'shareNeedsLogin', 'shareNeedsVerify', 'shareUnsupported', 'shareUnsupportedShort', 'shareCannotWithoutLogin', 'yes']),
@@ -976,8 +986,8 @@ vacuously(
 vacuously(
   'a measurement result is stored for the account it was measured with (wrong input: stored under another key)',
   (key) => {
-    const store = recordVerification({}, 'bilibili-dynamic', key, { at: new Date().toISOString(), ok: true });
-    return verificationFor(store, 'bilibili-dynamic', 'acc-1') ? [] : ['the result was not found under acc-1'];
+    const store = recordVerification({}, 'weibo-post', key, { at: new Date().toISOString(), ok: true });
+    return verificationFor(store, 'weibo-post', 'acc-1') ? [] : ['the result was not found under acc-1'];
   },
   () => 'acc-1',
   () => 'acc-1-typo'
@@ -995,15 +1005,15 @@ const findInDict = (payload) => {
   return bad;
 };
 
-/** Fixtures for the control families: one bundle too long for a 280-character site, and two bilibili accounts */
+/** Fixtures for the control families: one bundle too long for a 280-character site, and two accounts of one kind */
 const longHandoffBundle = () =>
   buildBundle({ items: Array.from({ length: 40 }, (_, i) => ({ id: 'x' + i, title: '一条很长的标题 ' + i })) });
-const accountA = { id: 'acc-a', kind: 'bilibili', name: 'account-a', hasSession: true, hasCsrf: true, canSend: true };
-const accountB = { id: 'acc-b', kind: 'bilibili', name: 'account-b', hasSession: true, hasCsrf: true, canSend: true };
+const accountA = accountOf('weibo', { id: 'acc-a', name: 'account-a' });
+const accountB = accountOf('weibo', { id: 'acc-b', name: 'account-b' });
 const settingsBefore = () => ({
   share: {
     images: { mode: 'source', maxPerBundle: 2, inlineMaxBytes: 1000 },
-    accounts: { 'x-post': 'acc-1' },
+    accounts: { 'weibo-post': 'acc-1' },
     sites: [{ id: 'keep-me', name: { zh: 'a', en: 'a' }, loginKind: 'reddit' }],
   },
 });
@@ -1031,8 +1041,8 @@ vacuously(
   () => stagesReport([], {}, {}),
   () => {
     const list = stagesReport([], {}, {});
-    // drop `actionable` from the one site whose verification stage is blocked by the platform
-    const x = list.find((t) => t.id === 'x-post');
+    // drop `actionable` from the one target whose login stage has nothing left to run (a hostless site)
+    const x = list.find((t) => t.id === 'mastodon-post');
     delete x.stages.verification.actionable;
     return list;
   }
@@ -1045,7 +1055,7 @@ const handoffBody = 'VML 日报 & 摘要 #1\n· 第一条 https://example.com/a?
 
 t('a site with no publish code produces a hand-off that carries the body and a compose link', () => {
   const b = buildBundle({ items, title: 'VML 日报' });
-  const h = buildHandoff({ targetId: 'x-post', bundle: b, cfg: {} });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: b, cfg: composeSiteCfg });
   assert.equal(h.ok, true);
   assert.equal(h.manual, true);
   assert.equal(h.sent, false, 'a hand-off never sends');
@@ -1056,11 +1066,11 @@ t('a site with no publish code produces a hand-off that carries the body and a c
   assert.ok(h.site.textLimit > 0);
   const u = new URL(h.composeUrl);
   assert.equal(u.protocol, 'https:');
-  assert.equal(u.host, 'twitter.com');
+  assert.equal(u.host, 'example.social', 'the compose link points at the site the profile declares');
 });
 
 t('the compose URL is really encoded: &, # and spaces survive the round trip', () => {
-  const h = buildHandoff({ targetId: 'x-post', bundle: buildBundle({ items: [{ id: 'i', title: handoffBody }] }), cfg: {} });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: buildBundle({ items: [{ id: 'i', title: handoffBody }] }), cfg: composeSiteCfg });
   const u = new URL(h.composeUrl);
   const back = u.searchParams.get('text');
   assert.ok(back, 'the text parameter is present');
@@ -1073,7 +1083,7 @@ t('the compose URL is really encoded: &, # and spaces survive the round trip', (
 
 t('a body over the site limit does not get a truncated compose box', () => {
   const long = buildBundle({ items: Array.from({ length: 40 }, (_, i) => ({ id: 'x' + i, title: '一条很长的标题 ' + i })) });
-  const h = buildHandoff({ targetId: 'x-post', bundle: long, cfg: {} });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: long, cfg: composeSiteCfg });
   assert.equal(h.truncated, true);
   assert.equal(h.fits, false);
   assert.equal(h.composeUrl, null, 'no compose link when the whole body does not fit');
@@ -1102,7 +1112,7 @@ t('building a hand-off makes no network call at all (text and links only)', () =
   // nothing that returns a promise, while every network path in this module goes through netFetch/async
   // functions. The check states the property that is being relied on -- "you get an object back, not a
   // promise" -- so a future edit that sneaks a fetch in has to change that shape first.
-  const h = buildHandoff({ targetId: 'x-post', bundle: buildBundle({ items, title: 'x' }), cfg: {} });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: buildBundle({ items, title: 'x' }), cfg: composeSiteCfg });
   assert.equal(typeof h.then, 'undefined', 'a hand-off is computed, not fetched');
   assert.ok(!('cookieHeader' in h) && !('response' in h), 'and nothing from the network is in it');
   assert.equal(JSON.stringify(h).includes('SESSDATA'), false, 'no credential material ends up in a hand-off');
@@ -1119,15 +1129,17 @@ t('a site with no compose template still gets a hand-off (copy and download are 
 
 t('the hand-off carries the image setting resolved against the site, not the page default', () => {
   const cfg = { share: { images: { mode: 'inline', maxPerBundle: 4 } } };
-  const h = buildHandoff({ targetId: 'x-post', bundle: buildBundle({ items, title: 'x' }), cfg });
+  const h = buildHandoff({ targetId: 'reddit-post', bundle: buildBundle({ items, title: 'x' }), cfg });
   assert.equal(h.images.mode, 'inline');
-  assert.equal(h.images.maxPerBundle, 4, 'x-post takes 4 images, and the setting is 4');
+  assert.equal(h.images.maxPerBundle, 4, 'reddit takes 20 images and the setting is 4, so the setting is the limit');
   const small = buildHandoff({ targetId: 'youtube-community', bundle: buildBundle({ items, title: 'x' }), cfg });
   assert.equal(small.images.maxPerBundle, 1, 'the site ceiling wins when it is smaller (YouTube community: 1)');
 });
 
 t('a site this build CAN post to is not offered a hand-off (the manual path must not shadow the real one)', () => {
-  const h = buildHandoff({ targetId: 'bilibili-dynamic', bundle: buildBundle({ items, title: 'x' }), cfg: {} });
+  // No built-in site claims publish code, so the shape is exercised on a declared one.
+  const declaredImplemented = { share: { sites: [{ ...customCfg.share.sites[0], implemented: true }] } };
+  const h = buildHandoff({ targetId: 'my-site', bundle: buildBundle({ items, title: 'x' }), cfg: declaredImplemented });
   assert.equal(h.ok, false);
   assert.ok(h.error.includes('implemented'), h.error);
 });
@@ -1155,25 +1167,25 @@ t('a hand-off of a non-posting target is refused', () => {
 
 process.stdout.write('\nshare: configuring sites and settings\n');
 t('a hand-added site is normalized: requirements come from what this build can check, and it may declare a compose page', () => {
-  const tw = sanitizeSiteEntry({ id: 'my-blog', name: { zh: '我的博客', en: 'my blog' }, loginKind: 'twitter' });
-  assert.equal(tw.ok, true);
-  assert.deepEqual(tw.site.requirements, ['login', 'token', 'scope'], 'oauth kind: what can be checked is token and scope');
-  assert.equal(tw.site.implemented, false, 'a form can never claim the app can publish');
-  assert.equal(tw.site.verify, null, 'no probe exists for twitter, and the entry must not pretend one does');
+  const oauth = sanitizeSiteEntry({ id: 'my-blog', name: { zh: '我的博客', en: 'my blog' }, loginKind: 'reddit' });
+  assert.equal(oauth.ok, true);
+  assert.deepEqual(oauth.site.requirements, ['login', 'token', 'scope'], 'oauth kind: what can be checked is token and scope');
+  assert.equal(oauth.site.implemented, false, 'a form can never claim the app can publish');
+  assert.equal(oauth.site.verify, null, 'no probe exists for that kind, and the entry must not pretend one does');
   const cookie = sanitizeSiteEntry({ id: 'my-bbs', loginKind: 'weibo' });
   assert.deepEqual(cookie.site.requirements, ['login', 'session', 'csrf']);
   const none = sanitizeSiteEntry({ id: 'open-board', loginKind: null });
   assert.deepEqual(none.site.requirements, ['anonymous'], 'no login still has to declare something to check');
-  const withCompose = sanitizeSiteEntry({ id: 'my-forum', loginKind: 'bilibili', manual: { compose: 'https://forum.example.com/new?body={text}' } });
+  const withCompose = sanitizeSiteEntry({ id: 'my-forum', loginKind: 'weibo', manual: { compose: 'https://forum.example.com/new?body={text}' } });
   assert.equal(withCompose.site.manual.compose, 'https://forum.example.com/new?body={text}');
-  const bili = sanitizeSiteEntry({ id: 'my-bili', loginKind: 'bilibili' });
-  assert.equal(bili.site.verify, 'login-probe', 'the one probe this build has is offered where it applies');
+  const retired = sanitizeSiteEntry({ id: 'my-old-site', loginKind: 'bilibili' });
+  assert.equal(retired.ok, false, 'a login kind this build does not know must be refused, not stored');
 });
 
 t('a hand-added site with a bad id or a bad compose URL is refused with a reason', () => {
   assert.equal(sanitizeSiteEntry({ id: 'a' }).ok, false, 'too short');
   assert.equal(sanitizeSiteEntry({ id: 'has space' }).ok, false);
-  assert.equal(sanitizeSiteEntry({ id: 'bilibili-dynamic' }).ok, false, 'a built-in id may not be shadowed');
+  assert.equal(sanitizeSiteEntry({ id: 'weibo-post' }).ok, false, 'a built-in id may not be shadowed');
   assert.equal(sanitizeSiteEntry({ id: 'ok-site', loginKind: 'myspace' }).ok, false, 'unknown login kind');
   const javascript = sanitizeSiteEntry({ id: 'ok-site', loginKind: 'reddit', manual: { compose: 'javascript:alert(1)?text={text}' } });
   assert.equal(javascript.ok, true);
@@ -1181,12 +1193,12 @@ t('a hand-added site with a bad id or a bad compose URL is refused with a reason
 });
 
 t('settings changes are merged, not replaced (a partial write must not delete what was not sent)', () => {
-  const before = { share: { images: { mode: 'source', maxPerBundle: 2, inlineMaxBytes: 1000 }, sites: [{ id: 'keep-me', name: { zh: 'a', en: 'a' }, loginKind: 'reddit' }], accounts: { 'x-post': 'acc-1' } } };
+  const before = { share: { images: { mode: 'source', maxPerBundle: 2, inlineMaxBytes: 1000 }, sites: [{ id: 'keep-me', name: { zh: 'a', en: 'a' }, loginKind: 'reddit' }], accounts: { 'weibo-post': 'acc-1' } } };
   const after = applyShareSettings(before, { images: { mode: 'inline' } });
   assert.equal(after.share.images.mode, 'inline');
   assert.equal(after.share.images.maxPerBundle, 2, 'the count was not sent, so it must survive');
   assert.equal(after.share.images.inlineMaxBytes, 1000);
-  assert.deepEqual(after.share.accounts, { 'x-post': 'acc-1' }, 'accounts survive an image-only patch');
+  assert.deepEqual(after.share.accounts, { 'weibo-post': 'acc-1' }, 'accounts survive an image-only patch');
   const withSite = applyShareSettings(after, { sites: [{ id: 'new-one', loginKind: 'mastodon' }] });
   assert.deepEqual(withSite.share.sites.map((s) => s.id).sort(), ['keep-me', 'new-one'], 'adding a site must not remove the others');
   const removed = applyShareSettings(withSite, { removeSites: ['keep-me'] });
@@ -1198,48 +1210,48 @@ t('settings changes are merged, not replaced (a partial write must not delete wh
 
 t('an unknown account choice is ignored instead of being stored as-is', () => {
   const cfg = { share: { accounts: {} } };
-  const after = applyShareSettings(cfg, { accounts: { 'x-post': 'acc-1', 'not-a-target': 'acc-2' } });
-  assert.deepEqual(after.share.accounts, { 'x-post': 'acc-1' });
-  const cleared = applyShareSettings(after, { accounts: { 'x-post': null } });
-  assert.equal('x-post' in cleared.share.accounts, false);
+  const after = applyShareSettings(cfg, { accounts: { 'weibo-post': 'acc-1', 'not-a-target': 'acc-2' } });
+  assert.deepEqual(after.share.accounts, { 'weibo-post': 'acc-1' });
+  const cleared = applyShareSettings(after, { accounts: { 'weibo-post': null } });
+  assert.equal('weibo-post' in cleared.share.accounts, false);
 });
 
 t('the chosen account is used when it still exists, and the automatic pick when it does not', () => {
   const accounts = [
-    { id: 'acc-a', kind: 'bilibili', name: 'a', hasSession: true, hasCsrf: true, canSend: true },
-    { id: 'acc-b', kind: 'bilibili', name: 'b', hasSession: true, hasCsrf: true, canSend: true },
+    accountOf('weibo', { id: 'acc-a', name: 'a' }),
+    accountOf('weibo', { id: 'acc-b', name: 'b' }),
   ];
-  assert.equal(pickAccountId('bilibili-dynamic', accounts, { share: { accounts: { 'bilibili-dynamic': 'acc-b' } } }), 'acc-b');
-  assert.equal(pickAccountId('bilibili-dynamic', accounts, { share: { accounts: { 'bilibili-dynamic': 'gone' } } }), null, 'a stale choice falls back to the automatic pick');
-  assert.equal(pickAccountId('bilibili-dynamic', accounts, {}), null);
-  const r = stageReport(targetById('bilibili-dynamic'), accounts, {}, { cfg: { share: { accounts: { 'bilibili-dynamic': 'acc-b' } } } });
+  assert.equal(pickAccountId('weibo-post', accounts, { share: { accounts: { 'weibo-post': 'acc-b' } } }), 'acc-b');
+  assert.equal(pickAccountId('weibo-post', accounts, { share: { accounts: { 'weibo-post': 'gone' } } }), null, 'a stale choice falls back to the automatic pick');
+  assert.equal(pickAccountId('weibo-post', accounts, {}), null);
+  const r = stageReport(targetById('weibo-post'), accounts, {}, { cfg: { share: { accounts: { 'weibo-post': 'acc-b' } } } });
   assert.equal(r.account.accountName, 'b', 'the stored choice is what the stage reports');
 });
 
 t('the account chooser lists what each candidate already satisfies', () => {
   const accounts = [
-    { id: 'acc-a', kind: 'bilibili', name: 'a', hasSession: true, hasCsrf: false, canSend: false },
-    { id: 'acc-b', kind: 'bilibili', name: 'b', hasSession: true, hasCsrf: true, canSend: true },
-    { id: 'acc-w', kind: 'weibo', name: 'w', hasSession: true, hasCsrf: true, canSend: true },
+    accountOf('weibo', { id: 'acc-a', name: 'a', hasCsrf: false, canSend: false }),
+    accountOf('weibo', { id: 'acc-b', name: 'b' }),
+    accountOf('mastodon', { id: 'acc-m', name: 'm' }),
   ];
-  const list = accountsForTarget('bilibili-dynamic', accounts, {});
+  const list = accountsForTarget('weibo-post', accounts, {});
   assert.equal(list.length, 2, 'only the accounts of this site login kind: ' + JSON.stringify(list.map((a) => a.id)));
   assert.equal(list.find((a) => a.id === 'acc-a').usable, false);
-  assert.deepEqual(list.find((a) => a.id === 'acc-a').unsatisfied.map((u) => u.id), ['csrf', 'write-permission']);
+  assert.deepEqual(list.find((a) => a.id === 'acc-a').unsatisfied.map((u) => u.id), ['csrf']);
   assert.equal(list.find((a) => a.id === 'acc-b').usable, true);
   assert.deepEqual(accountsForTarget('text', accounts, {}), [], 'a file target has no accounts to choose from');
 });
 
 t('the requirement checklist is only built when it is asked for, and it names what cannot be checked', () => {
-  const accounts = [{ id: 'acc-a', kind: 'bilibili', name: 'a', hasSession: true, hasCsrf: false, canSend: false }];
-  const plain = stageReport(targetById('bilibili-dynamic'), accounts, {});
+  const accounts = [accountOf('weibo', { id: 'acc-a', name: 'a', hasCsrf: false, canSend: false })];
+  const plain = stageReport(targetById('weibo-post'), accounts, {});
   assert.equal(plain.account.requirementRows, undefined, 'the list is opt-in (the target list is polled)');
-  const withRows = stageReport(targetById('bilibili-dynamic'), accounts, {}, { requirementRows: true });
+  const withRows = stageReport(targetById('weibo-post'), accounts, {}, { requirementRows: true });
   const rows = withRows.account.requirementRows;
-  assert.equal(rows.length, 4);
+  assert.equal(rows.length, 3);
   assert.equal(rows.find((r) => r.id === 'csrf').satisfied, false, 'the missing CSRF token is visible in the checklist');
   assert.equal(rows.find((r) => r.id === 'login').satisfied, true);
-  assert.equal(rows.every((r) => r.checkable), true, 'every bilibili requirement is measurable here');
+  assert.equal(rows.every((r) => r.checkable), true, 'every requirement of this kind is measurable here');
   // A requirement nothing can measure must say so rather than show as satisfied
   const custom = siteProfileById('no-compose', { share: { sites: [{ id: 'no-compose', loginKind: 'reddit', requirements: ['login', 'token', 'mystery'] }] } });
   assert.equal(custom.requirements.includes('mystery'), true);
@@ -1250,9 +1262,9 @@ t('the requirement checklist is only built when it is asked for, and it names wh
 });
 
 t('what gets stored is (target, account) with a date and a verdict, nothing else', () => {
-  const store = recordVerification({}, 'bilibili-dynamic', 'acc-1', { at: '2026-09-16T00:00:00.000Z', ok: true, detail: { zh: 'x', en: 'x' }, reason: null });
+  const store = recordVerification({}, 'weibo-post', 'acc-1', { at: '2026-09-16T00:00:00.000Z', ok: true, detail: { zh: 'x', en: 'x' }, reason: null });
   const slim = verifiedByTarget(store);
-  assert.deepEqual(slim, { 'bilibili-dynamic': { 'acc-1': { at: '2026-09-16T00:00:00.000Z', ok: true } } });
+  assert.deepEqual(slim, { 'weibo-post': { 'acc-1': { at: '2026-09-16T00:00:00.000Z', ok: true } } });
 });
 
 t('what a site would carry is built from the items, titled and linked, not dumped as JSON', () => {
@@ -1286,29 +1298,29 @@ vacuously(
   },
   () => {
     const bundle = buildBundle({ items, title: 'VML 日报' });
-    return { url: buildHandoff({ targetId: 'x-post', bundle, cfg: {} }).composeUrl, wanted: renderSiteText(bundle) };
+    return { url: buildHandoff({ targetId: 'my-compose', bundle, cfg: composeSiteCfg }).composeUrl, wanted: renderSiteText(bundle) };
   },
-  () => ({ url: 'https://twitter.com/intent/tweet?text=' + renderSiteText(buildBundle({ items, title: 'VML 日报' })), wanted: renderSiteText(buildBundle({ items, title: 'VML 日报' })) }) // what naive concatenation produces
+  () => ({ url: 'https://example.social/publish?text=' + renderSiteText(buildBundle({ items, title: 'VML 日报' })), wanted: renderSiteText(buildBundle({ items, title: 'VML 日报' })) }) // what naive concatenation produces
 );
 
 vacuously(
   'a body over the limit is prepared as a cut body instead of a truncated compose box (wrong input: a limit it fits in)',
   (h) => (h.fits === false && h.composeUrl === null ? [] : ['the hand-off did not treat the body as one that does not fit']),
-  () => buildHandoff({ targetId: 'x-post', bundle: longHandoffBundle(), cfg: {} }),
-  // A declared site with X's compose template but a limit the body fits in: the only difference from the
+  () => buildHandoff({ targetId: 'my-compose', bundle: longHandoffBundle(), cfg: composeSiteCfg }),
+  // A declared site with the same compose template but a limit the body fits in: the only difference from the
   // right input is the limit, so a check that fires here is measuring the limit and nothing else.
   () =>
     buildHandoff({
       targetId: 'ctrl-roomy',
       bundle: longHandoffBundle(),
-      cfg: { share: { sites: [{ id: 'ctrl-roomy', loginKind: 'twitter', textLimit: 50000, manual: { compose: 'https://twitter.com/intent/tweet?text={text}' } }] } },
+      cfg: { share: { sites: [{ id: 'ctrl-roomy', loginKind: 'mastodon', textLimit: 50000, manual: { compose: 'https://example.social/publish?text={text}' } }] } },
     })
 );
 
 // The other two properties of a cut body, asserted on their own so the control above stays precise
 // (one wrong fact, one firing check -- a control that fires twice is reporting something else as well).
 t('a cut body says so in the text and stays inside the limit it was cut for', () => {
-  const h = buildHandoff({ targetId: 'x-post', bundle: longHandoffBundle(), cfg: {} });
+  const h = buildHandoff({ targetId: 'my-compose', bundle: longHandoffBundle(), cfg: composeSiteCfg });
   assert.ok(h.text.length <= h.textLimit, `${h.text.length} > ${h.textLimit}`);
   assert.ok(h.text.includes('cut to fit the limit'), 'the marker has to be inside the text: ' + h.text.slice(-70));
   assert.ok(h.composeNote.zh.includes(String(h.textLimit)), h.composeNote.zh);
@@ -1317,7 +1329,7 @@ t('a cut body says so in the text and stays inside the limit it was cut for', ()
 vacuously(
   'the hand-off is only offered where the app cannot publish (wrong input: the site that IS implemented)',
   (h) => (h.ok === false ? [] : ['a hand-off was offered for a site this build can post to']),
-  () => buildHandoff({ targetId: 'bilibili-dynamic', bundle: buildBundle({ items, title: 'x' }), cfg: {} }),
+  () => buildHandoff({ targetId: 'my-site', bundle: buildBundle({ items, title: 'x' }), cfg: { share: { sites: [{ ...customCfg.share.sites[0], implemented: true }] } } }),
   () => buildHandoff({ targetId: 'reddit-post', bundle: buildBundle({ items, title: 'x' }), cfg: {} })
 );
 
@@ -1325,7 +1337,7 @@ vacuously(
   'a hand-added site declares what can be checked for its login kind (wrong input: the cookie kind instead of the token kind)',
   (site) => (JSON.stringify(site.requirements) === JSON.stringify(['login', 'token', 'scope']) ? [] : [`requirements were ${JSON.stringify(site.requirements)}`]),
   () => sanitizeSiteEntry({ id: 'ctrl-oauth', loginKind: 'reddit' }).site,
-  () => sanitizeSiteEntry({ id: 'ctrl-cookie', loginKind: 'bilibili' }).site
+  () => sanitizeSiteEntry({ id: 'ctrl-cookie', loginKind: 'weibo' }).site
 );
 
 vacuously(
@@ -1334,7 +1346,7 @@ vacuously(
     const bad = [];
     if (share.images.mode !== 'inline') bad.push('the new mode was not applied');
     if (share.images.maxPerBundle !== 2) bad.push('the untouched image count was lost');
-    if (!share.accounts?.['x-post']) bad.push('the untouched account choice was lost');
+    if (!share.accounts?.['weibo-post']) bad.push('the untouched account choice was lost');
     if (share.sites?.length !== 1) bad.push('the untouched declared site was lost');
     return bad;
   },
@@ -1345,17 +1357,17 @@ vacuously(
 vacuously(
   'the stored account choice is what the stage reports (wrong input: a choice made for another target)',
   (cfg) => {
-    const r = stageReport(targetById('bilibili-dynamic'), [accountA, accountB], {}, { cfg });
+    const r = stageReport(targetById('weibo-post'), [accountA, accountB], {}, { cfg });
     return r.account.accountName === accountB.name ? [] : [`the account stage reported ${r.account.accountName}`];
   },
-  () => ({ share: { accounts: { 'bilibili-dynamic': accountB.id } } }),
-  () => ({ share: { accounts: { 'x-post': accountB.id } } })
+  () => ({ share: { accounts: { 'weibo-post': accountB.id } } }),
+  () => ({ share: { accounts: { 'youtube-community': accountB.id } } })
 );
 
 process.stdout.write('\nshare: audit\n');
 t('the audit is writable, readable and append-only', () => {
   assert.equal(appendAudit(cfg, { action: 'download', target: 'file-html', items: 2 }), true);
-  assert.equal(appendAudit(cfg, { action: 'post', target: 'bilibili-dynamic', ok: true }), true);
+  assert.equal(appendAudit(cfg, { action: 'post', target: 'weibo-post', ok: true }), true);
   const log = readAudit(cfg, 10);
   assert.equal(log.length, 2);
   assert.equal(log[0].action, 'post', 'the newest comes first');

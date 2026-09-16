@@ -17,8 +17,6 @@ const NEEDS = [
   ['features', true],
   ['assist', true],
   ['search', false],
-  ['live', false],
-  ['danmaku', false],
   ['probe', false],
 ];
 

@@ -145,9 +145,25 @@ function decryptV10(key, buf) {
 }
 
 /**
+ * Cookies whose **name** means "this browser is signed in".
+ *
+ * The names are generic session-cookie names rather than a per-site table, and the consumers use them as a
+ * verdict about a verdict: a host whose own session cookie is not listed reports "cookies, but probably not
+ * a login" instead of claiming a login it did not see, which is the conservative direction. A per-site name
+ * used to be spelled out here (the platform the product no longer knows); the list is now about the shape of
+ * a session cookie, which is not a fact about any one site.
+ */
+export const SESSION_COOKIE = /^(SUB|auth_token|sessionid|session|csrftoken|sid)$/i;
+
+/** Whether a cookie store's names include something that looks like a login session */
+export function hasSessionCookie(names) {
+  return (Array.isArray(names) ? names : []).some((n) => SESSION_COOKIE.test(String(n)));
+}
+
+/**
  * Read the cookies for the given domains.
  * @param {string} profileDir the browser userData root, or one profile inside it
- * @param {string[]} domains  e.g. ['bilibili.com']
+ * @param {string[]} domains  e.g. ['reddit.com', 'www.reddit.com']
  * @returns {Promise<{ok:boolean, error?:string, warning?:string, cookieHeader?:string, names?:string[], profile?:string}>}
  */
 export async function readBrowserCookies(profileDir, domains) {

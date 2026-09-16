@@ -13,8 +13,8 @@
 
 Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. Once configured, it will:
 
-1. **Scrape the sources you tick** (Reddit / Fandom / Moegirlpedia / Twitch / X / YouTube / official news pages / **bilibili dynamics** / merch platforms …)
-2. **Check the watch targets you pin** — one wiki page, one arbitrary URL, one bilibili UP — and report exactly what changed
+1. **Scrape the sources you tick** — 23 built-in sources (Reddit / Fandom / Moegirlpedia / Twitch / YouTube / official news pages / merch platforms …), four fetch kinds
+2. **Check the watch targets you pin** — any web page, a wiki page, a wiki recent-changes stream, your own wiki watchlist — and report exactly what changed
 3. **Group intel by person, not by source**: fill in names and accounts and the app attributes items locally (plain string matching, no network, no LLM), showing exactly which alias hit which field
 4. **Merge the same event across sources**: similarity dedupe + source weight (official > news > community > social), with a "confirmed by N sources" marker
 5. **Analyse everything with an LLM** (optional) into a structured report; images can be tagged by a vision model and become searchable labels
@@ -26,28 +26,27 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 | --- | --- |
 | **Intel** | Every item from the latest run as a card; merge-duplicates view; picture tags, person hits and keyword alerts are flagged |
 | **Search** | Pure local matching (keyword / tag / time) — no LLM, no network |
-| **Live** | Live status (live / rerun / offline) + multi-screen; you can send a danmaku from the channel (login required, manual confirmation) |
 | **People** | The follow list — names, aliases, accounts; per-person feed and export; match evidence on demand; **import from the VDB roster** (brings group and per-platform accounts along) |
 | **Calendar** | Birthday / debut / 3D reveal / anniversary countdowns + a month grid; leap days and regional time zones handled |
 | **Run** | Collect now (regular / merch / watch-targets-only) with live progress and log |
-| **Sources** | Tick any of 30 built-in adapters; per-source egress, latency/loss, self-test; add your own visually |
+| **Sources** | Tick any of 23 built-in adapters; per-source egress, latency/loss, self-test; add your own visually |
 | **Watch** | Watch targets, alarm rules, change history and diffs |
+| **Browser** | The one page that owns the browser and its profile: mode, profile discovery, anonymous mode, and a per-feature table saying what each dependent feature needs and whether it has it; **Check login** reads a host's cookie store read-only |
 | **LLM** | Profiles (multi-provider / model / key, masked, one-click test, model list); which features need it |
 | **Settings** | Browser, egress (direct / proxy / Tor, auto-matched per site), schedule, notifications, privacy, interface |
 | **Reports** | Trend charts + one-click share + report list: rendered / raw, search, export, two-version comparison |
 
-## The ten capabilities (all with self-tests)
+## The nine capabilities (all with self-tests)
 
 | Capability | Highlights |
 | --- | --- |
 | **Anniversary countdowns** | 2/29 rolls to 3/1 in common years **and says so**; "today" follows your configured time zone; week start follows the region |
-| **Danmaku sending** | **WBI signing** (nav → key → 64-slot permutation → `w_rid`); six gates: explicit confirmation, named account, cookie re-read on the spot, local rate limit, audit trail, never automated |
 | **Push channels & quiet hours** | 12 channels (Bark / ServerChan / Telegram / **DingTalk signed** / WeCom / ntfy / Gotify / PushPlus / Slack / Discord / Feishu / custom); notifications inside quiet hours are **queued and re-sent, not dropped**, midnight crossing handled, bad config fails open |
 | **Follow by person** | CJK substring matching + Latin word-boundary matching (so `Rei` does not hit `Reimu`); every hit carries evidence |
 | **Image tagging** | 8 kinds + visible text; cached per image URL; **off by default** — sending images to an external service requires you to turn it on |
 | **Event merge & source weight** | IDF-weighted similarity + union-find single link + time window; weights grow from "who reported it first" |
 | **SQLite archive & charts** | Idempotent incremental writes keyed by item id; daily counts; charts are **inline SVG**, no chart library |
-| **One-click share** | A single HTML file with zero external references (readable offline); **login requirements stated honestly per platform**, unsupported ones are labelled as such |
+| **One-click share** | A single HTML file with zero external references (readable offline), plus copy-as-text / Markdown / JSON / webhook. Each posting site is described as **three stages kept apart** (account / verification / send) with its login requirement stated honestly; a site this build has no publishing code for says *that*, and hands the composed body to the site's own compose page as a recorded manual action |
 | **Locales & regions** | 29 locales (zh-Hant/HK/TW, en-US/GB/AU/CA, es-ES/419/MX/AR, pt-PT/BR, fr-FR/CA, de/it/ja/ko/ru/uk/pl/sr/ar, id-ID, fil-PH, th-TH, vi-VN); RTL; dates, numbers and week start formatted per region; **plural forms** chosen by `Intl.PluralRules` (`1 запись / 2 записи / 5 записей`, which also fixes the old English `1 items`); per-entry proofreading, a coverage ratchet and a markup-rendering guard all run inside `verify:fast` |
 | **Automatic egress** | Each site picks direct or proxy by "effective latency = mean latency × (1 + loss × 4)", with stickiness (no switch below a 20% edge); real fetch results feed the decision back |
 
@@ -56,7 +55,8 @@ Runs a small local service (`http://127.0.0.1:43110` by default) with a web UI. 
 The dimension "follow by person" and "group view" were missing is **the agency**. Filling in 30 people by hand means 30 forms, so this connects to a public roster: `github.com/dd-center/vdb` (the upstream database behind vtbs.moe), **one file per person** — multilingual names + per-platform accounts + group.
 
 - **The whole database in one request**: the tarball is only **0.54 MB / 10035 records / 215 groups**; one request, a second or two, instead of thousands of API calls
-- **Platform-agnostic**: 27 platforms (bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico / showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon / line / github …). Searching **any** platform's account id or URL form works; nothing in the code assumes bilibili
+- **Platform-agnostic**: 27 platforms (bilibili / youtube / twitter / twitch / tiktok / weibo / acfun / niconico / showroom / pixiv / afdian / ci-en / booth / fantia / marshmallow / instagram / telegram / patreon / line / github …). Searching **any** platform's account id or URL form works, and nothing in the code special-cases a platform
+- **Those account fields are data about people, not a connection to those sites**: a person's `bilibili` or `twitter` id is a field name in their record, matched locally against text the app already collected. It is never fetched, queried or posted to — the platform set here is the roster's vocabulary, not this build's network
 - **Import takes the same sanitising path**: selection → person shape → the same validation as manual entry; anything rejected is reported per row with a reason, never silently dropped
 - **Licensed CC BY-NC-SA 4.0**: so it is **fetched at runtime only**, cached in a runtime directory, and **never committed or bundled** (the release checks stop it), with attribution in both the UI and the docs
 - Details: `docs/VDB.md`
@@ -75,7 +75,7 @@ The dimension "follow by person" and "group view" were missing is **the agency**
 
 ## Watch targets (borrowed from Moegirlpedia's watch technology)
 
-MediaWiki's `watchlist-brief` / `recent-changes-brief` idea is: **don't just say "it changed" — say what changed, by how much, and whether it deserves attention.** That is what this does, across five target kinds:
+MediaWiki's `watchlist-brief` / `recent-changes-brief` idea is: **don't just say "it changed" — say what changed, by how much, and whether it deserves attention.** That is what this does, across four target kinds:
 
 | Kind | What it reads | Login |
 | --- | --- | --- |
@@ -83,34 +83,40 @@ MediaWiki's `watchlist-brief` / `recent-changes-brief` idea is: **don't just say
 | **MediaWiki page** | `revid` comparison + `action=compare` diff, with byte delta | no |
 | **MediaWiki recent changes** | The recent-changes stream, filtered down to what matters | no |
 | **MediaWiki watchlist** | Your own watchlist (BotPassword login) | **yes** |
-| **bilibili dynamics** | New `opus_id`s plus follower growth | no |
 
 Alarm rules (all thresholds editable): large edit / large delete / new page / anonymous edit / unpatrolled edit / chosen log types / **suspicious keywords** (graduation, contract termination, retirement, scandal, hiatus, dissolution, transfer …).
 
 The first check only **builds a baseline** — it never cries wolf. Later checks say who changed what, by how much, and which lines.
 
-## bilibili dynamics
+## What this build deliberately does not do
 
-What the measurements forced:
+No part of the product has a network relationship with bilibili or X/Twitter any more. Removing it took the
+six built-in sources that read them, the `bili-opus` / `bili-dynamic` fetch kinds, three source categories
+(`live` / `bili` / `social`), the `bili-opus` watch-target kind, the whole **Live** tab (live-state checks, the
+embedded player and danmaku sending), the account-discovery and send-verification routes that served the
+removed features, and `docs/LIVE.md`. What was **kept on purpose** is everything that was never actually
+about those sites:
 
-- `api.bilibili.com` works **direct**, and going through a proxy gets you a steady 412 / -352 risk-control block. So bilibili sources default to the *direct* egress; the proxy setting is global, but sources and watch targets can each override it.
-- A bare request is blocked with 412 until you fetch `buvid3/buvid4` from `x/frontend/finger/spi` and send them as cookies.
-- `x/polymer/web-dynamic/v1/opus/feed/space` needs **no login and no wbi signature** and reliably returns text/image dynamics (text, likes, opus link) — that is the main path.
-- `x/polymer/web-dynamic/v1/feed/space` (full dynamics *with* pictures) is heavily rate/risk-controlled and only works with **a reused login** → that source is marked login-required and rendered in a browser.
-- `x/relation/stat` provides the follower count used for growth tracking.
+- **The read-only cookie probe is generic.** It copies a browser's own store and decrypts it read-only for **a host the caller names**, reporting cookie *names* and never values. Only the per-site uses that belonged to those platforms went; the mechanism, its DPAPI/App-Bound notes and the page that owns the setting all stay.
+- **The posting table is still three stages.** Account / verification / send are answered separately per site, because collapsing them hides which step is missing. No posting site in this build declares publish code, so the send stage says exactly that — and `/api/share/post` still refuses every call for that stated reason, behind its explicit-confirm and audit gate. That gate is the discipline, not a platform feature.
+- **The manual hand-off stays.** Where this app cannot post, it hands the composed body and images to the site's own compose page and records the click as a **manual** action.
+- **The roster's per-platform accounts stay** (see the VDB section above): they are data about people.
+- **Egress and monitoring are untouched**: per-source direct / proxy / Tor with per-site overrides, the latency/loss probe, "effective latency = mean × (1 + loss × 4)", observation-mode sampling and jitter, and the run archive all still apply to the sources that remain.
 
 ## Getting a login without closing your browser
 
-Some sources need a login (bilibili dynamics with pictures, X post bodies). The old answer was
-"close the browser, then let Playwright reuse the profile" — a steep price for one Cookie header.
-So there is a lighter path:
+Some sources need a login (the Twitch following list, a wiki watchlist, or a source you declare yourself).
+The old answer was "close the browser, then let Playwright reuse the profile" — a steep price for one Cookie
+header. So there is a lighter path:
 
 **Copy the browser's cookie store and decrypt it read-only.** The browser can stay open; nothing is
 locked or modified.
 
-- The **Browser** tab → *Check login*, with the domain to read (defaults to `bilibili.com`). That tab is
-  also where the browser and its profile are configured, and where each dependent feature reports what it
-  needs and whether it has it.
+- The **Browser** tab → *Check login*, with the host to read (the field starts at `reddit.com`; name any
+  host). That tab is also where the browser and its profile are configured, and where each dependent
+  feature reports what it needs and whether it has it.
+- The probe is **generic on purpose**: it knows nothing about any particular site, reads only the host the
+  caller named, and never holds a per-site list of what a login looks like.
 - Measured: on Opera / Chromium 130+ the `v10` scheme (AES-256-GCM, key protected by DPAPI) reads
   fine, including stripping the 32-byte domain-binding prefix Chromium 130+ prepends.
 - **Chrome 127+ enables App-Bound Encryption by default** (`v20`), which cannot be decrypted from
@@ -194,8 +200,6 @@ The code here is MIT, but the tool **fetches data at runtime** that has its own 
 | Source | Used for | Licence / attribution |
 | --- | --- | --- |
 | **[dd-center/vdb](https://github.com/dd-center/vdb)** | The agency roster (`docs/VDB.md`) | Data **CC BY-NC-SA 4.0**, code GPL. **Fetched at runtime, never bundled, never redistributed**, attributed in the UI and docs |
-| **[api.vtbs.moe](https://vtbs.moe)** | Roster lookups for the live page | Upstream service; queried only, never cached and redistributed |
-| **[dd-center/bilibili-dd-monitor](https://github.com/dd-center/bilibili-dd-monitor)** | The *idea* behind multi-screen live viewing | MIT (Copyright (c) 2020 wdpm); rewritten here, not copied (see `docs/LIVE.md`) |
 | Moegirlpedia's `watchlist-brief` / `recent-changes-brief` | Design reference for watch targets | Idea only, no code copied |
 
 Scraped items belong to their own publishers. This tool aggregates them locally and **republishes nothing**.

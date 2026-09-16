@@ -70,7 +70,7 @@ export function textCounter(text, limit) {
  *
  * Two sources and two shapes, both honest about it: the cookie probe answers with **counts and names**
  * (never a value), while a site's own probe answers with the account it confirmed or the reason it refused.
- * Sharing this keeps Settings, Live, Sources and both Share surfaces saying the same thing.
+ * Sharing this keeps Settings, Sources and both Share surfaces saying the same thing.
  *
  * @param {object} r the server's answer
  * @param {Function} t dictionary lookup

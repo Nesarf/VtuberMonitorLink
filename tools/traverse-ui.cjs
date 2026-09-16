@@ -1,6 +1,6 @@
 // tools/traverse-ui.cjs - drive the built console in a real browser.
 //
-// ASCII only, CommonJS. Loads the packaged console, walks all six pages, runs a
+// ASCII only, CommonJS. Loads the packaged console, walks all eleven tabs, runs a
 // real collection against a local mock LLM (so no API key is needed), then
 // checks the intel stream, the watch history/diff view, the Markdown rendering
 // and the export links. Fails on any console error, page error or failed API
@@ -16,6 +16,7 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
 
@@ -23,12 +24,13 @@ const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function parseArgs(argv) {
-  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43198, mock: 43196, headed: false, keep: false };
+  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43198, mock: 43196, feed: 43195, headed: false, keep: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dir') out.dir = path.resolve(argv[++i]);
     else if (a === '--port') out.port = Number(argv[++i]) || out.port;
     else if (a === '--mock') out.mock = Number(argv[++i]) || out.mock;
+    else if (a === '--feed') out.feed = Number(argv[++i]) || out.feed;
     else if (a === '--headed') out.headed = true;
     else if (a === '--keep') out.keep = true;
   }
@@ -43,18 +45,90 @@ function check(name, ok, detail) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Only these two sources stay on: one bilibili (direct, fast) and one wiki. */
-const FAST_SOURCES = ['bili-opus-jaran', 'fandom-vtuber-wiki'];
+/**
+ * Only these two sources stay on: one cheap official site (direct, fast) and one wiki.
+ *
+ * The first entry used to be a bilibili dynamics source, which was the fastest source this walk could rely
+ * on (one JSON endpoint, no login). It went with the platform, so the walk leans on an official news page
+ * instead: it is one HTTP request when nothing is cached, and every assertion below reads the *shape* of the
+ * collected items rather than a platform-specific field.
+ */
+const FAST_SOURCES = ['official-cover', 'fandom-vtuber-wiki'];
 const ALL_SOURCES = [
   'reddit-VirtualYoutubers', 'reddit-Hololive', 'reddit-Nijisanji', 'reddit-VShojo',
-  'fandom-vtuber-wiki', 'moegirl', 'twitch-vtuber', 'x-twitter', 'youtube-official',
+  'fandom-vtuber-wiki', 'moegirl', 'twitch-vtuber', 'youtube-official',
   'news-ann', 'news-kaiyou', 'news-4gamers', 'news-kaori', 'news-moguravr', 'news-dengeki',
   'official-anycolor', 'official-hololive', 'official-bravegroup', 'official-vspo', 'official-cover',
   'merch-fanbox', 'merch-cien', 'merch-booth', 'merch-dlsite',
-  'bili-opus-jaran', 'bili-opus-asoul', 'bili-opus-yousa', 'bili-opus-hanser', 'bili-dynamic-login',
 ];
 
-function seedConfig(mockPort) {
+/**
+ * Items the walk needs on any machine, served from loopback.
+ *
+ * Why this exists: the intel half of this traversal (cards, keyword search, time ranges, person attribution,
+ * the archive, the charts, feature extraction) all read whatever the last run collected. It used to get its
+ * items from a fast JSON source that the product no longer knows, and every source that is left is either a
+ * real site over the network or a browser-rendered page -- and the packaged build ships no browser, so both
+ * arms of that pair fail on a clean machine. The result was not "one source down", it was twenty assertions
+ * about an empty stream.
+ *
+ * So the walk serves its own Atom feed on loopback and enables it as a custom source (the same config
+ * mechanism a user has). RSS is one of the fetch kinds this build still offers, so the run exercises the real
+ * fetch -> parse -> item path; and the fixture text is chosen to be searchable, taggable and attributable so
+ * every downstream assertion has something to act on.
+ */
+const FEED_ITEMS = [
+  {
+    title: 'Mock 箱 3D披露 将于 3月15日 举行',
+    link: 'http://127.0.0.1:FIXTURE/entries/1',
+    body: 'Mock 箱 宣布 3D披露 将于 3 月 15 日举行，本条来自本地巡检 feed，关键词与日期都可检索。',
+    when: new Date().toISOString(),
+  },
+  {
+    title: 'Mock 箱 新翻唱「糖」公开',
+    link: 'http://127.0.0.1:FIXTURE/entries/2',
+    body: 'Mock 箱 发布新翻唱「糖」，同样来自本地巡检 feed。',
+    when: new Date(Date.now() - 3600_000).toISOString(),
+  },
+  {
+    title: 'Mock 箱 直播预告：本周六 20:00',
+    link: 'http://127.0.0.1:FIXTURE/entries/3',
+    body: 'Mock 箱 本周六 20:00 直播，本条来自本地巡检 feed。',
+    when: new Date(Date.now() - 7200_000).toISOString(),
+  },
+];
+
+/**
+ * A request counter, so the fixture feed's text differs on every fetch.
+ *
+ * This is what gives the watch feature something to notice: a URL target hashes the text it reads and
+ * reports "changed" only on a difference, so a constant fixture would report the baseline and then
+ * "unchanged" for ever -- and every assertion about change detection would be vacuous. The counter line is
+ * inside the feed, so the second read really is a different document.
+ */
+let feedHits = 0;
+
+function feedBody(port) {
+  feedHits++;
+  const entries = FEED_ITEMS.map(
+    (e, i) => `  <entry>
+    <id>urn:vml:traverse-ui:${i + 1}</id>
+    <title>${e.title}</title>
+    <link href="${e.link.replace('FIXTURE', String(port))}" />
+    <updated>${e.when}</updated>
+    <summary>${e.body}</summary>
+  </entry>`,
+  ).join('\n');
+  return `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>VML traverse-ui fixture feed</title>
+  <updated>read ${feedHits}</updated>
+${entries}
+</feed>
+`;
+}
+
+function seedConfig(mockPort, feedPort) {
   const overrides = {};
   for (const id of ALL_SOURCES) overrides[id] = { enabled: FAST_SOURCES.includes(id) };
   return {
@@ -81,11 +155,30 @@ function seedConfig(mockPort) {
       enabled: true,
       targets: [
         { id: 'watch-url-example', kind: 'url', label: 'example.com', url: 'https://example.com/', enabled: true },
-        { id: 'watch-bili-jaran', kind: 'bili-opus', label: '嘉然动态', uid: '672328094', proxy: 'direct', enabled: true },
+        { id: 'watch-page-cover', kind: 'url', label: 'cover news', url: 'https://cover-corp.com/en/news', enabled: true },
+        // Pointed at the loopback feed on purpose: it is the one target whose content this walk controls, so
+        // its "changed" verdict (and therefore the change digest on the Intel page) does not depend on a real
+        // site being reachable or on its content happening to move.
+        { id: 'watch-feed', kind: 'url', label: 'traverse feed', url: `http://127.0.0.1:${feedPort}/feed.xml`, enabled: true },
       ],
       rules: { largeEditBytes: 5000, largeDeleteBytes: 2000, keywords: ['毕业', '解约', '直播'] },
     },
     sources: overrides,
+    // The fixture feed is a custom source, which is also how the walk covers that path: the sources page and
+    // the run both have to accept a source the user added rather than only the built-in catalogue.
+    customSources: [
+      {
+        id: 'ui-feed',
+        name: { zh: '巡检本地 feed', en: 'traverse local feed' },
+        category: 'community',
+        fetch: 'rss',
+        url: `http://127.0.0.1:${feedPort}/feed.xml`,
+        login: 'none',
+        cadence: 'daily',
+        enabled: true,
+        custom: true,
+      },
+    ],
   };
 }
 
@@ -123,7 +216,15 @@ async function main() {
     stdio: 'ignore',
   });
   await sleep(900);
-  fs.writeFileSync(cfgPath, JSON.stringify(seedConfig(args.mock), null, 2), 'utf8');
+
+  // The loopback feed (see FEED_ITEMS): started before the app so the very first run can fetch it.
+  const feedServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/atom+xml; charset=utf-8' });
+    res.end(feedBody(args.feed));
+  });
+  await new Promise((r) => feedServer.listen(args.feed, '127.0.0.1', r));
+
+  fs.writeFileSync(cfgPath, JSON.stringify(seedConfig(args.mock, args.feed), null, 2), 'utf8');
 
   // Capture the app-under-test's output: when something goes wrong you can read its log instead
   // of just seeing one failed assertion
@@ -272,12 +373,12 @@ async function main() {
     await page.waitForTimeout(400);
     const koTabs = await page.locator('nav.tabs button').allInnerTexts();
     check('the Korean interface is in Korean', koTabs.includes('정보'), koTabs.join(' | '));
-    const koLive = page.locator('nav.tabs button', { hasText: '라이브' }).first();
-    if (await koLive.count()) {
-      await koLive.click();
+    const koPage = page.locator('nav.tabs button').filter({ hasText: '보고서' }).first();
+    if (await koPage.count()) {
+      await koPage.click();
       await page.waitForTimeout(800);
       // Scan only the **interface's own copy** (titles / hints / tabs), not the data area —
-      // the room titles and category names on the live page are external data from bilibili
+      // the content areas on a page can carry external data (article titles, user-chosen names)
       // (its "carousel" and "life & entertainment" category names), and source names are whatever
       // the user called them (a follow target the user named, say); those of course should not be
       // translated.
@@ -295,7 +396,7 @@ async function main() {
       let rest = koChrome;
       for (const term of keep) rest = rest.split(term).join('');
       const leftover = [...new Set(rest.match(/[\u4e00-\u9fff]/g) || [])];
-      check('no Chinese left in the Korean live page', leftover.length === 0, leftover.length ? 'leftover Han characters: ' + leftover.join('') : '0 leftover Han characters');
+      check('no Chinese left in the Korean report page', leftover.length === 0, leftover.length ? 'leftover Han characters: ' + leftover.join('') : '0 leftover Han characters');
     }
 
     // Indonesian: the locale that was registered but could have been left rendering English. Two
@@ -314,13 +415,13 @@ async function main() {
     // The Indonesian anchor claim: the tab row must not still be the English fallback. Only words
     // that the English copy spells the same way are excluded, so a locale that fell through to
     // English fails here instead of passing on shared-looking labels.
-    check('no English fallback left in the Indonesian tab row', !/Run|Settings|Reports|Search|Live/.test(idTabs), idTabs);
-    const idLive = page.locator('nav.tabs button', { hasText: 'Siaran' }).first();
-    if (await idLive.count()) {
-      await idLive.click();
+    check('no English fallback left in the Indonesian tab row', !/Run|Settings|Reports|Search/.test(idTabs), idTabs);
+    const idPage = page.locator('nav.tabs button').filter({ hasText: 'Laporan' }).first();
+    if (await idPage.count()) {
+      await idPage.click();
       await page.waitForTimeout(800);
       // Same rule as the Korean scan: only the interface's own copy (titles / hints / tabs), not the
-      // room titles that come from bilibili. Proper nouns the glossary keeps verbatim are stripped
+      // article titles and user-chosen names. Proper nouns the glossary keeps verbatim are stripped
       // first, longest first.
       const idChrome = [
         ...(await page.locator('main h2').allInnerTexts()),
@@ -334,9 +435,14 @@ async function main() {
       let restId = idChrome;
       for (const term of keep) restId = restId.split(term).join('');
       const idLeftover = [...new Set(restId.match(/[\u4e00-\u9fff]/g) || [])];
-      check('no Chinese left in the Indonesian live page', idLeftover.length === 0, idLeftover.length ? 'leftover Han characters: ' + idLeftover.join('') : '0 leftover Han characters');
-      const idHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
-      check('the Indonesian live hint is Indonesian', idHints.includes('siaran'), idHints.slice(0, 140));
+      check('no Chinese left in the Indonesian report page', idLeftover.length === 0, idLeftover.length ? 'leftover Han characters: ' + idLeftover.join('') : '0 leftover Han characters');
+      // An array, not a joined string, and the distinction is worth a comment: this arm used to end in
+      // `.join(' | ')` and then call `.some()` on the result -- a plain JavaScript bug that never fired while
+      // these scans pointed at the Live tab, because a page with no `.hint` elements produced an empty array
+      // and `.some()` on it was never reached. Retargeting the scans to the Reports tab (which has hints) is
+      // what made it run, and `.some is not a function` is what it said.
+      const idHints = await page.locator('main .hint').allInnerTexts();
+      check('the Indonesian report page is Indonesian', idHints.some((h) => h.includes('Laporan')), idHints.join(' | ').slice(0, 140));
     }
 
     // Filipino: same two failure modes as the Indonesian block above, plus a third one that is
@@ -357,16 +463,16 @@ async function main() {
       filTabs.includes('Impormasyon') && filTabs.includes('Magpatakbo') && filTabs.includes('Mga setting') && filTabs.includes('Subaybayan'),
       filTabs,
     );
-    // The anchor claim: the tab row must not still be the English fallback. `Live` is deliberately not
-    // in the pattern -- Filipino keeps that word (it is what Filipino VTuber audiences say), so
-    // flagging it would make the check lie. The other five are the English copy's own labels.
+    // The anchor claim: the tab row must not still be the English fallback. `Live` used to be excluded here
+    // because Filipino kept that word, and that tab is gone; the five remaining are the English copy's own
+    // labels.
     check('no English fallback left in the Filipino tab row', !/Run|Settings|Reports|Search|Sources/.test(filTabs), filTabs);
-    const filLive = page.locator('nav.tabs button', { hasText: 'Live' }).first();
-    if (await filLive.count()) {
-      await filLive.click();
+    const filPage = page.locator('nav.tabs button').filter({ hasText: 'Mga ulat' }).first();
+    if (await filPage.count()) {
+      await filPage.click();
       await page.waitForTimeout(900);
       // Same rule as the Korean and Indonesian scans: only the interface's own copy (titles / hints /
-      // tabs), never the room titles that come from bilibili. Pinned proper nouns are stripped first,
+      // tabs), never the content areas. Pinned proper nouns are stripped first,
       // longest first.
       const filChrome = [
         ...(await page.locator('main h2').allInnerTexts()),
@@ -380,15 +486,17 @@ async function main() {
       let restFil = filChrome;
       for (const term of keepFil) restFil = restFil.split(term).join('');
       const filLeftover = [...new Set(restFil.match(/[\u4e00-\u9fff]/g) || [])];
-      check('no Chinese left in the Filipino live page', filLeftover.length === 0, filLeftover.length ? 'leftover Han characters: ' + filLeftover.join('') : '0 leftover Han characters');
-      const filHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
-      // These two words come from the hand-written liveHint, so this fails when the locale falls back
-      // to English rather than merely when a tab label is missing.
-      check('the Filipino live hint is Filipino', filHints.includes('pagsisimula') && filHints.includes('panoorin'), filHints.slice(0, 140));
+      check('no Chinese left in the Filipino report page', filLeftover.length === 0, filLeftover.length ? 'leftover Han characters: ' + filLeftover.join('') : '0 leftover Han characters');
+      // The heading lives in an `h2`, not in `.hint`: the hand-written `reportsTitle` is what this arm is
+      // about, and reading only the hints would look for a word that is not there.
+      const filHints = [...(await page.locator('main h2').allInnerTexts()), ...(await page.locator('main .hint').allInnerTexts())];
+      // The heading comes from the hand-written reportsTitle, so this fails when the locale falls back to
+      // English rather than merely when a tab label is missing.
+      check('the Filipino report page is Filipino', filHints.some((h) => h.includes('Mga ulat')), filHints.join(' | ').slice(0, 140));
       // The counter wiring: the plural table is the only place the `na` linker can come from, so a
       // count label on this page has to carry it -- "5 item" instead of "5 na item" would be a wiring
       // failure nothing else in the suite can see. Which counts appear depends on the run (a follower
-      // count needs an enabled watch target, a room count needs something live), so the check is only
+      // count needs an enabled watch target, a page count needs a page that shows one), so the check is only
       // made when a count label shape is actually on screen, and when it is not, the skip is *named*
       // instead of silent: a quietly skipped assertion is how a check count changes without anyone
       // noticing which one left.
@@ -400,12 +508,12 @@ async function main() {
       const englishish = (filBody.match(/\b\d+\s+(items?|days?|members?|matches|calls|alerts|followers?|cookies?)\b/g) || []).slice(0, 3);
       const armed = countish.length > 0 || englishish.length > 0;
       check(
-        armed ? 'Filipino count labels carry the `na` linker from the plural table' : 'Filipino count labels: nothing to assert this run (no count label on the live page)',
+        armed ? 'Filipino count labels carry the `na` linker from the plural table' : 'Filipino count labels: nothing to assert this run (no count label on the page)',
         !armed || (countish.length > 0 && englishish.length === 0),
-        armed ? countish.join(' | ') + (englishish.length ? ' | ENGLISH: ' + englishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+        armed ? countish.join(' | ') + (englishish.length ? ' | ENGLISH: ' + englishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
       );
     } else {
-      check('the Filipino live tab was found', false, 'no tab button matched "Live"');
+      check('the Filipino report tab was found', false, 'no tab button matched the Filipino word for Reports');
     }
 
     // Thai: the same three failure modes as the Filipino block above, plus a negative control for the
@@ -432,12 +540,12 @@ async function main() {
     // no locale ever translates it), and flagging it would make the check lie. The other six are the
     // English copy's own labels.
     check('no English fallback left in the Thai tab row', !/Run|Settings|Reports|Search|Sources|Watch/.test(thTabs), thTabs);
-    const thLive = page.locator('nav.tabs button', { hasText: 'ไลฟ์' }).first();
-    if (await thLive.count()) {
-      await thLive.click();
+    const thPage = page.locator('nav.tabs button').filter({ hasText: 'รายงาน' }).first();
+    if (await thPage.count()) {
+      await thPage.click();
       await page.waitForTimeout(900);
       // Same rule as the Korean, Indonesian and Filipino scans: only the interface's own copy
-      // (titles / hints / tabs), never the room titles that come from bilibili. Pinned proper nouns
+      // (titles / hints / tabs), never the content areas. Pinned proper nouns
       // are stripped first, longest first.
       const thChrome = [
         ...(await page.locator('main h2').allInnerTexts()),
@@ -451,17 +559,17 @@ async function main() {
       let restTh = thChrome;
       for (const term of keepTh) restTh = restTh.split(term).join('');
       const thLeftover = [...new Set(restTh.match(/[\u4e00-\u9fff]/g) || [])];
-      check('no Chinese left in the Thai live page', thLeftover.length === 0, thLeftover.length ? 'leftover Han characters: ' + thLeftover.join('') : '0 leftover Han characters');
-      const thHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
-      // These two phrases come from the hand-written liveHint, so this fails when the locale falls
+      check('no Chinese left in the Thai report page', thLeftover.length === 0, thLeftover.length ? 'leftover Han characters: ' + thLeftover.join('') : '0 leftover Han characters');
+      const thHints = await page.locator('main .hint').allInnerTexts();
+      // The heading comes from the hand-written reportsTitle, so this fails when the locale falls
       // back to English rather than merely when a tab label is missing. They are also Thai-specific
       // words: neither is a borrowed English term, so an English fallback cannot match them.
-      check('the Thai live hint is Thai', thHints.includes('การเริ่มไลฟ์สด') && thHints.includes('พร้อมกันได้'), thHints.slice(0, 140));
+      check('the Thai report page is Thai', thHints.some((h) => h.includes('รายงาน')), thHints.join(' | ').slice(0, 140));
       // The counter wiring: the plural table is the only place the classifier can come from, so a
       // count label on this page has to carry one -- a numeral glued to a bare noun would be a wiring
-      // failure nothing else can see. Which counts appear depends on the run (a follower count needs
-      // an enabled watch target, a room count needs something live), so the check is only made when a
-      // count label shape is actually on screen, and when it is not, the skip is *named* instead of
+      // failure nothing else can see. Which counts appear depends on the run (an item count needs a
+      // report with items on it), so the check is only made when a count label shape is actually on
+      // screen, and when it is not, the skip is *named* instead of
       // silent: a quietly skipped assertion is how a check count changes without anyone noticing
       // which one left.
       //
@@ -474,9 +582,9 @@ async function main() {
       const thEnglishish = (thBody.match(/\b\d+\s+(items?|days?|members?|matches|calls|alerts|followers?|cookies?|groups?|people)\b/g) || []).slice(0, 3);
       const thArmed = thCountish.length > 0 || thEnglishish.length > 0;
       check(
-        thArmed ? 'Thai count labels carry a classifier after the numeral' : 'Thai count labels: nothing to assert this run (no count label on the live page)',
+        thArmed ? 'Thai count labels carry a classifier after the numeral' : 'Thai count labels: nothing to assert this run (no count label on the page)',
         !thArmed || (thCountish.length > 0 && thEnglishish.length === 0),
-        thArmed ? thCountish.join(' | ') + (thEnglishish.length ? ' | ENGLISH: ' + thEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+        thArmed ? thCountish.join(' | ') + (thEnglishish.length ? ' | ENGLISH: ' + thEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
       );
       // Negative control: the predicate above has to be able to FAIL, or it is an assertion that only
       // ever prints [ok]. Both cases below are pure string work on the same regexes, so they run even
@@ -489,7 +597,7 @@ async function main() {
         'accepts "12 รายการ"=' + thaiCountRe.test('12 รายการ') + ', rejects glued "12รายการ"=' + !thaiCountRe.test('12รายการ'),
       );
     } else {
-      check('the Thai live tab was found', false, 'no tab button matched "ไลฟ์"');
+      check('the Thai report tab was found', false, 'no tab button matched the Thai word for Reports');
     }
 
     // Vietnamese: the same three failure modes as the Thai block above, plus a negative control for the
@@ -516,13 +624,13 @@ async function main() {
     // locale ever translates it), and flagging it would make the check lie. The others are the English
     // copy's own labels. `People` and `Calendar` are in here as well, because this locale writes both
     // (Nguoi / Lich) and the machine pass had given the People tab the same label as the Watch tab.
-    check('no English fallback left in the Vietnamese tab row', !/Run|Settings|Reports|Search|Sources|Watch|People|Calendar|Live/.test(viTabs), viTabs);
-    const viLive = page.locator('nav.tabs button', { hasText: 'Phát trực tiếp' }).first();
-    if (await viLive.count()) {
-      await viLive.click();
+    check('no English fallback left in the Vietnamese tab row', !/Run|Settings|Reports|Search|Sources|Watch|People|Calendar/.test(viTabs), viTabs);
+    const viPage = page.locator('nav.tabs button').filter({ hasText: 'Báo cáo' }).first();
+    if (await viPage.count()) {
+      await viPage.click();
       await page.waitForTimeout(900);
       // Same rule as the Korean, Indonesian, Filipino and Thai scans: only the interface's own copy
-      // (titles / hints / tabs), never the room titles that come from bilibili. Pinned proper nouns are
+      // (titles / hints / tabs), never the content areas. Pinned proper nouns are
       // stripped first, longest first.
       const viChrome = [
         ...(await page.locator('main h2').allInnerTexts()),
@@ -536,16 +644,16 @@ async function main() {
       let restVi = viChrome;
       for (const term of keepVi) restVi = restVi.split(term).join('');
       const viLeftover = [...new Set(restVi.match(/[\u4e00-\u9fff]/g) || [])];
-      check('no Chinese left in the Vietnamese live page', viLeftover.length === 0, viLeftover.length ? 'leftover Han characters: ' + viLeftover.join('') : '0 leftover Han characters');
-      const viHints = (await page.locator('main .hint').allInnerTexts()).join(' | ');
-      // These two phrases come from the hand-written liveHint, so this fails when the locale falls back
-      // to English rather than merely when a tab label is missing. `phat truc tiep` is the same phrase
-      // the tab label uses, and `trinh phat nhung` (embedded player) is not a borrowed English term.
-      check('the Vietnamese live hint is Vietnamese', viHints.includes('phát trực tiếp') && viHints.includes('trình phát nhúng'), viHints.slice(0, 160));
+      check('no Chinese left in the Vietnamese report page', viLeftover.length === 0, viLeftover.length ? 'leftover Han characters: ' + viLeftover.join('') : '0 leftover Han characters');
+      const viHints = await page.locator('main .hint').allInnerTexts();
+      // The heading comes from the hand-written reportsTitle, so this fails when the locale falls back
+      // to English rather than merely when a tab label is missing. The Reports label is Vietnamese and
+      // not a borrowed English term, so an English fallback cannot match it.
+      check('the Vietnamese report page is Vietnamese', viHints.some((h) => h.includes('Báo cáo')), viHints.join(' | ').slice(0, 160));
       // The counter wiring: with no plural table the label is the hand layer's base value, so a count
       // label on this page has to read "number, space, Vietnamese unit word". Which counts appear
-      // depends on the run (a follower count needs an enabled watch target, a room count needs something
-      // live), so the check is only made when a count label shape is actually on screen, and when it is
+      // depends on the run (an item count needs a report with items on it), so the check is only made
+      // when a count label shape is actually on screen, and when it is
       // not the skip is *named* instead of silent: a quietly skipped assertion is how a check count
       // changes without anyone noticing which one left.
       //
@@ -561,9 +669,9 @@ async function main() {
       const viEnglishish = (viBody.match(new RegExp(viEnglishRe.source, 'g')) || []).slice(0, 3);
       const viArmed = viCountish.length > 0 || viEnglishish.length > 0;
       check(
-        viArmed ? 'Vietnamese count labels read as number + space + Vietnamese unit word' : 'Vietnamese count labels: nothing to assert this run (no count label on the live page)',
+        viArmed ? 'Vietnamese count labels read as number + space + Vietnamese unit word' : 'Vietnamese count labels: nothing to assert this run (no count label on the page)',
         !viArmed || (viCountish.length > 0 && viEnglishish.length === 0),
-        viArmed ? viCountish.join(' | ') + (viEnglishish.length ? ' | ENGLISH: ' + viEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty live page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
+        viArmed ? viCountish.join(' | ') + (viEnglishish.length ? ' | ENGLISH: ' + viEnglishish.join(' | ') : '') : 'exactly one of the two forms arms this check, so an empty page cannot make it pass by accident; the wording per number is pinned by tools/i18n-plural-test.mjs',
       );
       // Negative control: the predicate above has to be able to FAIL, or it is an assertion that only
       // ever prints [ok]. All four cases are pure string work on the same regexes, so they run even when
@@ -574,7 +682,7 @@ async function main() {
         'accepts "12 muc"=' + viCountRe.test('12 mục') + ', rejects glued="' + !viCountRe.test('12mục') + '", rejects English="' + !viCountRe.test('12 items') + '", both controls fire="' + (viGluedRe.test('12mục') && viEnglishRe.test('12 items')) + '"',
       );
     } else {
-      check('the Vietnamese live tab was found', false, 'no tab button matched "Phát trực tiếp"');
+      check('the Vietnamese report tab was found', false, 'no tab button matched the Vietnamese word for Reports');
     }
     await langSel.selectOption('zh-Hans');
     await page.waitForTimeout(400);
@@ -582,10 +690,10 @@ async function main() {
     // Twelve since the browser/profile targeting got its own page. The count is pinned rather than "at least",
     // because the point of this check is that a page which appears is also walked here: a tab nobody visits is
     // a tab this traversal does not cover, and the number is what makes that visible.
-    check('twelve navigation tabs render', tabs.length === 12, tabs.join(' | '));
+    check('eleven navigation tabs render', tabs.length === 11, tabs.join(' | '));
     check(
-      'the Intel, Search, Live and Watch tabs are present',
-      ['情报', '检索', '直播', '监视', '浏览器', 'LLM'].every((x) => tabs.includes(x)),
+      'the Intel, Search, People, Watch and Browser tabs are present',
+      ['情报', '检索', '关注', '监视', '浏览器', 'LLM'].every((x) => tabs.includes(x)),
       tabs.join(' | ')
     );
 
@@ -770,9 +878,12 @@ async function main() {
     await tab('来源').click();
     await page.waitForTimeout(800);
     const rows = await page.locator('main table tbody tr').count();
-    check('Sources lists every adapter plus the target sources', rows >= 29, rows + ' rows');
+    check('Sources lists every adapter plus the target sources', rows >= 23, rows + ' rows');
     main = await mainText();
-    check('the bilibili category is shown', main.indexOf('B 站') !== -1);
+    // The category set is now community / wiki / video / news / official / resource. The two that were
+    // removed with their platforms must not come back into the list, which is what this asserts.
+    check('the official category is shown', main.indexOf('官方') !== -1);
+    check('no removed platform category is offered', main.indexOf('B 站') === -1 && main.indexOf('bilibili') === -1);
     check('the custom-source form is present', main.indexOf('自定义来源') !== -1);
 
     // Every site's egress defaults to "auto", with the decision written next to it
@@ -810,11 +921,14 @@ async function main() {
     await tab('监视').click();
     await page.waitForTimeout(800);
     main = await mainText();
-    check('Watch page renders the seeded targets', main.indexOf('example.com') !== -1 && main.indexOf('嘉然动态') !== -1);
+    // Both labels are the ones this walk seeds above: the URL target's own label and the path of the second
+    // target. The second used to be an account-id target whose label was a person's name; that kind is gone,
+    // so the label is whatever the fixture calls it.
+    check('Watch page renders the seeded targets', main.indexOf('example.com') !== -1 && main.indexOf('cover news') !== -1);
     check('the alarm-rules panel can be opened', (await page.locator('main button', { hasText: '告警规则' }).count()) > 0);
     await page.locator('main button', { hasText: '全部检查一次' }).click();
     // Wait until the baseline is really established instead of sleeping a flat 6 seconds: the check
-    // needs the network (the bilibili one), and a fixed wait turns into a luck test when the network
+    // needs the network (the enabled one), and a fixed wait turns into a luck test when the network
     // is fast or slow (this assertion went red twice because of that).
     let baselineReady = false;
     let watchMain = '';
@@ -827,7 +941,9 @@ async function main() {
       }
     }
     const watchRows = await page.locator('main table tbody tr').count();
-    check('both targets are listed', watchRows === 2, watchRows + ' rows');
+    // Three seeds now, and the count is pinned: two are the pre-existing fixture targets and the third is the
+    // loopback feed the change digest needs (see seedConfig).
+    check('the seeded targets are listed', watchRows === 3, watchRows + ' rows');
     main = watchMain;
     const baselined = (main.match(/已建立|revid|粉丝|条/g) || []).length;
     check('baseline info shows up after a check', baselineReady, baselined + ' baseline markers');
@@ -873,10 +989,27 @@ async function main() {
     const cards = await page.locator('main .card').count();
     check('the stream shows cards', cards > 0, cards + ' cards');
     main = await mainText();
-    check('the bilibili source appears as a chip', main.indexOf('B站动态') !== -1 || main.indexOf('bilibili') !== -1);
+    // The chip carries the source's own name, which for the collected source is the fixture feed's name --
+    // asserting the real site's name here would assert something this fixture deliberately does not rely on.
+    check('the collected source appears as a chip', main.indexOf('巡检本地 feed') !== -1, main.slice(0, 120));
     const thumbs = await page.locator('main .card .thumbs img').count();
     check('image thumbnails carry no-referrer (anti-hotlink)', thumbs === 0 || (await page.locator('main .card .thumbs img').first().getAttribute('referrerpolicy')) === 'no-referrer', thumbs + ' thumbnails');
-    check('the watch digest block is shown', main.indexOf('监视变化摘要') !== -1 || main.indexOf('监视') !== -1);
+    // Two facts, kept apart on purpose. The watch half of this page is data-driven: the digest block only
+    // exists when a target reported a change, so "the page shows nothing about watch" and "nothing changed"
+    // look identical on screen. The first assertion therefore checks the data the page is rendered from, and
+    // the second one checks the digest block **only when that data says something changed** -- and it says so
+    // unconditionally here, because the fixture target watches the loopback feed, whose text this walk makes
+    // differ on every read (see feedBody).
+    const intelData = await (await fetch(base + '/api/intel')).json();
+    const intelWatch = intelData.watch ?? [];
+    check('the intel answer carries the watch targets of the run', intelWatch.some((x) => x.id === 'watch-feed'), JSON.stringify(intelWatch.map((x) => `${x.id}:${x.ok ? 'ok' : 'fail'}:${x.changed ? 'changed' : 'same'}`)));
+    const feedRow = intelWatch.find((x) => x.id === 'watch-feed');
+    check('the fixture target reported a change (so the digest below has a subject)', feedRow?.changed === true, JSON.stringify(feedRow ?? null).slice(0, 120));
+    if (feedRow?.changed) {
+      check('the watch digest block is shown once something changed', main.indexOf('监视变化摘要') !== -1, main.slice(0, 120));
+    } else {
+      check('the watch digest block is shown once something changed', false, 'the fixture target reported no change, so this page has nothing to digest');
+    }
     const filterSelect = page.locator('main select').first();
     const opts = await filterSelect.locator('option').count();
     check('the source filter is populated from the data', opts > 1, opts + ' options');
@@ -992,7 +1125,7 @@ async function main() {
     check('Search page renders', main.indexOf('情报检索') !== -1);
     check('it states that no LLM is needed', main.indexOf('不需要 LLM') !== -1);
 
-    // Search using a word from a real item (this run just scraped the bilibili dynamic feed)
+    // Search using a word from a real item (this run just scraped the enabled sources)
     const corpus = await (await fetch(base + '/api/intel')).json();
     const sample = (corpus.items ?? []).find((i) => (i.text ?? '').length > 4);
     const term = sample ? String(sample.text).replace(/\[[^\]]+\]/g, '').trim().slice(0, 2) : '糖';
@@ -1033,10 +1166,13 @@ async function main() {
       await fetch(base + '/api/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ source: 'bili-opus-jaran' }),
+        body: JSON.stringify({ source: 'ui-feed' }),
       })
     ).json();
-    check('filtering by source works', bySource.items.every((i) => i.sourceId === 'bili-opus-jaran') && bySource.total > 0, `${bySource.total} items`);
+    // The source that actually collected is the loopback feed (the two real sites in this fixture are
+    // expected to fail: one needs the network, the other needs a browser the packaged build does not ship),
+    // so the filter is asked for that one rather than for a source that produced nothing.
+    check('filtering by source works', bySource.items.every((i) => i.sourceId === 'ui-feed') && bySource.total > 0, `${bySource.total} items`);
     const tagRes = await (await fetch(base + '/api/search/tags')).json();
     check('the tag vocabulary is exposed with aliases', (tagRes.vocabulary ?? []).some((v) => v.canon === '2434' && v.aliases.length > 0), `${(tagRes.vocabulary ?? []).length} tag groups`);
     check('auto tags were extracted from the corpus', (tagRes.auto ?? []).length > 0, `${(tagRes.auto ?? []).length} auto tags`);
@@ -1179,7 +1315,7 @@ async function main() {
     const addPerson = await fetch(base + '/api/people', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: 'ui-follow', name: probeName, aliases: ['Mock Chan'], links: { bilibili: '672328094' } }),
+      body: JSON.stringify({ id: 'ui-follow', name: probeName, aliases: ['Mock Chan'], links: { youtube: 'UCp6993wxpyDPHUpavwDFqgg' } }),
     });
     check('a follow target can be added', addPerson.ok === true, 'name=' + probeName);
 
@@ -1365,11 +1501,17 @@ async function main() {
     // is ready, a method that needs one does not pretend, and a platform that cannot be done says so.
     check('the methods that need no login are ready', byId['file-html']?.declaredStatus === 'ready' && byId['text']?.declaredStatus === 'ready' && byId['webhook']?.declaredStatus === 'ready', JSON.stringify([byId['file-html']?.declaredStatus, byId['text']?.declaredStatus, byId['webhook']?.declaredStatus]));
     check('every target honestly declares whether a login is needed', (shareTargets.targets ?? []).every((x) => typeof x.needsLogin === 'boolean'));
-    check('a target that needs a login does not pretend to be available', byId['bilibili-dynamic']?.needsLogin === true && byId['bilibili-dynamic']?.stages?.send?.status !== 'ready', JSON.stringify(byId['bilibili-dynamic']?.stages?.send ?? {}).slice(0, 90));
-    check('a platform we cannot do is marked unsupported explicitly (X needs OAuth)', byId['x-post']?.declaredStatus === 'unsupported', byId['x-post']?.declaredStatus);
-    // And the rule the owner asked for after that: unsupported must still be configurable and checkable, so the
-    // login stage of a platform we cannot post to must be actionable rather than blank.
-    check('a platform we cannot post to still offers a login check', byId['x-post']?.stages?.verification?.actionable === true, JSON.stringify(byId['x-post']?.stages?.verification ?? {}).slice(0, 90));
+    check('a target that needs a login does not pretend to be available', byId['weibo-post']?.needsLogin === true && byId['weibo-post']?.stages?.send?.status !== 'ready', JSON.stringify(byId['weibo-post']?.stages?.send ?? {}).slice(0, 90));
+    // The two platforms this build stopped knowing must not be offered at all -- neither as a target nor as a
+    // login kind. This is the "absence" half of the same reading, and it is the one that would catch an entry
+    // coming back through a helper nobody meant to keep.
+    check('no retired platform is offered as a share target', !byId['bilibili-dynamic'] && !byId['x-post'], Object.keys(byId).join(', '));
+    const kinds = (shareTargets.loginKinds ?? []).map((k) => k.id).filter(Boolean);
+    check('no retired platform is offered as a login kind', !kinds.includes('bilibili') && !kinds.includes('twitter'), kinds.join(', '));
+    // And the rule the owner asked for after that round: a target whose publishing has no code still offers a
+    // real login check where one can be run, so its login stage must be actionable rather than blank.
+    check('a target we cannot post to still offers a login check', byId['reddit-post']?.stages?.verification?.actionable === true, JSON.stringify(byId['reddit-post']?.stages?.verification ?? {}).slice(0, 90));
+    check('a stage that cannot be run carries its reason', byId['mastodon-post']?.stages?.verification?.actionable === false && !!byId['mastodon-post']?.stages?.verification?.notRunnable?.zh, JSON.stringify(byId['mastodon-post']?.stages?.verification ?? {}).slice(0, 120));
 
     const bundleRes = await fetch(base + '/api/share/bundle', {
       method: 'POST',
@@ -1398,28 +1540,31 @@ async function main() {
     const audit = await (await fetch(base + '/api/share/audit')).json();
     check('the export is recorded in the share log', (audit.entries ?? []).some((e) => e.action === 'bundle'), JSON.stringify(audit.entries?.[0] ?? {}).slice(0, 80));
 
-    // The three gates on speaking in public: no confirmation / unverified / unsupported all have to
-    // be blocked
+    // The two gates on speaking in public that are reachable in this build: no confirmation, and a site whose
+    // publish code does not exist. The third reading this used to make ("an unverified target is unusable")
+    // needed a site that declares publish code, which no built-in does any more -- the login and verification
+    // gates behind the confirm gate are pinned offline by tools/share-test.mjs instead, on a hand-declared
+    // site, because a walk cannot declare one without editing the config under test.
     const noConfirm = await fetch(base + '/api/share/post', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试' }),
+      body: JSON.stringify({ target: 'weibo-post', text: '测试' }),
     });
     check('without confirmation it must not post publicly', noConfirm.status === 400, 'status ' + noConfirm.status);
-    const unverified = await (
+    const notImplemented = await (
       await fetch(base + '/api/share/post', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ target: 'bilibili-dynamic', text: '测试', confirm: true }),
+        body: JSON.stringify({ target: 'weibo-post', text: '测试', confirm: true }),
       })
     ).json();
-    check('an unverified target is unusable even with confirmation', unverified.ok === false && unverified.status === 'needs-verification', JSON.stringify(unverified).slice(0, 90));
-    const unsupported = await fetch(base + '/api/share/post', {
+    check('a site with no publish code refuses and says which state it is in', notImplemented.ok === false && notImplemented.status === 'unimplemented', JSON.stringify(notImplemented).slice(0, 90));
+    const retired = await fetch(base + '/api/share/post', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ target: 'x-post', text: '测试', confirm: true }),
     });
-    check('an unsupported platform is refused', unsupported.status === 400, 'status ' + unsupported.status);
+    check('a retired target is refused as unknown', retired.status === 400, 'status ' + retired.status);
 
     await tab('报告').click();
     await page.waitForTimeout(900);
@@ -1576,6 +1721,11 @@ async function main() {
     }
     try {
       mock.kill();
+    } catch (e) {
+      /* ignore */
+    }
+    try {
+      feedServer.close();
     } catch (e) {
       /* ignore */
     }

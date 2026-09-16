@@ -3,8 +3,8 @@
 //  1) Node's fetch uses undici and **does not read the system proxy by default**; wherever
 //     direct connections are blocked, every fetch ends in ECONNRESET / a connect timeout, so
 //     the proxy has to be configured explicitly.
-//  2) Conversely, **some sites get blocked precisely when going through a proxy**: bilibili
-//     through a proxy reliably returns 412 / -352 (risk control) and only works direct. So the
+//  2) Conversely, **some sites get blocked precisely when going through a proxy**: measured, one such
+//     site answers a bare 4xx through a proxy (risk control) and only works direct. So the
 //     proxy cannot be an all-or-nothing global switch; it must support per-source overrides.
 //
 // So this module provides all three:
@@ -100,9 +100,9 @@ export function playwrightProxy(cfg, mode) {
  * source.proxy: 'direct' | 'proxy' | 'tor' | 'auto' | undefined (auto: follow the global until probed)
  *
  * Auto mode (the default): scores by "effective latency = avg × (1 + packet loss × 4)" and is
- * sticky - see egress.js. A source with an explicit egress always wins (for example bilibili
- * measured worse through the proxy at 412, so its proxy is hard-coded to 'direct', and auto mode
- * is not allowed to overrule that measured conclusion).
+ * sticky - see egress.js. A source with an explicit egress always wins (a source measured worse through
+ * the proxy pins its own egress to 'direct', and auto mode is not allowed to overrule that measured
+ * conclusion).
  * @returns {'direct'|'proxy'|'tor'}
  */
 export function resolveProxyMode(cfg, subject) {

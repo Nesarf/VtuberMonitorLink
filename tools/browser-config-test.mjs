@@ -45,7 +45,6 @@ const {
   pickerFor,
   pickProfile,
   applyPickProfile,
-  discoverAccounts,
   browserConsumerProblems,
 } = await mod('server/src/browser-target.js');
 // The inventory lives in its own module, and it is the same list the route reports and the structural check
@@ -472,12 +471,12 @@ t('with nothing configured, the features that need a profile say so -- and the o
   assert.equal(by.scraping.reason, 'temporary-profile');
   assert.equal(by.loginProbe.ok, false);
   assert.equal(by.loginProbe.reason, 'nothing-configured');
-  assert.equal(by.danmaku.reason, 'nothing-configured');
   assert.equal(by.sharePost.reason, 'nothing-configured');
-  // The bilibili source reports the other half of the same fact: it is not "nothing is configured" from its
-  // point of view (it falls back to browser rendering), it is "the dir it would read is empty". Keeping the
-  // two apart is what lets the page say which one a person is looking at.
-  assert.equal(by.scrapingLogin.reason, 'profile-is-empty');
+  // `shareLoginCheck` is the page's own button, and it goes through the same resolver: "nothing is
+  // configured" is the fact both rows report, and keeping them apart is what lets the table show which
+  // feature is looking at which resolution. (The `danmaku` and `scrapingLogin` rows were removed with the
+  // modules they described: an inventory row naming a file that is gone is worse than no row at all.)
+  assert.equal(by.shareLoginCheck.reason, 'nothing-configured');
 });
 
 t('with a profile configured, a dir that exists satisfies every consumer and a dir that does not says why', () => {
@@ -504,7 +503,7 @@ t('anonymous mode is reported as the reason every login-dependent feature is mis
   assert.equal(report.profile.dir, '');
   assert.equal(report.profile.configured, P_DEFAULT, 'the stored setting is still reported');
   assert.equal(report.consumers.find((c) => c.id === 'loginProbe').reason, 'anonymous-mode');
-  assert.equal(report.consumers.find((c) => c.id === 'danmaku').reason, 'anonymous-mode');
+  assert.equal(report.consumers.find((c) => c.id === 'shareLoginCheck').reason, 'anonymous-mode');
   assert.equal(report.consumers.find((c) => c.id === 'scraping').ok, true, 'scraping does not need a login at all');
 });
 
@@ -531,7 +530,7 @@ process.stdout.write('\nbrowser target: the answer a login check gives when noth
 t('a probe with no profile reports the state (no-profile-configured), not just a bare empty string', async () => {
   const { checkLoginState } = await mod('server/src/share.js');
   const calls = [];
-  const r = await checkLoginState(emptyCfg, 'x-post', {
+  const r = await checkLoginState(emptyCfg, 'reddit-post', {
     readCookies: async (dir, domains) => {
       calls.push({ dir, domains });
       return { ok: false, error: '未配置浏览器 profileDir / profileDir is empty' };
@@ -540,7 +539,7 @@ t('a probe with no profile reports the state (no-profile-configured), not just a
   assert.equal(r.ok, false);
   assert.equal(r.status, 'none');
   // The probe was actually asked to read the resolved dir (empty here), and the answer says why it is empty.
-  assert.deepEqual(calls, [{ dir: '', domains: ['x.com'] }]);
+  assert.deepEqual(calls, [{ dir: '', domains: ['reddit.com'] }]);
   assert.equal(r.profileDir, null);
   assert.equal(r.profileSource, 'none');
   assert.equal(r.profileReason, 'no-profile-configured');
@@ -549,7 +548,7 @@ t('a probe with no profile reports the state (no-profile-configured), not just a
 t('a probe with a configured profile reports the dir it read, so the page can show where it looked', async () => {
   const { checkLoginState } = await mod('server/src/share.js');
   const calls = [];
-  const r = await checkLoginState(setCfg(P_DEFAULT), 'x-post', {
+  const r = await checkLoginState(setCfg(P_DEFAULT), 'reddit-post', {
     readCookies: async (dir, domains) => {
       calls.push({ dir, domains });
       return { ok: true, names: ['auth_token'], cookieHeader: 'auth_token=x', profile: dir }; // sanitize-allow: a fixture value, deliberately cookie-shaped, for the check that proves a cookie value cannot leak out of the resolver
@@ -578,18 +577,61 @@ t('the page side turns that state into a way to the page that fixes it', async (
   assert.match(app, /tab === 'browser' && <Browser \/>/, 'and the browser page must be a tab');
 });
 
-// ───────────────────────────────────────────── 7. accounts discovery is injected, not required
+// ───────────────────────────────────────────── 7. no login enumeration
+//
+// The one thing this module used to offer beyond the profile picker was `discoverAccounts()`: it turned
+// every discovered profile into an "account" by reading its cookie store for one site and asking that site
+// who the credential was. Both halves of that are gone with the site they were about, and what has to hold
+// now is the **absence**, because it is the kind of code that comes back through a helper nobody meant to
+// keep. The enumeration of browser profiles stays -- it is what the picker and the default are built on --
+// and the control below proves that reader still works on an injected machine.
 
-await ta('account discovery reports a failure as a failure instead of throwing at the caller', async () => {
-  const r = await discoverAccounts(emptyCfg, {
-    listAccounts: async () => {
-      throw new Error('no sqlite');
-    },
-  });
-  assert.deepEqual(r.accounts, []);
-  assert.equal(r.errors.length, 1);
-  const withList = await discoverAccounts(emptyCfg, { listAccounts: async () => ({ accounts: [{ id: 'a' }], scanned: 1, errors: [] }) });
-  assert.equal(withList.accounts.length, 1);
+const loginEnumeration = (src) =>
+  [
+    [/\bdiscoverAccounts\s*\(/, 'the account-discovery entry point'],
+    [/readBrowserCookies\s*\(/, 'a read of a browser cookie store'],
+    [/whoAmI|isLogin\b/, 'a request that asks a site who a credential is'],
+    [/SESSDATA|bili_jct/, 'a platform session cookie name'],
+  ]
+    .filter(([re]) => re.test(src))
+    .map(([, what]) => what);
+
+t('the browser-target module enumerates profiles and no longer enumerates logins', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'server/src/browser-target.js'), 'utf8');
+  const found = loginEnumeration(src);
+  assert.deepEqual(found, [], `server/src/browser-target.js still does ${found.join(', ')}`);
+  assert.match(src, /export function browserRoots\(/, 'and it must keep the profile enumeration the picker is built on');
+  assert.match(src, /export function profilesUnder\(/, 'and the per-root expansion');
+});
+
+vacuously(
+  'the login-enumeration detector (wrong input: the code it replaced)',
+  // Both builders answer with a **problems list**, which is what this file's helper expects: a detector that
+  // returned the findings directly would make the control pass on its own right input (the mistake the
+  // helper's own comment records).
+  () => {
+    const found = loginEnumeration(fs.readFileSync(path.join(ROOT, 'server/src/browser-target.js'), 'utf8'));
+    return found.length ? [`still does ${found.join(', ')}`] : [];
+  },
+  () => {
+    const found = loginEnumeration('export async function discoverAccounts(cfg) { const ck = await readBrowserCookies(dir, ["x"]); return whoAmI(cfg, ck.cookieHeader); }');
+    return found.length ? [`still does ${found.join(', ')}`] : [];
+  },
+);
+
+await ta('the profile enumeration still reads an injected machine (so the check above is not "the file is empty")', async () => {
+  const { listProfiles } = await mod('server/src/browser-target.js');
+  const roots = () => [['Chrome', 'C:/Chrome/User Data']];
+  const profiles = (root) => (root ? ['C:/Chrome/User Data/Default'] : []);
+  const r = listProfiles({ roots, profiles });
+  assert.equal(r.profiles.length, 1);
+  assert.equal(r.profiles[0].browser, 'Chrome');
+  assert.equal(r.profiles[0].hasProfiles, true);
+  // A root with no profile subdirectory is still offered as a reference row, so the page can say "Chrome is
+  // here but nothing is signed in" instead of showing nothing at all.
+  const bare = listProfiles({ roots: () => [['Edge', 'C:/Edge/User Data']], profiles: () => [] });
+  assert.equal(bare.profiles.length, 1);
+  assert.equal(bare.profiles[0].hasProfiles, false);
 });
 
 // ───────────────────────────────────────────── result

@@ -78,7 +78,7 @@ export function normalizeResult(result, limit = LIMIT_DEFAULT) {
   let raw = [];
 
   if (Array.isArray(result.items) && result.items.length) {
-    // the fetcher already handed back structured items (bilibili and friends)
+    // the fetcher already handed back structured items (a source that parses its own JSON)
     raw = result.items;
   } else if (!result.ok || !result.content) {
     return [];

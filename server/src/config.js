@@ -66,7 +66,7 @@ export const DEFAULT_CONFIG = {
   proxy: {
     // Important: Node's fetch (undici) does **not** read the system proxy by default;
     // this tool proxies explicitly according to this config, for fetching and browser rendering alike.
-    // Exception: some sites (Bilibili, for one) get risk-controlled *because* of a proxy, so a source can be set to direct.
+    // Exception: some sites get risk-controlled *because* of a proxy, so a source can be set to direct.
     enabled: false,
     url: '',
     // Exit mode: http = use the HTTP proxy below; tor = use Tor's SOCKS5 (anonymizing)
@@ -130,20 +130,8 @@ export const DEFAULT_CONFIG = {
     // Use a fresh Tor circuit for every selection (SOCKS username isolation -> a different exit IP), so a whole round does not leave through one exit
     rotateExit: true,
   },
-  live: {
-    // Live-stream monitoring (feature origin: docs/REVIEW-live.md; upstream dd-center/bilibili-dd-monitor is MIT)
-    enabled: true,
-    // Extra uids to monitor; uids from Bilibili feed sources and from watch targets are merged in automatically
-    uids: [],
-    // Also check live status once per run
-    checkWithRun: true,
-    // Notify when someone goes from "not streaming" to "live" (reruns do not count — a rerun would be a false alarm)
-    notifyOnLive: true,
-    // vtbs.moe roster cache TTL (hours)
-    cacheRosterHours: 24,
-  },
   // Following by "person": the list itself is the config (whose name, aliases, where the accounts are)
-  // [{ id, name, enName, agency, aliases[], tags[], notes, links{bilibili,twitter,youtube,twitch},
+  // [{ id, name, enName, agency, aliases[], tags[], notes, links{<platform>: <account>},
   //    enabled, notifyLevel: info|alert|urgent }]
   people: [],
   peopleOptions: {
@@ -239,10 +227,6 @@ export const DEFAULT_CONFIG = {
     // [{ id, kind, name, enabled, on: always|alerts|failures, quiet: inherit|bypass,
     //    key, server, topic, token, secret, chatId, webhookUrl }]
     targets: [],
-  },
-  bilibili: {
-    // Login-free image/text feeds return 20 items per page, `pages` controls how many pages are fetched
-    pages: 1,
   },
   watch: {
     enabled: true,

@@ -158,7 +158,11 @@ const addHard = (code, key, why, val, src) => HARD.push({ code, key, why, val, s
 // verbatim in that locale forever. So the check is: a Han term with a Latin default must cover every
 // locale the project ships, and the report names the locales that would leak.
 const SHIPPED_LOCALES = Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, 'web/src/locales/coverage.json'), 'utf8')).locales ?? {});
-const LATIN_DEFAULT_ALLOWED = new Set(['bilibili', 'ServerChan', 'DingTalk', 'WeCom', 'Feishu', 'Moegirlpedia', 'VTuber']);
+// The Latin spellings that are the convention everywhere, so a Han term carrying one of them needs no
+// per-locale override. This list is by **default wording**, not by platform: 'bilibili' used to be here for
+// the glossary's Han entry for that platform, and both went together with the product's link to the site --
+// comes back, this list has to be told again, which is the intended friction.
+const LATIN_DEFAULT_ALLOWED = new Set(['ServerChan', 'DingTalk', 'WeCom', 'Feishu', 'Moegirlpedia', 'VTuber']);
 for (const [term, spec] of Object.entries(GLOSSARY)) {
   if (term.startsWith('_') || !spec || typeof spec.default !== 'string') continue;
   if (!/[\u4e00-\u9fff]/.test(term)) continue; // a Latin term: keeping it is the point
@@ -257,8 +261,8 @@ for (const loc of LOCALES) {
     }
     // The glossary gives this locale's agreed wording, yet the translation still carries the **Chinese source
     // word** -> the override value never took effect.
-    // Only Chinese terms are checked: Latin terms (bilibili / VTuber) may legitimately appear in their original
-    // form, and an alias like the short form of bilibili maps to the same value, so using it as the criterion
+    // Only Chinese terms are checked: Latin terms (VTuber and the like) may legitimately appear in their
+    // original form, and a term whose alias maps to the same value would be a criterion made of itself, so
     // would necessarily raise false positives (learnt the hard way).
     for (const [term, spec] of Object.entries(GLOSSARY)) {
       if (term.startsWith('_')) continue;
@@ -405,7 +409,7 @@ if (!args.quiet) {
   // This kind was counted but never listed, so a locale whose only suspects were those rows (Filipino,
   // when it landed: 14 of them) failed the ratchet with an empty report and no way to see why. A
   // ratchet nobody can read is a ratchet that gets --update'd blind.
-  show('suspect: a glossary term fell back to its English default (a Latin brand default such as "bilibili" is the intended wording, so check what the default actually is before treating this as a defect)', byKind('glossary-default'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      value: ${JSON.stringify(String(x.val).slice(0, 80))}`);
+  show('suspect: a glossary term fell back to its English default (a Latin brand default such as "VTuber" is the intended wording, so check what the default actually is before treating this as a defect)', byKind('glossary-default'), (x) => `${x.code} ${x.key}\n      ${x.why}\n      value: ${JSON.stringify(String(x.val).slice(0, 80))}`);
   show('suspect: different source strings translated into the same value', byKind('duplicate'), (x) => `${x.code} ${x.key} = ${JSON.stringify(String(x.val).slice(0, 60))}`);
 }
 

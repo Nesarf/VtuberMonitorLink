@@ -49,22 +49,6 @@ export const BROWSER_CONSUMERS = [
     satisfied: () => ({ ok: true, reason: 'temporary-profile' }),
   },
   {
-    id: 'scrapingLogin',
-    file: 'server/src/fetchers/bilibili.js',
-    symbol: 'resolveProfileDir',
-    needsProfile: true,
-    key: 'browser.profileDir',
-    what: {
-      zh: '复用登录态的 B 站来源（带配图动态、仅登录可见的动态）。',
-      en: 'The bilibili source that reuses a login (dynamics with pictures, login-only dynamics).',
-    },
-    why: {
-      zh: '只有登录过 B 站的配置目录才能让这个来源过风控。',
-      en: 'Only a profile that is signed in to bilibili gets this source past the risk-control wall.',
-    },
-    satisfied: () => NEEDS_DIR,
-  },
-  {
     id: 'loginProbe',
     file: 'server/src/share.js',
     symbol: 'resolveProfileDir',
@@ -85,22 +69,6 @@ export const BROWSER_CONSUMERS = [
       if (w.profile.anonymous) return { ok: false, reason: 'anonymous-mode' };
       return { ok: false, reason: 'nothing-configured' };
     },
-  },
-  {
-    id: 'danmaku',
-    file: 'server/src/accounts.js',
-    symbol: 'resolveProfileDir',
-    needsProfile: true,
-    key: 'browser.profileDir',
-    what: {
-      zh: '直播页的弹幕账号：找出本机有哪些 B 站登录。',
-      en: 'The Live page’s danmaku accounts: discovering which bilibili logins this machine has.',
-    },
-    why: {
-      zh: '账号是靠读各配置目录的 cookie 库找出来的，所以至少要指定一个可读的目录。',
-      en: 'Accounts are found by reading cookie stores, so at least one readable profile must be named.',
-    },
-    satisfied: (w) => (w.profile.dir ? NEEDS_DIR : { ok: false, reason: 'nothing-configured' }),
   },
   {
     id: 'sharePost',

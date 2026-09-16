@@ -1,5 +1,5 @@
 // Watch.jsx — watch targets
-// Borrows the watch techniques from Moegirlpedia: page revisions, recent changes, watchlist, diff of any web page, Bilibili feed.
+// Borrows the watch techniques from Moegirlpedia: page revisions, recent changes, watchlist, diff of any web page.
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n.jsx';
 import { api } from '../api.js';
@@ -9,7 +9,6 @@ const EMPTY = {
   'mediawiki-page': { apiUrl: 'https://zh.moegirl.org.cn/api.php', page: '' },
   'mediawiki-recentchanges': { apiUrl: 'https://zh.moegirl.org.cn/api.php', namespaces: '0,14', limit: 50 },
   'mediawiki-watchlist': { apiUrl: 'https://zh.moegirl.org.cn/api.php', username: '', botPassword: '', limit: 50 },
-  'bili-opus': { uid: '' },
 };
 
 function hsDateOf(iso, format) {
@@ -85,12 +84,8 @@ export default function Watch() {
       base.username = form.username.trim();
       base.botPassword = form.botPassword;
       base.limit = Number(form.limit) || 50;
-    } else if (kind === 'bili-opus') {
-      if (!/^\d+$/.test(String(form.uid || '').trim())) return setErr(t('needUid'));
-      base.uid = String(form.uid).trim();
-      base.proxy = 'direct';
     }
-    base.id = `${kind}-${(base.url || base.page || base.uid || Date.now()).toString().replace(/[^A-Za-z0-9]/g, '-').slice(-40)}`;
+    base.id = `${kind}-${(base.url || base.page || Date.now()).toString().replace(/[^A-Za-z0-9]/g, '-').slice(-40)}`;
 
     setBusy(true);
     try {
@@ -410,18 +405,6 @@ export default function Watch() {
           </>
         )}
 
-        {kind === 'bili-opus' && (
-          <div className="row">
-            <div className="field" style={{ flex: '0 0 220px' }}>
-              <label>UID</label>
-              <input value={form.uid} onChange={(e) => setForm({ ...form, uid: e.target.value })} placeholder="672328094" />
-            </div>
-            <div className="hint" style={{ margin: 0, flex: 1 }}>
-              {t('biliUidHint')}
-            </div>
-          </div>
-        )}
-
         <button className="primary" onClick={addTarget} disabled={busy}>
           {t('add')}
         </button>
@@ -447,7 +430,7 @@ export default function Watch() {
                   <td>
                     <b>{tg.label}</b>
                     <div className="muted small">
-                      {tg.url || tg.page || (tg.uid ? `uid ${tg.uid}` : tg.apiUrl)}
+                      {tg.url || tg.page || tg.apiUrl}
                       {tg.proxy ? ` · ${tg.proxy}` : ''}
                     </div>
                   </td>
@@ -457,7 +440,6 @@ export default function Watch() {
                       <>
                         {tg.baseline.kind}
                         {tg.baseline.revid ? ` · revid ${tg.baseline.revid}` : ''}
-                        {typeof tg.baseline.follower === 'number' ? ` · ${tn('followersCount', tg.baseline.follower)}` : ''}
                         {typeof tg.baseline.ids === 'number' ? ` · ${tn('items', tg.baseline.ids)}` : ''}
                         <br />
                         {hsDate(tg.baseline.at)}
@@ -503,7 +485,6 @@ export default function Watch() {
                 <details key={i} open={i === 0}>
                   <summary>
                     <span className="muted small">{hsDate(h.at)}</span> · {h.summary}
-                    {h.growth ? <span className={h.growth.delta >= 0 ? 'delta-up' : 'delta-down'}> {tn('followersCount', (h.growth.delta >= 0 ? '+' : '') + h.growth.delta)}</span> : null}
                   </summary>
                   {(h.events ?? []).map((e, j) => (
                     <div className="event" key={j}>

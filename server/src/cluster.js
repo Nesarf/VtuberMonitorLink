@@ -134,6 +134,10 @@ export const BASE_WEIGHT = {
   live: 0.9,
   resource: 0.9,
   community: 0.8, // community repost
+  // `social` is not an offered category any more, but `sanitizeCustomSource` does not validate `category`
+  // against `CATEGORIES`, so a hand-declared source can still carry it and `makeWeighter` reads the weight by
+  // the id's prefix -- the entry is still meaningful and is kept deliberately (fixing that by validating the
+  // category would break hand-declared sources).
   social: 0.7, // social platforms (the noisiest)
   custom: 1.0,
   other: 1.0,

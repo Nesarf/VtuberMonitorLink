@@ -11,7 +11,7 @@
 //   node tools/mock-llm.cjs [--port 43197]
 //
 // The completion it returns is deterministic and quotes the prompt back, so a
-// test can assert that watch results and bilibili items actually reached the
+// test can assert that watch results and collected items actually reached the
 // model instead of vanishing somewhere in between.
 
 'use strict';
@@ -63,7 +63,9 @@ function buildReport(userPrompt) {
   const sourceSections = (text.match(/^## /gm) || []).length;
   const watchLines = (text.match(/^- 【监视】/gm) || []).length;
   const watchEvents = (text.match(/^ {4}· /gm) || []).length;
-  const biliLines = (text.match(/^https:\/\/www\.bilibili\.com\/opus\//gm) || []).length;
+  // Item links in the prompt. This used to count one platform's URLs, which made the mock report a fact
+  // about that platform; what the test needs is "the items reached the model at all", so it counts links.
+  const itemLinks = (text.match(/^https?:\/\//gm) || []).length;
   const hasWatchSection = text.includes('# 监视对象检查结果');
   const hasKeywords = text.includes('# 本次重点关注的关键词');
 
@@ -76,15 +78,15 @@ function buildReport(userPrompt) {
     '',
     `- 本次共收到 **${sourceSections}** 条来源摘要`,
     `- 监视对象 ${watchLines} 个，其中变更条目 ${watchEvents} 条`,
-    `- B 站动态链接 ${biliLines} 条`,
+    `- 条目链接 ${itemLinks} 条`,
     '',
     '## 监视告警',
     '',
     hasWatchSection ? '（prompt 中带有监视结果段落 ✔）' : '（prompt 中没有监视结果段落 ✘）',
     '',
-    '## B 站动态',
+    '## 条目链接',
     '',
-    biliLines > 0 ? '（prompt 中带有 opus 链接 ✔）' : '（prompt 中没有 opus 链接 ✘）',
+    itemLinks > 0 ? '（prompt 中带有条目链接 ✔）' : '（prompt 中没有条目链接 ✘）',
     '',
     '## 已确认事实',
     '',

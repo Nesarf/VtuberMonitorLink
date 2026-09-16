@@ -4,7 +4,7 @@
 // sources map of config.json, or add a custom source straight from the Sources page in the web UI
 // (stored in config.customSources).
 //
-// fetch values: rss | mediawiki-api | browser | search-only | bili-opus | bili-dynamic
+// fetch values: rss | mediawiki-api | browser | search-only
 //
 // `region` (optional, an ISO country code) is what a source wants to *appear from*. It is only used by
 // automatic egress selection, and only as a weight: an exit measured in another country pays a penalty
@@ -13,20 +13,18 @@
 // login values: none | optional | required
 //   none -- public data
 //   optional -- logging in gives more (e.g. the Twitch following list)
-//   required -- unavailable without login (e.g. the body of an X post / bilibili dynamics with images); the UI must flag it and check before a run
+//   required -- unavailable without login; the UI must flag it and check before a run
 // proxy values: direct | proxy | omitted (follow the global setting)
-//   bilibili is the classic case that must say direct: measured to hit a steady 412 / -352 risk control through a proxy
+//   `direct` is for a site that is measured to misbehave *because* of a proxy (risk control, a 4xx wall),
+//   not as a default.
 
 export const CATEGORIES = {
   community: { zh: '社区', en: 'Community' },
   wiki: { zh: '百科', en: 'Wiki' },
-  live: { zh: '直播', en: 'Live' },
-  social: { zh: '社交', en: 'Social' },
   video: { zh: '视频', en: 'Video' },
   news: { zh: '新闻', en: 'News' },
   official: { zh: '官方', en: 'Official' },
   resource: { zh: '资源/通贩', en: 'Resource' },
-  bili: { zh: 'B 站', en: 'bilibili' },
 };
 
 const R = (names) => names; // readability annotation only
@@ -70,28 +68,17 @@ export const BUILTIN_SOURCES = [
     note: { zh: 'web_fetch 被 403，需浏览器渲染；仅作背景与考据', en: 'web_fetch gets 403; needs browser render' },
   },
 
-  // ── live
+  // ── video
+  // The Twitch directory page is a video source: the Live tab that used to read it is gone, the page is not.
   {
     id: 'twitch-vtuber',
     name: { zh: 'Twitch「vtuber」标签直播目录', en: 'Twitch VTuber directory' },
-    category: 'live',
+    category: 'video',
     fetch: 'browser',
     url: 'https://www.twitch.tv/directory/all/tags/vtuber',
     login: 'optional',
     defaultEnabled: true,
     note: { zh: '登录后额外含「正在关注」', en: 'Login adds your following list' },
-  },
-
-  // ── social (without a login there is only the login wall)
-  {
-    id: 'x-twitter',
-    name: { zh: 'X / Twitter（官方与爆料账号）', en: 'X / Twitter' },
-    category: 'social',
-    fetch: 'browser',
-    url: 'https://x.com/',
-    login: 'required',
-    defaultEnabled: true,
-    note: { zh: '未登录只显示登录墙，必须复用浏览器登录态', en: 'Login wall without session' },
   },
 
   // ── video
@@ -165,70 +152,7 @@ export const BUILTIN_SOURCES = [
   })),
 ];
 
-// ── bilibili
-// Measured points:
-//   • api.bilibili.com works on a direct connection while a proxy gives a steady 412 / -352, so proxy is always 'direct'
-//   • the opus/feed/space endpoint needs no login and no wbi signature, and reliably returns text/image dynamics (body plus like count)
-//   • feed/space (full dynamics with attached images) is under very strict risk control and is only obtainable by reusing a login session → login: 'required'
-//
-// **No built-in source here decides the Live tab.** Every one of them carries liveCheck: false, so the
-// live check reads the uids the user chose - live.uids, or a bilibili watch target - and starts with an
-// empty Live tab instead of the shipped example accounts. Dynamics monitoring is unaffected, and a
-// source added by hand is live-checked as before.
-const BILI_OPUS = [
-  ['jaran', '嘉然今天吃什么（A-SOUL）', '672328094'],
-  ['asoul', 'A-SOUL 官方', '703007996'],
-  ['yousa', '泠鸢yousa', '282994'],
-  ['hanser', 'hanser', '11073'],
-];
-
-export const BILIBILI_SOURCES = [
-  ...BILI_OPUS.map(([id, label, uid]) => ({
-    id: `bili-opus-${id}`,
-    name: { zh: `B站动态 · ${label}`, en: `bilibili · ${label}` },
-    category: 'bili',
-    fetch: 'bili-opus',
-    url: `https://space.bilibili.com/${uid}/dynamic`,
-    uid,
-    // These four ship enabled, and their live status used to be the whole default content of the Live
-    // tab. They are *dynamics* sources: two of them are group accounts rather than a person whose
-    // stream one follows, and the set as a whole is a starter example nobody chose. So they no longer
-    // feed the live check - a uid in live.uids, or a watch target, still does, which keeps the feature
-    // and drops the default. See docs/LIVE.md.
-    liveCheck: false,
-    proxy: 'direct',
-    login: 'none',
-    rateLimit: { gapSeconds: 3, retries: 2 },
-    defaultEnabled: true,
-    note: {
-      zh: '图文动态，含正文与点赞数；无需登录。想要带配图的完整动态请改用 bili-dynamic 并配置登录。',
-      en: 'Text/image dynamics with text and likes; no login needed. For full dynamics with pictures use bili-dynamic with a login.',
-    },
-  })),
-  {
-    id: 'bili-dynamic-login',
-    name: { zh: 'B站完整动态（含配图，需登录）', en: 'bilibili full dynamics with pictures (login required)' },
-    category: 'bili',
-    fetch: 'bili-dynamic',
-    // by default it points at an UP who really does post images, so "with images" is visible out of the box; the uid can be changed in the web UI
-    url: 'https://space.bilibili.com/282994/dynamic',
-    uid: '282994',
-    // Same rule as the four above: a built-in source does not decide the Live tab. This one points at the
-    // same person as bili-opus-yousa, so leaving it in would have kept that account in the default list.
-    liveCheck: false,
-    proxy: 'direct',
-    login: 'required',
-    defaultEnabled: false,
-    note: {
-      zh: '先用「浏览器」页里配的 profile 只读提取登录 cookie 调接口（浏览器开着也行）；拿不到再退回浏览器渲染。uid 可在网页里改。',
-      en: 'Reads login cookies read-only from the profile configured on the Browser page (works while that browser is open); falls back to browser rendering. The uid is editable in the UI.',
-    },
-  },
-];
-
-BUILTIN_SOURCES.push(...BILIBILI_SOURCES);
-
-/** Merge catalog with user config to get the "effective sources" / merge catalog with user config */
+/** Merge catalog with user config to get the "effective sources" */
 export function effectiveSources(config) {
   const overrides = config?.sources ?? {};
   const custom = Array.isArray(config?.customSources) ? config.customSources : [];
@@ -253,7 +177,10 @@ export function findSource(id) {
 }
 
 /** Field whitelist for custom sources (cleaned on create/edit so arbitrary values cannot be stuffed into the config) */
-export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'uid', 'proxy', 'enabled', 'region'];
+// `uid` is deliberately NOT in this list any more: it existed so a hand-added source could name an account id
+// for the one fetch kind that read one, and that kind went with the platform it belonged to. A field the
+// fetch stage never reads would sit in the config looking like a setting that does something.
+export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'proxy', 'enabled', 'region'];
 
 export function sanitizeCustomSource(input) {
   const out = {};
@@ -299,26 +226,18 @@ export function mergeSourceOverride(base, patch) {
  * the read-only cookie probe for that site's host. `www.` is dropped because a cookie is stored against
  * the registrable domain more often than against the `www` label.
  *
- * The one fallback is the bilibili sources, and it is deliberate: their urls live on
- * `space.bilibili.com` / `api.bilibili.com` / `t.bilibili.com`, while every bilibili login cookie is
- * stored against `bilibili.com`. Probing the subdomain would ask for a narrower domain than the one the
- * cookie actually belongs to and could report "no login" for a browser that is signed in, so for these
- * sources the parent domain is the correct question rather than a convenience.
- *
- * A source with no usable host answers `null`; the caller must say so instead of quietly doing nothing.
- * @param {{url?:string, category?:string, fetch?:string}} source
+ * A source with no usable host answers `null`; the caller must say so instead of quietly doing nothing or
+ * guessing a domain the cookie was never stored against.
+ * @param {{url?:string}} source
  * @returns {string|null}
  */
 export function sourceLoginHost(source = {}) {
   const raw = String(source?.url ?? '').trim();
-  if (raw) {
-    try {
-      const host = new URL(raw).host.toLowerCase();
-      if (host) return host.replace(/^www\./, '');
-    } catch {
-      /* fall through to the bilibili fallback below */
-    }
+  if (!raw) return null;
+  try {
+    const host = new URL(raw).host.toLowerCase();
+    return host ? host.replace(/^www\./, '') : null;
+  } catch {
+    return null;
   }
-  const isBilibili = source?.category === 'bili' || String(source?.fetch ?? '').startsWith('bili-');
-  return isBilibili ? 'bilibili.com' : null;
 }

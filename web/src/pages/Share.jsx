@@ -18,8 +18,9 @@
 //      something says so.
 //
 // Posting publicly always requires an explicit confirmation, and a site whose sending code does not exist is
-// not clickable for sending -- the same discipline as sending a danmaku comment: once it is out, it cannot be
-// taken back.
+// not clickable for sending -- the discipline the server-side gate in `guardPost` (server/src/share.js) exists
+// to enforce: speaking in public is irreversible, so a confirm is mandatory and a stage that cannot be
+// measured says what is missing instead of pretending. Once it is out, it cannot be taken back.
 //
 // Where the wording lives: the page owns the buttons and labels it always had (dictionary entries). The
 // **per-site** wording -- what a site needs, its limits, what the user has to bring, the compose template --
@@ -64,7 +65,7 @@ export default function Share({ people = [] }) {
   // puts the prepared text back, so a stale draft can never quietly pass itself off as freshly prepared.
   const [row, setRow] = useState({});
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ id: '', nameZh: '', nameEn: '', loginKind: 'bilibili', textLimit: 2000, maxImages: 4 });
+  const [draft, setDraft] = useState({ id: '', nameZh: '', nameEn: '', loginKind: 'weibo', textLimit: 2000, maxImages: 4 });
 
   const load = async () => {
     try {
@@ -175,48 +176,16 @@ export default function Share({ people = [] }) {
   };
 
   /**
-   * The verification step of one site — the measurement the **send** stage depends on.
-   *
-   * The stage is an app-level state that is only measured against the site when the user asks: the measurement
-   * costs a request, and it deliberately posts nothing (for bilibili it asks the site which account the
-   * credential is). The server re-reads the login state with `force: true` before measuring, so the check
-   * never runs against a cached verdict, and stores the result per (target, account).
-   */
-  const check = async (target) => {
-    setBusy(`check:${target.id}`);
-    setErr('');
-    try {
-      const r = await api.shareVerify({ target: target.id, account: rowOf(target.id).accountId });
-      const prepared = await api.sharePrepare({ target: target.id, scope: scope(), text: bodyOf(target) });
-      setRowOf(target.id, { ...(prepared ?? {}), accountId: rowOf(target.id).accountId ?? prepared.accountId ?? '' });
-      if (r.ok) setMsg(label(r.detail) || t('shareReady'));
-      else setErr(label(r.detail) || r.reason || r.error || 'failed');
-      await load();
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setBusy('');
-    }
-  };
-
-  /**
    * The login state of one site, measured on demand.
    *
-   * Separate from `check` above on purpose: that one is the send-stage verification and only exists for sites
-   * whose publishing has a probe, while **every** site that needs a login can answer "am I signed in there?"
-   * -- the site's own probe where there is one, and otherwise the read-only cookie probe for the site's own
-   * host. It is the same measurement the login state is configured with, so it works on the sites this build
-   * cannot post to at all (X is the example), which is exactly where a person is about to paste by hand.
+   * Separate from the account list above on purpose: **every** site that needs a login can answer "am I
+   * signed in there?" with the read-only cookie probe for the site's own host, and that is the same
+   * measurement the login state is configured with. It works on sites this build cannot post to at all,
+   * which is exactly where a person is about to paste by hand.
    */
   const checkLogin = async (target) => {
     const r = await api.shareCheckLogin({ target: target.id, account: rowOf(target.id).accountId });
     setRowOf(target.id, { loginState: { ...r, message: loginCheckMessage(r, t, tn) } });
-    // A fresh read of the account list is what makes the chooser show an account that was just signed in.
-    if (target.site?.accountDiscovery) {
-      api.sharePrepare({ target: target.id, scope: scope(), text: bodyOf(target) })
-        .then((p) => setRowOf(target.id, { ...(p ?? {}), accountId: rowOf(target.id).accountId ?? p?.accountId ?? '' }))
-        .catch(() => {});
-    }
     return r;
   };
 
@@ -365,7 +334,7 @@ export default function Share({ people = [] }) {
       else {
         setMsg(`${t('shareSiteAdd')}: ${draft.id.trim()}`);
         setAdding(false);
-        setDraft({ id: '', nameZh: '', nameEn: '', loginKind: 'bilibili', textLimit: 2000, maxImages: 4 });
+        setDraft({ id: '', nameZh: '', nameEn: '', loginKind: 'weibo', textLimit: 2000, maxImages: 4 });
         await load();
       }
     } catch (e) {
@@ -442,15 +411,6 @@ export default function Share({ people = [] }) {
     // A state this page does not know (a newer server) falls back to the bilingual label the server sent
     // rather than to a raw status code.
     return label(stage.label) || stage.status || '';
-  };
-
-  /** Why the check button cannot run right now -- shown as its title, so the cell is never just empty */
-  const checkHint = (x) => {
-    const st = x.stages ?? {};
-    if (st.verification?.status === 'done') return `${t('shareReady')} · ${(st.verification.detail && label(st.verification.detail)) || ''}`.trim();
-    if (!x.site?.verify) return `${label(st.verification?.detail)} · ${t('shareSiteNeeds')}: ${label(x.site?.credential)}`;
-    if (st.account?.status !== 'satisfied') return `${label(st.account?.detail)}`;
-    return label(st.verification?.detail);
   };
 
   const stageCell = (stage) => (
@@ -655,19 +615,18 @@ export default function Share({ people = [] }) {
                   <td className={st.account?.status === 'satisfied' ? 'ok-text' : 'muted small'}>
                     {stageCell(st.account)}
                     {/* What a login state **is** for this site, and whether this app can look one up at all.
-                        "which account to use" is the chooser below when one can be discovered; for a kind
-                        nothing discovers, the cell says so instead of showing an empty chooser that reads
-                        like "you have no login" (server/src/accounts.js discovers bilibili logins only). */}
+                        Nothing in this build enumerates logins, so the cell says so instead of showing an
+                        empty chooser that reads like "you have no login". */}
                     <div className="muted small">
                       {t('shareLogin')}: {x.loginKind ?? '—'}
                       {x.site?.host ? ` · ${x.site.host}` : x.loginKind ? ` · ${t('loginNoHost')}` : ''}
                     </div>
-                    {x.loginKind && x.site?.accountDiscovery === false ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
-                    {/* The login state itself, measured on demand and always pressable: the site's own probe
-                        where one exists (bilibili's login-probe, Mastodon's token-scope), otherwise the
-                        read-only cookie probe for the site's own host. It stays available on the sites this
-                        build cannot post to -- the login stage is independent of the send stage, and that is
-                        exactly where someone is about to paste by hand. */}
+                    {x.loginKind ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
+                    {/* The login state itself, measured on demand and always pressable: the read-only cookie
+                        probe for the site's own host (and, for a site that declares a probe of its own, a
+                        plain "that probe exists, and nothing here can run it"). It stays available on the
+                        sites this build cannot post to -- the login stage is independent of the send stage,
+                        and that is exactly where someone is about to paste by hand. */}
                     <LoginCheckButton
                       onCheck={() => checkLogin(x)}
                       disabledReason={!x.site?.host && !x.site?.verify ? t('loginNoHost') : !x.loginKind ? t('loginNotCheckable') : ''}
@@ -712,18 +671,17 @@ export default function Share({ people = [] }) {
                   </td>
                   <td className={verified ? 'ok-text' : 'muted small'}>
                     {stageCell(st.verification)}
-                    {/* The send-stage verification. Unlike the login check above, this one needs the site's own
-                        probe: with no probe and no account there is nothing to measure here, and the button
-                        says so in its title rather than being absent. The login state is checked next door. */}
-                    <button
-                      className="ghost tiny"
-                      title={checkHint(x)}
-                      onClick={() => check(x)}
-                      disabled={busy === `check:${x.id}` || verified || !x.site?.verify || !st.account?.accountId}
-                      style={{ marginTop: 4 }}
-                    >
-                      {busy === `check:${x.id}` ? t('loading') : t('shareCheck')}
-                    </button>
+                    {/* No send-stage verification button any more: the only two site-specific probes this
+                        project had belonged to retired sites, and both needed a credential nothing here
+                        enumerates. The stage keeps saying what it is missing, and the login state is
+                        checked with the button next door, which measures the site's own host. */}
+                    {/* Why that button is missing, in the server's own words. A cell that said only "not
+                        actionable" would be the dead control this project ruled out: a disabled thing has to
+                        carry its reason. The reason is bilingual product data (it depends on what the site
+                        declares), so it is rendered as data like every other per-site sentence. */}
+                    {st.verification?.notRunnable ? (
+                      <div className="muted small">{label(st.verification.notRunnable)}</div>
+                    ) : null}
                   </td>
                   <td className={st.send?.status === 'ready' ? 'ok-text' : 'muted small'}>
                     {stageCell(st.send)}
@@ -845,7 +803,7 @@ export default function Share({ people = [] }) {
                   implemented), and the label above the box says which of the two it currently is.
 
                   Why a textarea per target rather than one shared box: the limits differ by an order of
-                  magnitude (X takes 280 characters, Reddit 40000), so one shared body would be wrong for at
+                  magnitude (Mastodon takes 500 characters, Reddit 40000), so one shared body would be wrong for at
                   least one site at all times. Why it is not saved on every keystroke: a patch writes
                   config.json and reloads the list, so a keystroke would be a config write (the same reason the
                   region box on the sources page commits on blur). */}
@@ -905,7 +863,7 @@ export default function Share({ people = [] }) {
                 {x.site?.maxImages !== undefined ? ` · 🖼 ≤ ${x.site.maxImages}` : ''}
                 {x.site?.publish ? ` · ${x.site.publish}` : ''}
               </div>
-              {x.loginKind && x.site?.accountDiscovery === false ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
+              {x.loginKind ? <div className="muted small">{t('loginNoDiscovery')}</div> : null}
               {st.account?.requirementRows?.length ? (
                 <ul className="muted small" style={{ paddingLeft: 16 }}>
                   {st.account.requirementRows.map((q) => (

@@ -38,7 +38,7 @@ t('grouping by egress: each group keeps the input order, and the groups neither 
     { id: 'a', fetch: 'rss' },
     { id: 'b', fetch: 'browser' },
     { id: 'c', fetch: 'rss' },
-    { id: 'd', fetch: 'bili-opus' },
+    { id: 'd', fetch: 'search-only' },
   ];
   const mode = (s) => ({ a: 'direct', b: 'tor', c: 'direct', d: 'direct' })[s.id];
   const plan = planFetch(sources, mode);
@@ -142,7 +142,10 @@ process.stdout.write('\nfetchplan: degradation ladder\n');
 t('built-in ladder: only substitutions that actually hold up', () => {
   assert.deepEqual(fetchLadder({ fetch: 'mediawiki-api' }).map((s) => s.fetch), ['browser']);
   assert.deepEqual(fetchLadder({ fetch: 'rss' }).map((s) => s.fetch), ['browser']);
-  assert.deepEqual(fetchLadder({ fetch: 'bili-opus' }), [], 'a login-free dynamic feed has no substitute (it must not auto-upgrade to the one that needs a login)');
+  assert.deepEqual(fetchLadder({ fetch: 'browser' }), []);
+  // A fetch kind the catalogue no longer offers has no ladder entry at all, which is the same answer as a
+  // kind that deliberately has no substitute: nothing is scheduled, and the failure is reported as itself.
+  assert.deepEqual(fetchLadder({ fetch: 'bili-opus' }), [], 'a retired fetch kind must not gain a substitution');
   assert.deepEqual(fetchLadder({ fetch: 'browser' }), []);
 });
 

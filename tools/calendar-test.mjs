@@ -171,7 +171,7 @@ t('calendar marks land on the correct days (including the leap-day shift)', () =
 
 process.stdout.write('\ncalendar: clue extraction (local, no LLM)\n');
 t('recognizes a 3D reveal plus a date', () => {
-  const r = detectFromItems([{ title: '【3D披露】3月15日 晚上八点见！', sourceId: 'bili-opus-jaran' }]);
+  const r = detectFromItems([{ title: '【3D披露】3月15日 晚上八点见！', sourceId: 'official-hololive' }]);
   assert.equal(r.length, 1);
   assert.equal(r[0].kind, '3d');
   assert.equal(r[0].date, '03-15');

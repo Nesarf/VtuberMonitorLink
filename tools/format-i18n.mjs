@@ -3,7 +3,9 @@
 // Background: while using an editing tool to insert entries into i18n.jsx, a few times old_string ended
 // with a newline while the replacement did not, so a new key and the key that already followed it were
 // spliced onto the same line (the values below stand for the Chinese UI labels):
-//     llmFeat_probe: '<zh value>',    tab_live: '<zh value>',
+//     llmFeat_probe: '<zh value>',    tab_search: '<zh value>',
+// (the second key in that real incident was `tab_live`, which the product no longer has; the shape is what
+// this file repairs, so the example uses the key that still follows `llmFeat_probe` in the dictionary)
 // Syntactically perfectly legal, and the UI still works (both keys are there), but:
 //   - checks/scripts that match at the start of a line miss the second key (that is how the completeness check found it)
 //   - diffs and review become ugly

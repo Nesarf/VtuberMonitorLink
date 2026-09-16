@@ -39,7 +39,7 @@ export default function Browser() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [loginState, setLoginState] = useState(null);
-  const [domain, setDomain] = useState('bilibili.com');
+  const [domain, setDomain] = useState('reddit.com');
   const st = useSaveState();
 
   // The call stays on one line on purpose: the structural check in integrity-check.mjs asserts that this page
@@ -106,7 +106,7 @@ export default function Browser() {
 
   /** The login-state check for the configured profile: the same read-only cookie probe as everywhere else. */
   const checkLogin = async () => {
-    const r = await api.checkCookies({ profileDir: cfg.browser?.profileDir ?? '', domains: [domain.trim() || 'bilibili.com'] });
+    const r = await api.checkCookies({ profileDir: cfg.browser?.profileDir ?? '', domains: [domain.trim() || 'reddit.com'] });
     setLoginState({ ...r, message: cookieProbeMessage(r, t, tn) });
     return r;
   };
@@ -266,7 +266,7 @@ export default function Browser() {
         <div className="row">
           <div className="field" style={{ flex: '0 0 150px' }}>
             <label>{t('domainLabel')}</label>
-            <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="bilibili.com" />
+            <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="reddit.com" />
           </div>
           <div className="field" style={{ flex: '0 0 auto' }}>
             {/* Always rendered. The only disable is a **stated** reason: with no profile dir named there is

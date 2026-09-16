@@ -40,7 +40,14 @@ const SECRET_PATTERNS = [
   // `cookie: r.cookieHeader, via: ...` is not mistaken for a leaked value.
   [/[Cc]ookie"?:?\s*[:=]\s*"?[A-Za-z0-9_%.\-]{40,}/, 'literal cookie value'],
   [/sessionid=[A-Za-z0-9%]{16,}/, 'session cookie'],
-  [/\bSESSDATA=[A-Za-z0-9%*._-]{20,}/, 'bilibili session cookie value'],
+  // A literal session-cookie value of a shape nothing else above matches: a bare `NAME=<40+ cookie-safe
+  // characters>` pasted into a file. This rule is deliberately kept even though the platform whose cookie it
+  // is named after was removed from the product, and the reason is worth stating: it is a **cookie-shape
+  // forensic rule**, not a feature of that platform. "A literal session cookie value must not ship" is a
+  // property of this scanner, and a value pasted as `SESSDATA=...` matches neither `sessionid=` nor the
+  // `Cookie:` rule above. Narrowing the scan because a platform left the product would trade a real leak
+  // detector for a cosmetic one.
+  [/\bSESSDATA=[A-Za-z0-9%*._-]{20,}/, 'literal session-cookie value (SESSDATA-shaped)'],
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, 'email address'],
 ];
 

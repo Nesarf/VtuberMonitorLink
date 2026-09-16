@@ -34,7 +34,7 @@ data.
 `README.zh-CN.md` is the only document in the repository that stays Chinese; every other document,
 `docs/*.md` included, is English, because these files are read by people who do not read Chinese. The
 only Chinese fragment that may still appear inside a doc is a quoted string kept as evidence. Inside
-the UI, however, **do not change a single character** (changing it would scramble the UI in all 25
+the UI, however, **do not change a single character** (changing it would scramble the UI in all 29
 regions).
 
 ## 3. The guard script
@@ -69,7 +69,7 @@ server, but **end up rendered to the user**:
 | `hint` in `probe.js` ("direct is fastest (…)") | source-page toast and egress hint |
 | `why`/`note`/`reason` in `egress.js` | tooltip of the automatic egress on the source page |
 | `groupSignal.reason` in `groups.js`, the report block in `dormant.js`, `summary`/`reasons` in `watch.js` | daily report / watch history |
-| the default task name `任务 N` ("task N") in `scheduler.js`, the `note` field in `live.js` | shown directly in the UI / returned with the API |
+| the default task name `任务 N` ("task N") in `scheduler.js`, the bilingual `hint` / `detail` / `notRunnable` sentences in `share.js` | shown directly in the UI / returned with the API |
 
 Criterion: **a string a user will see is product copy -> Chinese** (even when it does not go through
 `t()`). Conversely, a string only logs / diagnostic reports / self-check output read -> English:
@@ -122,7 +122,9 @@ the word form via `Intl.PluralRules` -- `21 элемент` rather than `21 эл
   afterwards, so the restored string is displayed **verbatim** in every locale that has no override.
   Two consequences, and the first version of this rule got the second one wrong:
   - only a **proper noun or product name** belongs in the glossary, where one spelling really is the
-    convention everywhere (`bilibili`, `Feishu`, `Moegirlpedia`, `VTuber`);
+    convention everywhere (`Feishu`, `Moegirlpedia`, `VTuber`, `ServerChan`); the tool's own allowlist of
+    Latin defaults is `ServerChan` / `DingTalk` / `WeCom` / `Feishu` / `Moegirlpedia` / `VTuber`, and a term
+    that leaves the product takes its entry with it rather than staying as a vocabulary nobody reads;
   - a **common noun must not be pinned at all**. An English default shows English to twelve locales
     (that was the shipped defect: 385 rows); setting the default to the source term instead shows
     *Chinese* to every locale without an override, which is worse - that was the first attempt at

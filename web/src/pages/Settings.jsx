@@ -24,7 +24,7 @@ export default function Settings({ onLayout }) {
   const [sched, setSched] = useState(null);
   const [notifyInfo, setNotifyInfo] = useState(null);
   const [nodes, setNodes] = useState(null);
-  const [nodeTestUrl, setNodeTestUrl] = useState('https://www.bilibili.com/');
+  const [nodeTestUrl, setNodeTestUrl] = useState('https://example.com/');
   const [nodeDelays, setNodeDelays] = useState(null);
   const [newNotifyKind, setNewNotifyKind] = useState('bark');
   // Task-name debounce timer: **must be before the early return**, otherwise the first frame and later

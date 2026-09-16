@@ -138,7 +138,10 @@ export default function Intel({ layout }) {
     }
   };
 
-  const watchBlock = (data?.watch ?? []).filter((w) => w.ok && (w.changed || w.growth));
+  // `|| w.growth` used to be part of this: a growth reading is a change even when nothing else moved. No
+  // handler produces one any more, so the filter is "changed" alone (the field itself stays, see the
+  // `follower` comment in server/src/server.js).
+  const watchBlock = (data?.watch ?? []).filter((w) => w.ok && w.changed);
 
   const renderCard = (it) => (
     <article className={`card${it.flag?.starred ? ' starred' : ''}${it.flag?.read ? '' : ' unread'}`} key={it.id}>
@@ -392,12 +395,6 @@ export default function Intel({ layout }) {
               <li key={w.id}>
                 <b>{w.label}</b>
                 <span className="muted"> · {w.summary}</span>
-                {w.growth && (
-                  <span className={w.growth.delta >= 0 ? 'delta-up' : 'delta-down'}>
-                    {' '}
-                    {tn('followersCount', (w.growth.delta >= 0 ? '+' : '') + w.growth.delta)}
-                  </span>
-                )}
               </li>
             ))}
           </ul>

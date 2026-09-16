@@ -6,13 +6,11 @@ import { cachedThumb, loadThumb } from '../thumb-cache.js';
 import { Inline } from '../markdown.jsx';
 import LoginCheckButton, { LoginActionLink, cookieProbeMessage } from '../LoginCheck.jsx';
 
-const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', uid: '', login: 'none', cadence: 'daily', proxy: '', region: '' };
+const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', login: 'none', cadence: 'daily', proxy: '', region: '' };
 
 /**
- * Which host a source's login state would come from — the same rule the server applies to its fallback
- * (server/src/sources.js, sourceLoginHost): the source's own `url`, and only for the bilibili sources the
- * parent domain `bilibili.com` (their urls live on `space.bilibili.com`, which is not where the login cookie
- * is stored).
+ * Which host a source's login state would come from — the same rule the server applies
+ * (server/src/sources.js, sourceLoginHost): the host of the source's own `url`, with `www.` dropped.
  *
  * It is repeated on this side for one reason: this decides **whether the button can run at all**, and that
  * has to be known while rendering rather than after a request. When it says "no host" the button says so
@@ -20,16 +18,13 @@ const BLANK = { id: '', name: '', category: 'community', fetch: 'rss', url: '', 
  */
 export function sourceProbeHost(source = {}) {
   const raw = String(source.url ?? '').trim();
-  if (raw) {
-    try {
-      const host = new URL(raw).host.toLowerCase();
-      if (host) return host.replace(/^www\./, '');
-    } catch {
-      /* fall through to the bilibili rule below */
-    }
+  if (!raw) return null;
+  try {
+    const host = new URL(raw).host.toLowerCase();
+    return host ? host.replace(/^www\./, '') : null;
+  } catch {
+    return null;
   }
-  const isBili = source.category === 'bili' || String(source.fetch ?? '').startsWith('bili-');
-  return isBili ? 'bilibili.com' : null;
 }
 
 /** Latency badge: value + failure rate, coloured by how good it is */
@@ -243,7 +238,6 @@ export default function Sources() {
   const filtered = customOnly ? data.sources.filter((s) => s.custom) : data.sources;
   const byCat = {};
   for (const s of filtered) (byCat[s.category] ??= []).push(s);
-  const needsUid = form.fetch === 'bili-opus' || form.fetch === 'bili-dynamic';
   const problems = health?.problems ?? [];
   const obs = data.observation ?? null; // observation mode: sampling ratio, rounds, last observation time per source
 
@@ -523,12 +517,6 @@ export default function Sources() {
             <label>{t('sourceUrl')}</label>
             <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://example.com/feed.xml" />
           </div>
-          {needsUid && (
-            <div className="field" style={{ flex: '0 0 200px' }}>
-              <label>{t('sourceUid')}</label>
-              <input value={form.uid} onChange={(e) => setForm({ ...form, uid: e.target.value })} placeholder="672328094" />
-            </div>
-          )}
           <div className="field" style={{ flex: '0 0 180px' }}>
             <label>{t('category')}</label>
             <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
@@ -576,7 +564,7 @@ export default function Sources() {
             />
           </div>
         </div>
-        <button className="primary" onClick={addCustom} disabled={busy === 'add' || !form.id || (!form.url && !form.uid)}>
+        <button className="primary" onClick={addCustom} disabled={busy === 'add' || !form.id || !form.url}>
           {t('addCustomSource')}
         </button>
         <div className="hint" style={{ marginTop: 8, marginBottom: 0 }}>

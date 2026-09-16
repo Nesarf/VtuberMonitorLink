@@ -23,13 +23,14 @@ const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function parseArgs(argv) {
-  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43179, mock: 43178, hook: 43177 };
+  const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43179, mock: 43178, hook: 43177, feed: 43176 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dir') out.dir = path.resolve(argv[++i]);
     else if (a === '--port') out.port = Number(argv[++i]) || out.port;
     else if (a === '--mock') out.mock = Number(argv[++i]) || out.mock;
     else if (a === '--hook') out.hook = Number(argv[++i]) || out.hook;
+    else if (a === '--feed') out.feed = Number(argv[++i]) || out.feed;
   }
   return out;
 }
@@ -66,6 +67,53 @@ async function main() {
   });
   await new Promise((r) => hook.listen(args.hook, '127.0.0.1', r));
 
+  // ── a local feed, so the run has something to collect without depending on the network
+  //
+  // Why this exists: the intel step below ("star it, tag it, search the tag") needs at least one collected
+  // item, and this walk used to get one from a fast JSON source that the product no longer knows. Every
+  // built-in source left is either a real site (network, and the packaged build ships no browser) or a
+  // search-only entry (which produces no items by design), so leaving it to them would make the step depend
+  // on the runner's connectivity -- a test that fails on a bad day and passes on a good one.
+  //
+  // So the walk serves its own Atom feed on loopback, over a custom source (the same config mechanism a user
+  // has): one fetch, one item, and the intel step always has a subject. RSS/Atom is one of the fetch kinds
+  // this build still offers, so the fixture also exercises a real path rather than a stub.
+  const FEED_ITEMS = [
+    {
+      title: '巡检条目：Mock 箱 3D 披露',
+      link: `http://127.0.0.1:${args.feed}/entries/1`,
+      // The body deliberately carries a keyword the default alert rules watch for, so the item is also a
+      // keyword hit and the star/read/tag checks act on something the rest of the pipeline recognises.
+      body: 'Mock 箱 宣布 3D披露 将于 3 月 15 日举行，这是由本地 feed 提供的固定条目。',
+      when: new Date().toISOString(),
+    },
+    {
+      title: '巡检条目：Mock 箱 新翻唱',
+      link: `http://127.0.0.1:${args.feed}/entries/2`,
+      body: 'Mock 箱 发布了一首新翻唱，同样来自本地 feed。',
+      when: new Date(Date.now() - 3600_000).toISOString(),
+    },
+  ];
+  const feedServer = http.createServer((req, res) => {
+    const entries = FEED_ITEMS.map(
+      (e, i) => `  <entry>
+    <id>urn:vml:traverse:${i + 1}</id>
+    <title>${e.title}</title>
+    <link href="${e.link}" />
+    <updated>${e.when}</updated>
+    <summary>${e.body}</summary>
+  </entry>`,
+    ).join('\n');
+    res.writeHead(200, { 'content-type': 'application/atom+xml; charset=utf-8' });
+    res.end(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>VML traverse fixture feed</title>
+${entries}
+</feed>
+`);
+  });
+  await new Promise((r) => feedServer.listen(args.feed, '127.0.0.1', r));
+
   const mock = spawn(process.execPath, [path.join(ROOT, 'tools', 'mock-llm.cjs'), '--port', String(args.mock)], { stdio: 'ignore' });
   await sleep(900);
 
@@ -80,15 +128,32 @@ async function main() {
           providers: [{ id: 'mock', preset: 'custom', name: 'Mock', baseUrl: `http://127.0.0.1:${args.mock}`, apiKey: 'k', model: 'mock-model' }],
         },
         notify: { desktop: false, targets: [] },
+        // `official-hololive` is a real site, and it is a browser-rendered one: the run is asserted to finish
+        // and to push a summary, not to have collected from every source. The item the intel step needs comes
+        // from the loopback feed below, which is deterministic and needs no network at all.
         sources: Object.fromEntries(
           [
             'reddit-VirtualYoutubers','reddit-Hololive','reddit-Nijisanji','reddit-VShojo','fandom-vtuber-wiki','moegirl',
-            'twitch-vtuber','x-twitter','youtube-official','news-ann','news-kaiyou','news-4gamers','news-kaori','news-moguravr',
+            'twitch-vtuber','youtube-official','news-ann','news-kaiyou','news-4gamers','news-kaori','news-moguravr',
             'news-dengeki','official-anycolor','official-hololive','official-bravegroup','official-vspo','official-cover',
-            'merch-fanbox','merch-cien','merch-booth','merch-dlsite','bili-opus-jaran','bili-opus-asoul','bili-opus-yousa',
-            'bili-opus-hanser','bili-dynamic-login',
-          ].map((id) => [id, { enabled: id === 'bili-opus-jaran' }])
+            'merch-fanbox','merch-cien','merch-booth','merch-dlsite',
+          ].map((id) => [id, { enabled: id === 'official-hololive' }])
         ),
+        customSources: [
+          {
+            id: 'flow-feed',
+            // ASCII only, like every other fixture name in this file: tools/english-logic.mjs scans these
+            // files and a Chinese product name here would be flagged as untranslated copy left in code.
+            name: { zh: 'traverse local feed', en: 'traverse local feed' },
+            category: 'community',
+            fetch: 'rss',
+            url: `http://127.0.0.1:${args.feed}/feed.xml`,
+            login: 'none',
+            cadence: 'daily',
+            enabled: true,
+            custom: true,
+          },
+        ],
         watch: { enabled: false, targets: [] },
         run: { defaultGapSeconds: 1, watchWithRun: false, diagnoseFailed: false, extractFeatures: false },
         schedule: { tasks: [{ id: 'flow-task', name: 'flow task', enabled: true, mode: 'watch', freq: 'daily', time: '04:00', catchUp: false }] },
@@ -151,14 +216,14 @@ async function main() {
     const del = JSON.parse(JSON.stringify(exported.config));
     del.ui = { ...(del.ui ?? {}), layout: { ...(del.ui?.layout ?? {}), mode: 'timeline', fontScale: 1.2 } };
     del.llm.providers[0].apiKey = ''; // a sanitised export that is re-imported must not wipe the stored key
-    del.sources = { 'bili-opus-jaran': { enabled: false } };
+    del.sources = { 'official-hololive': { enabled: false } };
     const imp = await api('POST', '/api/config/import', { config: del });
     check('POST /api/config/import accepts the document', imp.status === 200 && imp.json?.ok === true, `status ${imp.status}`);
     const after = await api('GET', '/api/config');
     check('imported layout took effect', after.json.ui?.layout?.mode === 'timeline', String(after.json.ui?.layout?.mode));
     check('an empty key does NOT wipe the stored one', after.json.llm?.providers?.[0]?.apiKey === 'k', JSON.stringify(after.json.llm?.providers?.[0]?.apiKey));
-    check('imported source state took effect', after.json.sources?.['bili-opus-jaran']?.enabled === false, JSON.stringify(after.json.sources?.['bili-opus-jaran']));
-    await api('POST', '/api/config/import', { config: { sources: { 'bili-opus-jaran': { enabled: true } }, ui: { layout: { mode: 'cards' } } } });
+    check('imported source state took effect', after.json.sources?.['official-hololive']?.enabled === false, JSON.stringify(after.json.sources?.['official-hololive']));
+    await api('POST', '/api/config/import', { config: { sources: { 'official-hololive': { enabled: true } }, ui: { layout: { mode: 'cards' } } } });
 
     // ─────────────────────────────────────────── 2. alert delivery
     console.log('\n2. Alert delivery (a real webhook is listening)');
@@ -212,7 +277,12 @@ async function main() {
     // ─────────────────────────────────────────── 4. intel flags
     console.log('\n4. Intel flags (star / read / tag)');
     const intel = await api('GET', '/api/intel');
-    const item = (intel.json.items ?? [])[0];
+    const items = intel.json.items ?? [];
+    // The fixture feed is what this step's subject comes from, and it is asked for **by source** rather than
+    // "the first item": the stream is ordered by the run's own ordering, and a check that happened to pass
+    // because some other source won that ordering would not be checking the fixture at all.
+    const item = items.find((i) => i.sourceId === 'flow-feed') ?? null;
+    check('the fixture feed produced an item', !!item, item ? `${item.id} (${item.sourceId})` : `${items.length} item(s), none from flow-feed`);
     check('there is an item to flag', !!item, item?.id);
     if (item) {
       const f1 = await api('PATCH', '/api/intel/' + encodeURIComponent(item.id), { starred: true });
@@ -248,31 +318,21 @@ async function main() {
     check('the run is recorded in the task history', !!entry, JSON.stringify(entry ?? sched2.json.history?.[0] ?? null));
     check('unknown task ids are refused', (await api('POST', '/api/schedule/run', { id: 'nope' })).status === 404);
 
-    // ─────────────────────────────────────────── 5.5 live status
-    console.log('\n5.5 Live status (bilibili batch API, direct)');
-    const live = await api('GET', '/api/live');
-    check('GET /api/live answers', live.status === 200 && typeof live.json?.ok === 'boolean', 'checked ' + (live.json?.checked ?? 0) + ' uid(s)');
-    check(
-      'it separates live from rerun',
-      Array.isArray(live.json?.live) && Array.isArray(live.json?.round),
-      'live ' + (live.json?.live?.length ?? 0) + ', rerun ' + (live.json?.round?.length ?? 0) + ', off ' + (live.json?.off?.length ?? 0)
-    );
-    if (live.json?.ok) {
-      const all = [...(live.json.live ?? []), ...(live.json.round ?? []), ...(live.json.off ?? [])];
-      // An empty answer means there was nothing to inspect, and a check that fails on its own empty precondition
-      // reports a defect where there is only an environment: this walk seeds no uid, so nothing is checked and
-      // `checked 0 uid(s)` is the honest result rather than a broken entry. The room-id question is only
-      // meaningful once there is an entry to ask it about - so it is asked, or said to be unaskable.
-      if (!all.length) {
-        console.log('  [--]   each entry carries a room id and an embed URL -- no uid was checked, so there is nothing to inspect');
-      } else {
-        const any = all.find((x) => x.roomId);
-        check('each entry carries a room id and an embed URL', !!any && /\/blanc\/\d+/.test(String(any.embed)), any ? any.embed : '');
-      }
-      check('rerun entries are not counted as live', (live.json.round ?? []).every((x) => x.status === 2) && (live.json.live ?? []).every((x) => x.status === 1), 'status codes are distinct');
+    // ─────────────────────────────────────────── 5.5 the removed live surface
+    //
+    // The live-status section that used to be here (a bilibili batch call plus a vtbs.moe name lookup) lost
+    // its whole subject this round: the routes, the module behind them and the tab that showed them were
+    // removed together. What replaces it is the absence, checked against the running app rather than against
+    // the source: a route that is still registered would answer, and a walk is the only thing that sees that.
+    console.log('\n5.5 The removed live/danmaku surface is really gone');
+    for (const route of ['/api/live', '/api/live/roster', '/api/accounts', '/api/danmaku', '/api/danmaku/audit']) {
+      const r = await api('GET', route);
+      check(`GET ${route} does not exist`, r.status === 404, `status ${r.status}`);
     }
-    const roster = await api('GET', '/api/live/roster?q=' + encodeURIComponent('泠鸢'));
-    check('the vtbs.moe roster can resolve a name to a uid', roster.status === 200 && (roster.json?.hits?.length ?? 0) > 0, JSON.stringify((roster.json?.hits ?? [])[0] ?? roster.json?.error ?? null));
+    // The control: a route that does exist must answer 200 here, so "404" cannot be satisfied by a walk that
+    // never reaches the server (a wrong port answers nothing at all).
+    const stillThere = await api('GET', '/api/state');
+    check('a route that should exist still answers (control for the 404s above)', stillThere.status === 200, `status ${stillThere.status}`);
 
     // ─────────────────────────────────────────── 6. LLM assistant
     console.log('\n6. Optional LLM assistant (mock returns JSON)');
@@ -302,6 +362,9 @@ async function main() {
     await sleep(1200);
     try {
       hook.close();
+    } catch {}
+    try {
+      feedServer.close();
     } catch {}
     if (hadConfig) fs.writeFileSync(cfgPath, cfgBackup);
     else fs.rmSync(cfgPath, { force: true });

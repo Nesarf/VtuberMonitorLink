@@ -122,12 +122,8 @@ export const api = {
     body: JSON.stringify(body ?? {}),
   }),
   sharePost: (body) => post('/api/share/post', body),
-  // the verification step of one site, measured against the site on demand (the server measures and stores it)
-  shareVerify: ({ target, account } = {}) =>
-    j(`/api/share/verify?target=${encodeURIComponent(target ?? '')}${account ? `&account=${encodeURIComponent(account)}` : ''}`),
-  // "Am I signed in to this site?" -- the site's own probe where one exists, otherwise the read-only
-  // cookie probe for the site's own host. Available for every posting site, including the ones whose
-  // publishing is unsupported, because the login stage is independent of the send stage.
+  // "Am I signed in to this site?" -- the read-only cookie probe for the site's own host, available for
+  // every posting site, because the login stage is independent of the send stage.
   shareCheckLogin: ({ target, account } = {}) =>
     j(`/api/share/check-login?target=${encodeURIComponent(target ?? '')}${account ? `&account=${encodeURIComponent(account)}` : ''}`),
   shareAudit: () => j('/api/share/audit'),
@@ -222,15 +218,6 @@ export const api = {
   // feature extraction (needs an LLM)
   getFeatures: () => j('/api/features'),
   extractFeatures: () => post('/api/features/extract', {}),
-
-  // live-stream monitoring (feature origin: dd-center/bilibili-dd-monitor, MIT)
-  getLive: (fresh) => j('/api/live' + (fresh ? '?fresh=1' : '')),
-  searchRoster: (q) => j('/api/live/roster?q=' + encodeURIComponent(q)),
-
-  // login accounts and danmaku sending (sending is a write, so it must be confirmed explicitly)
-  getAccounts: () => j('/api/accounts'),
-  sendDanmaku: (payload) => post('/api/danmaku', payload),
-  getDanmakuAudit: () => j('/api/danmaku/audit'),
 
   // person profiles (aggregated by feature extraction)
   getEntities: () => j('/api/entities'),

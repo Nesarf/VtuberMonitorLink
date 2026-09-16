@@ -8,7 +8,6 @@
 //   mediawiki-page         revisions of a given page: revid comparison + the compare API for the diff
 //   mediawiki-recentchanges the recent-changes stream: filter out the changes worth attention by rule
 //   mediawiki-watchlist    the watchlist after logging in: requires BotPassword (stored locally only)
-//   bili-opus              bilibili dynamics: compare new opus_id and record follower growth
 //
 // Alarm rules (copied from that Moegirlpedia set, thresholds configurable):
 //   large edit / large delete / new page / anonymous edit / unpatrolled / specific log types / suspicious keywords
@@ -28,7 +27,6 @@ export const TARGET_KINDS = [
   { id: 'mediawiki-page', zh: 'MediaWiki 条目', en: 'MediaWiki page', login: 'none' },
   { id: 'mediawiki-recentchanges', zh: 'MediaWiki 最近更改', en: 'MediaWiki recent changes', login: 'none' },
   { id: 'mediawiki-watchlist', zh: 'MediaWiki 监视列表', en: 'MediaWiki watchlist', login: 'required' },
-  { id: 'bili-opus', zh: 'B 站动态', en: 'bilibili dynamics', login: 'none' },
 ];
 
 /** Fields a watch target may carry (an allowlist, so the front end cannot write arbitrary things into the config) */
@@ -45,7 +43,6 @@ export const TARGET_FIELDS = [
   'page',
   'namespaces',
   'limit',
-  'uid',
   'username',
   'botPassword',
   'executablePath',
@@ -630,51 +627,6 @@ async function checkWatchlist(target, ctx) {
   };
 }
 
-// ── 5) bilibili dynamics
-async function checkBiliOpus(target, ctx) {
-  const { fetchBilibiliOpus, fetchFollowers } = await import('./fetchers/bilibili.js');
-  const source = { ...target, id: target.id, uid: target.uid, proxy: target.proxy };
-  const res = await fetchBilibiliOpus(source, { cfg: ctx.cfg, log: ctx.log });
-  const ids = res.items.map((i) => i.id);
-  const prev = getBaseline(ctx.cfg, target.id);
-  const follower = res.followers?.follower ?? null;
-  const followerDelta = follower !== null && typeof prev?.follower === 'number' ? follower - prev.follower : null;
-
-  const fresh = prev ? res.items.filter((i) => !(prev.ids ?? []).includes(i.id)) : [];
-  const events = fresh.map((i) => ({
-    kind: 'dynamic',
-    title: i.text.slice(0, 60),
-    text: i.text,
-    url: i.url,
-    images: i.images,
-    stats: i.stats,
-    timestamp: i.time,
-    delta: 0,
-  }));
-  if (followerDelta) {
-    events.push({
-      kind: 'growth',
-      title: '关注量变化',
-      text: `粉丝 ${prev.follower} → ${follower}`,
-      delta: followerDelta,
-      timestamp: new Date().toISOString(),
-    });
-  }
-  const withReasons = events.map((e) => ({ ...e, reasons: applyRules(e, ctx.rules).reasons }));
-  setBaseline(ctx.cfg, target.id, { kind: 'bili-opus', ids: ids.slice(0, 200), follower, at: new Date().toISOString() });
-
-  return {
-    target,
-    first: !prev,
-    changed: fresh.length > 0 || !!followerDelta,
-    events: withReasons,
-    growth: follower !== null ? { follower, delta: followerDelta } : null,
-    summary: prev
-      ? `${fresh.length} 条新动态${followerDelta ? `，粉丝 ${followerDelta > 0 ? '+' : ''}${followerDelta}` : ''}`
-      : `已建立基线（${ids.length} 条动态，粉丝 ${follower ?? '?'}）`,
-  };
-}
-
 // ───────────────────────────────────────────── public / public
 
 const HANDLERS = {
@@ -682,7 +634,6 @@ const HANDLERS = {
   'mediawiki-page': checkMediaWikiPage,
   'mediawiki-recentchanges': checkRecentChanges,
   'mediawiki-watchlist': checkWatchlist,
-  'bili-opus': checkBiliOpus,
 };
 
 /** Check a single watch target / check one target */
@@ -699,6 +650,8 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
         kind: target.kind,
         label: target.label,
         summary: out.summary,
+        // Future-facing field, kept deliberately: no handler returns a `growth` any more, so this is null on
+        // every history entry today (see the comment on the `follower` baseline in server.js).
         growth: out.growth ?? null,
         events: out.events.map((e) => ({ ...e, hunks: e.hunks ? e.hunks.slice(0, 200) : undefined })),
       });

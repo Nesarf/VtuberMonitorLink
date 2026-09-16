@@ -5,25 +5,28 @@
 //
 //   A. No login needed: export a single-file HTML / Markdown / JSON, copy as text, push to a webhook
 //      -- this is the main path. It is always available and carries no account risk whatsoever.
-//   B. Login needed: post to a bilibili dynamic / X and the like. These must **probe the login state first
-//      and only then decide whether they can run** -- we must not pretend we can post, and still less fail
-//      silently while logged out. And they are **never sent automatically by a scheduled run**: speaking in
-//      public is an irreversible act that requires explicit human confirmation (the same discipline as danmaku posting).
+//   B. Login needed: post to Weibo / a YouTube community tab / Mastodon / Reddit. These must **probe the
+//      login state first and only then decide whether they can run** -- we must not pretend we can post, and
+//      still less fail silently while logged out. And they are **never sent automatically by a scheduled
+//      run**: speaking in public is an irreversible act that requires explicit human confirmation.
 //
 // Why a posting target is described as **three independent stages** rather than one status:
 // "can I post to this site" is really three different questions, and they are answered by three different
 // things, so collapsing them into one badge hides exactly the step that is missing:
 //
-//   account      which account/credential this site would use, and whether it exists and is usable
-//   verification whether what the site needs *before posting* is satisfied -- for bilibili that is
-//                "SESSDATA + bili_jct are valid and the account may post dynamics"
+//   account      which credential this site would use, and whether it exists and is usable
+//   verification whether what the site needs *before posting* is satisfied
 //   send         actually posting, which is only meaningful once the first two are settled
 //
-// The account stage is read from the local login store (measured, see getAccounts); the verification stage is
-// an **app-level state that is only measured against the site on demand** (measureVerification below) -- the user
-// explicitly chose that shape over a mandatory live check and over a purely local config check, because a login
-// probe costs a request and must not run every time the page is opened, while a local-only check would just be
-// a guess dressed up as a measurement.
+// The account stage reads the local login store; the verification stage is an **app-level state that is only
+// measured against the site on demand** -- the user explicitly chose that shape over a mandatory live check
+// and over a purely local config check, because a login probe costs a request and must not run every time
+// the page is opened, while a local-only check would just be a guess dressed up as a measurement.
+//
+// This build enumerates **no logins at all** (see the note under §checking a login state), so the account
+// stage currently reports "nothing found" and the send stage "no code yet" for every posting site. That is
+// the honest state of the table rather than a gap in it: the three stages, their labels and the whole
+// measurement machinery stay, and a credential this build could see would flow through them unchanged.
 //
 // So the core of this module is not "how to post" but four things:
 //   1) **Generate a single file that carries its own styling** (open it and it just works, no external
@@ -36,14 +39,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
 import { htmlShell } from './reports.js';
-import { listAccounts, whoAmI as defaultWhoAmI } from './accounts.js';
-import { readBrowserCookies } from './cookies.js';
+import { readBrowserCookies, SESSION_COOKIE } from './cookies.js';
 import { resolveProfileTarget } from './browser-target.js';
-import { netFetch } from './net.js';
 
 // ───────────────────────────────────────────── per-site publishing profile
 //
-// "What a site needs before sharing" is **declared** here and **measured** in measureVerification().
+// "What a site needs before sharing" is **declared** here and **measured** on demand.
 // Declaring it is not the same as checking it, and the two are deliberately kept apart: a site that is
 // declared but has never been measured reports "not measured" rather than "fine". That is the difference
 // between the "detect it for me" behaviour this feature is asked for and a guess dressed up as a measurement.
@@ -54,9 +55,6 @@ import { netFetch } from './net.js';
 //   requirements[]   the conditions that must hold before posting; each carries a bilingual label and an id
 //                    that a measurement pass can return as unsatisfied
 //   verify           the measurement implemented for this site right now:
-//                      'login-probe'  read the credential and ask the site who it is  (bilibili)
-//                      'token-scope'  check a stored token carries the scope posting needs (mastodon)
-//                      'http-probe'   an authenticated request against the site's API
 //                      null           no site-specific probe; the **generic login check** below still
 //                                     measures the login state honestly, and this field says only that
 //                                     nothing site-specific exists
@@ -67,7 +65,7 @@ import { netFetch } from './net.js';
 //                    to read" (a Mastodon instance is the user's own), which is reported as such.
 //   publish          how publishing itself is implemented
 //   implemented      whether the code path that publishes exists today
-//   textLimit        how many characters the site accepts (bilibili dynamics: 2000)
+//   textLimit        how many characters the site accepts
 //   maxImages        how many images one post may carry
 //   manual           how to hand the work over to a person when this app cannot post there:
 //                      compose -- the site's own compose page, with `{text}` where the text goes
@@ -78,67 +76,8 @@ import { netFetch } from './net.js';
 //   note             bilingual explanatory copy shown under the site
 export const SHARE_SITES = [
   {
-    id: 'bilibili-dynamic',
-    order: 10,
-    name: { zh: '发到 B 站动态', en: 'Post to a bilibili dynamic' },
-    loginKind: 'bilibili',
-    credential: {
-      zh: '浏览器登录态里的 SESSDATA + bili_jct',
-      en: 'SESSDATA + bili_jct from the browser login',
-    },
-    requirements: ['login', 'session', 'csrf', 'write-permission'],
-    verify: 'login-probe',
-    host: 'bilibili.com',
-    publish: 'rest-csrf',
-    implemented: true,
-    unsupported: false,
-    textLimit: 2000,
-    maxImages: 9,
-    manual: {
-      compose: 'https://t.bilibili.com/?tab=dyn',
-      // The dynamic composer takes no text from the query string, so the hand-off copies and opens the page.
-      needs: { zh: 'B 站账号，登录后手动粘贴正文并选图', en: 'a bilibili account; paste the body and pick the images by hand' },
-      images: true,
-    },
-    hint: {
-      zh: '需要 B 站的 SESSDATA + bili_jct（就是从浏览器登录态里读的那套）。**功能已实现但尚未用真实账号验证过** —— 第一次成功发出后它才会被标为可用。绝不能自动发：必须你点确认。',
-      en: 'Needs bilibili SESSDATA + bili_jct (read from your browser login). The code path exists but has NOT been verified with a real account yet; it becomes available only after one successful post. Never automatic — always requires your confirmation.',
-    },
-  },
-  {
-    id: 'x-post',
-    order: 20,
-    name: { zh: '发到 X / Twitter', en: 'Post to X / Twitter' },
-    loginKind: 'twitter',
-    credential: { zh: 'OAuth 2.0 授权（需要开发者应用）', en: 'OAuth 2.0 authorisation (needs a developer app)' },
-    requirements: ['login', 'token', 'scope'],
-    verify: null,
-    // X's compose endpoint is on twitter.com, but the login a person actually holds lives on x.com --
-    // the two are the same service and the cookie is stored against x.com.
-    host: 'x.com',
-    publish: 'oauth2-api',
-    implemented: false,
-    // "there is no code yet" and "this must never be done" are different answers, and the send stage has to
-    // keep them apart: the first is work in progress, the second will not change. X is the second one.
-    // It says nothing about the **login** stage: whether a person is signed in to X is measurable on its
-    // own, and a hand-off to X is exactly when that is worth knowing.
-    unsupported: true,
-    textLimit: 280,
-    maxImages: 4,
-    manual: {
-      // The intent endpoint is the one path X offers for a pre-filled post, and it works while logged out too.
-      compose: 'https://twitter.com/intent/tweet?text={text}',
-      needs: { zh: 'X 账号（网页上登录即可），正文 280 字符以内', en: 'an X account (logged in on the web); the body within 280 characters' },
-      images: true,
-    },
-    hint: {
-      zh: '不提供：X 的发帖接口要 OAuth 2.0 授权与开发者应用，用浏览器 cookie 硬凑既不可靠也违反其条款。需要的话请用官方 API 自行对接。',
-      en: 'Not offered: posting to X requires OAuth 2.0 with a developer app; scraping cookies would be unreliable and against their terms. Use their official API if you need it.',
-    },
-  },
-  {
     id: 'weibo-post',
-    order: 30,
+    order: 10,
     name: { zh: '发到微博', en: 'Post to Weibo' },
     loginKind: 'weibo',
     credential: { zh: '登录 cookie（SUB）+ 表单里的 XSRF token', en: 'login cookies (SUB) + the XSRF token on the form' },
@@ -162,7 +101,7 @@ export const SHARE_SITES = [
   },
   {
     id: 'youtube-community',
-    order: 40,
+    order: 20,
     name: { zh: '发到 YouTube 社区', en: 'Post to a YouTube community tab' },
     loginKind: 'youtube',
     credential: { zh: 'OAuth 2.0（youtube.force-ssl 权限）', en: 'OAuth 2.0 with the youtube.force-ssl scope' },
@@ -186,7 +125,7 @@ export const SHARE_SITES = [
   },
   {
     id: 'mastodon-post',
-    order: 50,
+    order: 30,
     name: { zh: '发到 Mastodon', en: 'Post to Mastodon' },
     loginKind: 'mastodon',
     credential: { zh: '实例上的一张访问令牌（write:statuses）', en: 'an access token from your instance (write:statuses)' },
@@ -215,7 +154,7 @@ export const SHARE_SITES = [
   },
   {
     id: 'reddit-post',
-    order: 60,
+    order: 40,
     name: { zh: '发到 Reddit', en: 'Post to Reddit' },
     loginKind: 'reddit',
     credential: { zh: 'OAuth 访问令牌（submit 权限）+ User-Agent', en: 'an OAuth access token (submit scope) + a User-Agent' },
@@ -303,8 +242,8 @@ export const SHARE_TARGETS = [
       en: 'Sends through the channels configured in Settings → Notifications (no extra login).',
     },
   },
-  // The six posting sites, in the order the work is done (bilibili first, a source for it already exists).
-  // They are generated from SHARE_SITES so the declarations cannot drift away from the profile table.
+  // The posting sites, in the order the work is done. They are generated from SHARE_SITES so the
+  // declarations cannot drift away from the profile table.
   ...SHARE_SITES.map((site) => ({
     id: site.id,
     name: site.name,
@@ -518,7 +457,7 @@ export const VERIFY_TTL_MS = 7 * 24 * 3600 * 1000;
  * Read the verification store out of the config.
  *
  * Shape: `{ [targetId]: { [accountId]: { at, ok, unsatisfied, measured, account } } }`.
- * The older shape was a plain list of target ids (`['bilibili-dynamic']`), which answered the wrong
+ * The older shape was a plain list of target ids, which answered the wrong
  * question: it says "this code path once worked", not "this account can post". The credential decides
  * whether a post succeeds, so the account is part of the key and a legacy list is read as "verified with
  * an unknown account" rather than dropped (dropping it would silently re-block a working setup).
@@ -581,20 +520,33 @@ function accountsFor(profile, accounts = []) {
 //   cookies  cookies for that host, but no session cookie -- "probably not signed in"
 //   none     nothing for that host at all, with the reason the read failed
 //
-// What this deliberately does not do: invent discovery for a login kind that has none. `accounts.js`
-// finds bilibili logins (and only those); for the OAuth kinds there is nothing on this machine to find,
-// so the result says so instead of showing an empty cell that reads like "no login".
+// What this deliberately does not do: invent discovery for a login kind that has none. This build
+// enumerates no logins at all -- reading a browser's cookie store and turning it into an "account" is a
+// per-site job, and the one implementation this project had asked a single site who the credential was.
+// So the account stage reports what is missing, and the login check below still measures the cookie
+// store of the site's own host, which is a real measurement of "is there a session cookie here".
+// The entry point that will use an account is `accountsFor()` above: feed it a list of accounts of the
+// right kind and the three stages light up unchanged.
+//
+// "Check login state" has to mean the same thing everywhere: **measure it now and report what was found**.
+// For every posting site the honest measurement is the read-only cookie probe against the site's own host,
+// which copies the browser cookie store and returns counts and names, never a value. The three outcomes it
+// can give are kept apart, because they send a person in different directions:
+//
+//   session  a login cookie is there (a session cookie was found among the cookies)
+//   cookies  cookies for that host, but no session cookie -- "probably not signed in"
+//   none     nothing for that host at all, with the reason the read failed
 
 /**
  * How a login state of this target could be measured.
  *
  * Pure, and deliberately independent of whether an account happens to exist: the check button asks
- * "what would you run", and a site with a probe of its own keeps it while everything else falls back to
- * the generic cookie probe for the site's host.
+ * "what would you run", and a site that declares a probe of its own keeps it while everything else falls
+ * back to the generic cookie probe for the site's host.
  * @param {object|string} target a share target (from shareTargets) or its id
  * @param {object} cfg
  * @returns {{target:string|null, loginKind:string|null, host:string|null,
- *            probe:'login-probe'|'token-scope'|'http-probe'|'cookie-probe'|null,
+ *            probe:'cookie-probe'|null,
  *            checkable:boolean, needsAccount:boolean, detail:{zh:string,en:string}|null}}
  */
 export function resolveLoginProbe(target, cfg = {}) {
@@ -626,6 +578,9 @@ export function resolveLoginProbe(target, cfg = {}) {
     };
   }
   if (profile.verify) {
+    // A site that declares a probe of its own keeps it named here, and `needsAccount` says that running it
+    // would need a credential. Nothing in this build enumerates credentials, so checkLoginState answers with
+    // the probe's name and a reason instead of silently measuring the host instead.
     return { target: id, loginKind, host, probe: profile.verify, checkable: true, needsAccount: true, detail: null };
   }
   if (!host) {
@@ -642,15 +597,16 @@ export function resolveLoginProbe(target, cfg = {}) {
   return { target: id, loginKind, host, probe: 'cookie-probe', checkable: true, needsAccount: false, detail: null };
 }
 
-/** Cookies that mean "this browser is signed in", by login kind (used by the generic probe's verdict) */
-const SESSION_COOKIE = /^(SESSDATA|SUB|SUB_SESSION|auth_token|sessionid|ct0|SID)$/i;
+// The session-cookie predicate comes from server/src/cookies.js on purpose: the settings page's probe and
+// this check read the same store, and a name that counts as a login in one of them has to count in both, or
+// the two surfaces disagree about the same machine.
 
 /**
  * Measure the login state of one target, now.
  *
  * @param {object} cfg
  * @param {string} targetId
- * @param {{accounts?:object[], accountId?:string|null, whoAmI?:Function, profileDir?:string, readCookies?:Function}} opts
+ * @param {{accounts?:object[], accountId?:string|null, profileDir?:string, readCookies?:Function}} opts
  *   `readCookies(profileDir, domains)` is injectable so the routing decision can be tested offline; the
  *   default is the same implementation the settings page's probe uses. `opts.profileDir` is an explicit
  *   hand-in (a caller that was given one on purpose); with none, the shared resolver in
@@ -659,7 +615,7 @@ const SESSION_COOKIE = /^(SESSDATA|SUB|SUB_SESSION|auth_token|sessionid|ct0|SID)
  *   apart from "no profile is configured, and here is where you set one".
  */
 export async function checkLoginState(cfg, targetId, opts = {}) {
-  const { accounts = [], accountId = null, whoAmI = defaultWhoAmI } = opts;
+  const { accounts = [], accountId = null } = opts;
   const target = targetById(targetId, cfg);
   const profile = siteProfileById(targetId, cfg);
   if (!target || !profile) return { ok: false, target: targetId, status: 'error', reason: 'unknown target' };
@@ -682,28 +638,30 @@ export async function checkLoginState(cfg, targetId, opts = {}) {
   }
 
   const list = accountsFor(profile, accounts);
+  // Which credential this site would use, when the caller handed any in. This build hands in none (see the
+  // note above the section): the cell then says which credential the site needs and nothing more, which is
+  // the honest answer rather than an empty chooser that reads as "you have no login".
   const chosen = accountId ? list.find((a) => a.id === accountId) ?? null : pickAccount(profile, accounts);
   const name = chosen ? chosen.name ?? chosen.uname ?? chosen.mid ?? chosen.id ?? null : null;
 
-  // The site's own probe first: where one exists it is the stronger measurement, and it is the one the
-  // send stage depends on, so the state measured here is the state that stage reads.
+  // A site that declares a probe of its own: say which one it is. Nothing here can run it (the probe needs
+  // a credential, and this build finds no credentials), so the answer is the probe's name and a reason,
+  // never a pass it did not measure.
   if (plan.probe !== 'cookie-probe') {
-    const r = await measureVerification(cfg, targetId, { accounts, accountId, whoAmI });
     return {
-      ok: !!r.ok,
+      ok: false,
       target: targetId,
-      status: r.ok ? 'verified' : 'failed',
-      probe: r.probe ?? plan.probe,
+      status: 'failed',
+      probe: plan.probe,
       loginKind: plan.loginKind,
       host: plan.host,
-      accountId: r.accountId ?? chosen?.id ?? null,
-      accountName: r.accountName ?? name,
+      accountId: chosen?.id ?? null,
+      accountName: name,
       accountKind: plan.loginKind,
       discovered: list.length,
-      reason: r.reason ?? null,
-      detail: r.detail ?? null,
-      measured: r.measured ?? null,
-      at: r.at ?? new Date().toISOString(),
+      reason: `this site is measured with its own "${plan.probe}" probe, which needs a credential this build cannot look up`,
+      detail: { zh: '本站有自己的检测方式，但它需要一份凭证；本版本不查找凭证，因此这里不会假装测过', en: 'this site has a probe of its own, but it needs a credential; this build looks none up, so it does not pretend to have measured anything' },
+      at: new Date().toISOString(),
     };
   }
 
@@ -746,9 +704,6 @@ export async function checkLoginState(cfg, targetId, opts = {}) {
     accountKind: plan.loginKind,
     discovered: list.length,
     at: new Date().toISOString(),
-    // Whether this app can even look for an account of this kind: it finds bilibili logins and nothing
-    // else, and saying so is the point (an empty chooser otherwise reads as "no login").
-    accountDiscovery: plan.loginKind === 'bilibili',
   };
   if (!ck?.ok) return { ok: false, status: 'none', ...base, reason: ck?.error ?? 'the cookie store could not be read' };
   if (!names.length) return { ok: false, status: 'none', ...base, reason: `no cookies stored for ${domain}` };
@@ -875,7 +830,7 @@ function accountStage(target, profile, accounts, accountId, { requirementRows = 
  * The verification stage: whether what the site needs **before posting** is satisfied.
  *
  * Two kinds of evidence count, and they are kept apart on purpose:
- *   measured -- measureVerification() ran against the site (or against the credential) and said so, for
+ *   measured -- a measurement ran against the site (or against the credential) and said so, for
  *               this exact account, and the result is not stale
  *   declared -- the target is "ready" in its own declaration; that only means "nothing is known to be
  *               missing", which is why a target that has never been measured still shows needs-verification
@@ -895,10 +850,6 @@ function verificationStage(target, profile, accounts, store, { accountId = null,
       actionable: false,
     };
   }
-  // A platform that forbids the *method* says nothing about the login stage: whether a person is signed
-  // in to X is measurable on its own, and a hand-off to X is exactly the moment that is worth knowing.
-  // So `unsupported` no longer short-circuits this stage -- it only removes the site-specific probe
-  // (there is none to run) and leaves the generic login check, which is a real measurement.
   const chosen = accountId ? accountsFor(profile, accounts).find((a) => a.id === accountId) ?? null : pickAccount(profile, accounts);
   const entry = chosen ? verificationFor(store, target.id, chosen.id) : null;
   const fresh = verificationFreshness(entry, nowMs);
@@ -916,49 +867,73 @@ function verificationStage(target, profile, accounts, store, { accountId = null,
       method: entry.method ?? null,
       // The same field on every branch: what measured this, so the page has one thing to read.
       probe: entry.method ?? profile?.verify ?? resolveLoginProbe(target, cfg).probe,
-      actionable: !!profile?.verify,
+      actionable: false,
     };
   }
   // No probe implemented is **blocked**, not "needed": nothing the user can do here would move it by
-  // running the site's own verification. That is still true, and the login stage stays independently
-  // checkable -- so the stage says which method the check button would use, and `actionable` is true
-  // whenever a real measurement exists, whatever it is.
+  // running the site's own verification. The login stage stays independently checkable either way, so the
+  // stage names the probe the check button would run, whatever it is.
   const noProbe = !profile?.verify;
   const fallback = resolveLoginProbe(target, cfg);
-  // The probe the check button would run, whatever it is: the site's own where one exists, the cookie probe
-  // as the fallback, null when this login kind (or this site's missing host) leaves nothing to run. Reported
-  // for **every** target, so the page never has to infer it from `verify` being null.
+  // The probe the check button would run, whatever it is: the site's own where one exists, null when this
+  // login kind (or this site's missing host) leaves nothing to run. Reported for **every** target, so the
+  // page never has to infer it from `verify` being null.
   const probe = profile?.verify ?? fallback.probe;
-  const why = noProbe
-    ? fallback.checkable
-      ? {
-          zh: `没有该站点专用的检测；登录态可以用只读 cookie 探针查（${fallback.host}）`,
-          en: `no site-specific probe; the login state can still be read with the read-only cookie probe (${fallback.host})`,
-        }
-      : fallback.detail
-    : !chosen
-      ? { zh: '先有账号才能验证', en: 'an account is needed before anything can be verified' }
-      : entry?.ok === false
-        ? { zh: `上次测量的结果是不通过：${entry.detail?.zh ?? entry.reason ?? ''}`, en: `the last measurement failed: ${entry.detail?.en ?? entry.reason ?? ''}` }
-        : fresh.stale && entry?.ok === true
-          ? { zh: '上次的验证结果已经过期，需要重新测一次', en: 'the last verification is stale; measure again' }
+  // `actionable` means "there is a **cookie probe** this app can actually run for this site". A site-specific
+  // probe is not one of them any more: it needs a credential, and this build looks none up. The read-only
+  // cookie probe needs a host and a login kind, and nothing else -- so a site with a host is actionable even
+  // though its own probe is not, while a hostless one (a Mastodon instance is the user's own) is not.
+  //
+  // `fallbackProbe` deliberately does NOT reuse `fallback.probe`: for a site that declares a probe of its own,
+  // resolveLoginProbe answers with that probe (it is a better measurement, where it can run), and the field
+  // here is the one the check button would actually use.
+  const cookieProbe = profile?.host && profile?.loginKind ? 'cookie-probe' : null;
+  // Why each of these is a fact rather than a fallback, and the order they are asked in:
+  //   1) a stored measurement for this account that has gone stale is the most useful thing to say, because
+  //      the user can act on it ("measure again"). It is asked **before** "this site has no probe of its own"
+  //      for exactly that reason: a site whose login state is checked through the cookie probe also stores
+  //      measurements, and reporting only "no site-specific probe" would hide the one that expired;
+  //   2) no probe of its own, with a host to read -> the cookie probe is named, since that is what would run;
+  //   3) no probe and no host to read -> the reason there is nothing to run at all.
+  const why = fresh.stale && entry
+    ? { zh: '上次的验证结果已经过期，需要重新测一次', en: 'the last verification is stale; measure again' }
+    : entry?.ok === false
+      ? { zh: `上次测量的结果是不通过：${entry.detail?.zh ?? entry.reason ?? ''}`, en: `the last measurement failed: ${entry.detail?.en ?? entry.reason ?? ''}` }
+      : noProbe
+        ? fallback.checkable
+          ? {
+              zh: `没有该站点专用的检测；登录态可以用只读 cookie 探针查（${fallback.host}）`,
+              en: `no site-specific probe; the login state can still be read with the read-only cookie probe (${fallback.host})`,
+            }
+          : fallback.detail
+        : !chosen
+          ? { zh: '先有账号才能验证', en: 'an account is needed before anything can be verified' }
           : { zh: '还没测过', en: 'not measured yet' };
   return {
     id: 'verification',
     i18nKey: STAGE_I18N.verification[noProbe && !fallback.checkable ? 'blocked' : 'needed'],
     status: noProbe && !fallback.checkable ? 'blocked' : 'needed',
     detail: why,
+    // Why the send-stage verification cannot be run, in words, whenever it cannot be. A stage that says
+    // `actionable: false` and nothing else is the dead control this project already ruled out once (a
+    // disabled button must carry its reason) -- and the reason is product data here rather than UI copy,
+    // because it depends on what this particular site declares. `null` means "there is something to run",
+    // which is why it is `null` rather than an empty string.
+    notRunnable: cookieProbe
+      ? null
+      : {
+          zh: '这一步需要该站点自己的检测，它要用一份登录凭证；本版本不查找凭证，所以这里只如实报告缺什么。',
+          en: 'this step is the site’s own check, which needs a login credential; this build looks none up, so it reports what is missing instead.',
+        },
     accountId: chosen?.id ?? null,
     probe,
-    // What the fallback would run, kept separately so "this site has a probe" and "a login state can still be
-    // measured" stay two different facts in the answer.
-    fallbackProbe: fallback.probe,
+    // What the checkout button would run if the site's own probe is not it, kept separately so "this site
+    // has a probe" and "a login state can still be measured" stay two different facts in the answer.
+    fallbackProbe: cookieProbe,
     probeHost: fallback.host,
     verifiedAt: fresh.verifiedAt,
     lastOk: entry?.ok ?? null,
-    // A real measurement exists whenever either probe does. For the sites this build cannot post to
-    // (unsupported, or not implemented) this is still true: the login stage is independent of the send stage.
-    actionable: !!probe,
+    actionable: !!cookieProbe,
   };
 }
 
@@ -1019,7 +994,7 @@ function sendStage(target, profile, account, verification) {
 /**
  * The three stages of one target.
  * @param {object} target
- * @param {object[]} accounts the result of listAccounts()
+ * @param {object[]} accounts the credentials this site could use (empty in this build; see the note on accountsFor)
  * @param {object} store the verification store (see verificationStore)
  * @param {object} [opts] { accountId, nowMs }
  */
@@ -1054,12 +1029,12 @@ export function stagesReport(accounts = [], store = {}, cfg = {}, opts = {}) {
             credential: st.profile.credential,
             requirements: st.profile.requirements,
             verify: st.profile.verify,
-            // The host the generic login check reads, and whether this app can look for an account of
-            // this login kind at all. Both travel with the profile so the page renders what was decided
-            // here instead of guessing from the login kind.
+            // The host the generic login check reads, and that no account discovery exists for any
+            // login kind in this build. Both travel with the profile so the page renders what was
+            // decided here instead of guessing from the login kind.
             host: st.profile.host ?? null,
             loginKind: st.profile.loginKind ?? null,
-            accountDiscovery: st.profile.loginKind === 'bilibili',
+            accountDiscovery: false,
             publish: st.profile.publish,
             implemented: st.profile.implemented,
             unsupported: st.profile.unsupported,
@@ -1079,8 +1054,10 @@ export function stagesReport(accounts = [], store = {}, cfg = {}, opts = {}) {
  * The accounts to offer for one target.
  *
  * A chooser needs the accounts that could be used *and* which requirements each of them already satisfies,
- * because "these two accounts are both bilibili logins, but only one of them carries a CSRF token" is the
- * exact question the account stage exists to answer. It is per target because the requirements are.
+ * because "these two credentials are both of this kind, but only one of them carries the token the site
+ * needs" is the exact question the account stage exists to answer. It is per target because the
+ * requirements are. Empty in this build (nothing enumerates logins), and shaped so a caller that has
+ * accounts can hand them straight in.
  */
 export function accountsForTarget(targetId, accounts = [], cfg = {}) {
   const target = targetById(targetId, cfg);
@@ -1118,14 +1095,16 @@ export function verifiedByTarget(store) {
 /**
  * The list of places a hand-added site may take its credentials from.
  *
- * The chooser in the UI is built from this, so it can only offer kinds this module knows how to look for.
+ * The chooser in the UI is built from this, so it can only offer kinds this module knows how to describe.
  * `null` is in the list and means "no login at all" (a site that accepts anonymous posts), which is a real
  * answer and not a placeholder.
+ *
+ * A kind is a **description** of a credential, not a promise that this build can find one: nothing here
+ * enumerates logins, so `probe` says what could be measured if a credential were handed in, which for a
+ * cookie kind is the read-only cookie probe and for an OAuth kind is nothing at all.
  */
 export const LOGIN_KINDS = [
-  { id: 'bilibili', label: { zh: 'B 站（浏览器登录态）', en: 'bilibili (browser login)' } },
   { id: 'weibo', label: { zh: '微博（浏览器登录态）', en: 'Weibo (browser login)' } },
-  { id: 'twitter', label: { zh: 'X / Twitter（OAuth）', en: 'X / Twitter (OAuth)' } },
   { id: 'youtube', label: { zh: 'YouTube（OAuth）', en: 'YouTube (OAuth)' } },
   { id: 'reddit', label: { zh: 'Reddit（OAuth）', en: 'Reddit (OAuth)' } },
   { id: 'mastodon', label: { zh: 'Mastodon（实例令牌）', en: 'Mastodon (instance token)' } },
@@ -1162,7 +1141,7 @@ export function sanitizeSiteEntry(input) {
   // A site with no login is only describable while it takes anonymous posts; mark that as a declared
   // requirement of its own instead of an empty list (an empty list means "nothing to check", which would
   // report satisfied for a site nobody has looked at).
-  const requirements = kindRaw === null ? ['anonymous'] : kindRaw === 'bilibili' || kindRaw === 'weibo' ? ['login', 'session', 'csrf'] : ['login', 'token', 'scope'];
+  const requirements = kindRaw === null ? ['anonymous'] : kindRaw === 'weibo' ? ['login', 'session', 'csrf'] : ['login', 'token', 'scope'];
   const textLimit = Number.isFinite(Number(raw.textLimit)) ? Math.max(1, Math.min(100000, Math.round(Number(raw.textLimit)))) : 2000;
   const maxImages = Number.isFinite(Number(raw.maxImages)) ? Math.max(0, Math.min(60, Math.round(Number(raw.maxImages)))) : 4;
   // A hand-added site may declare its own compose page, because that is what makes the manual hand-off
@@ -1196,9 +1175,9 @@ export function sanitizeSiteEntry(input) {
       loginKind: kindRaw,
       credential: { zh: `${kindLabel.zh} 的登录态`, en: `the login of ${kindLabel.en}` },
       requirements,
-      // No probe by default. A probe name that no code implements would be a promise this module cannot
-      // keep, so the verification stage reports "no probe exists" until one is written for this kind.
-      verify: kindRaw === 'bilibili' ? 'login-probe' : null,
+      // No site-specific probe: a probe name that no code implements would be a promise this module cannot
+      // keep, and the generic cookie probe (which needs only a host) is the measurement that does exist.
+      verify: null,
       // Not every kind gets one -- and the generic check reports "no host" rather than reading a domain
       // that was never the user's site.
       host: host ?? null,
@@ -1250,20 +1229,15 @@ function hostFromCompose(composeRaw) {
   }
 }
 
-/** What one login kind can be measured with, in words (the UI shows this under the add-site form) */
-export function probeAvailability(loginKind) {
-  if (loginKind === 'bilibili') {
-    return {
-      probe: 'login-probe',
-      label: { zh: '可以检测：读浏览器登录态并向站点确认身份', en: 'measurable: reads the browser login and asks the site who it is' },
-    };
-  }
-  if (loginKind === 'mastodon') {
-    return {
-      probe: 'token-scope',
-      label: { zh: '可以检测：本地检查令牌有没有发帖权限', en: 'measurable: checks locally whether the token carries the posting scope' },
-    };
-  }
+/**
+ * What one login kind can be measured with, in words (the UI shows this under the add-site form).
+ *
+ * Every kind now answers "nothing site-specific", because the two probes this project had were both tied to
+ * sites that are no longer supported, and each of them needed a credential this build does not look up. The
+ * read-only cookie probe is not a per-kind probe: it works off the site's **host**, whatever the kind, and
+ * that is why it is not named here.
+ */
+export function probeAvailability() {
   return {
     probe: null,
     label: { zh: '暂无可跑的检测：只会如实报告缺什么，不会假装验证过', en: 'no probe yet: it reports what is missing instead of pretending it was verified' },
@@ -1525,157 +1499,15 @@ export function buildHandoff({ targetId, bundle = null, cfg = {}, accountId = nu
 }
 
 // ───────────────────────────────────────────── measurement
-
-const VERIFY_METHODS = {
-  'login-probe': 'an authenticated "who am I" request to the site',
-  'token-scope': 'the scopes carried by the stored token',
-  'http-probe': 'an authenticated request to the site API',
-};
-
-/**
- * Measure the verification stage for real.
- *
- * This is the "check against the site only on demand" half of the decision: it costs a request, so the
- * UI runs it when the user asks, not on every page open. What it deliberately does **not** do is publish
- * anything -- for bilibili it reads the credential and asks the site who the account is, which is the
- * closest honest measurement of "this credential can post" that does not put text in public.
- *
- * Every failure path returns a reason; nothing here ever reports ok:true without having talked to the site.
- * @param {object} cfg
- * @param {string} targetId
- * @param {object} [opts] { accounts, accountId, whoAmI (injectable for tests), fetchCookies }
- */
-export async function measureVerification(cfg, targetId, { accounts = [], accountId = null, whoAmI = defaultWhoAmI } = {}) {
-  const target = targetById(targetId, cfg);
-  if (!target) return { ok: false, target: targetId, error: 'unknown target' };
-  const profile = siteProfileById(targetId, cfg);
-  if (!profile) return { ok: false, target: targetId, error: 'not a posting target' };
-  const method = profile.verify;
-  if (!method) {
-    return {
-      ok: false,
-      target: targetId,
-      implemented: false,
-      probe: null,
-      reason: 'no probe implemented for this site yet -- declared requirements only',
-      unsatisfied: profile.requirements.map((id) => ({ id, label: REQUIREMENTS[id]?.label ?? null })),
-    };
-  }
-
-  const chosen = accountId
-    ? accountsFor(profile, accounts).find((a) => a.id === accountId) ?? null
-    : accountsFor(profile, accounts).find((a) => a.id === pickAccountId(targetId, accounts, cfg)) ?? pickAccount(profile, accounts);
-  if (!chosen) {
-    return { ok: false, target: targetId, probe: method, reason: `no ${profile.loginKind} account to verify`, unsatisfied: [] };
-  }
-
-  const m = requirementsMet(profile, chosen);
-  if (!m.met) {
-    return {
-      ok: false,
-      target: targetId,
-      probe: method,
-      accountId: chosen.id,
-      accountName: chosen.name ?? chosen.uname ?? chosen.mid ?? chosen.id,
-      reason: `the credential does not satisfy: ${m.unsatisfied.map((u) => u.id).join(', ')}`,
-      unsatisfied: m.unsatisfied,
-    };
-  }
-
-  if (method === 'token-scope') {
-    const has = chosen.hasScope === true;
-    const at = new Date().toISOString();
-    return {
-      ok: has,
-      target: targetId,
-      probe: method,
-      accountId: chosen.id,
-      accountName: chosen.name ?? chosen.id,
-      method: VERIFY_METHODS[method],
-      at,
-      reason: has ? null : 'the stored token does not carry the posting scope',
-      detail: has
-        ? { zh: '令牌带有发帖权限', en: 'the token carries the posting scope' }
-        : { zh: '令牌缺少发帖权限', en: 'the token lacks the posting scope' },
-    };
-  }
-
-  // login-probe: read the credential fresh (never a cached cookie) and ask the site who it is
-  let cookieHeader = chosen.cookieHeader ?? null;
-  if (!cookieHeader && chosen.profile) {
-    const ck = await readBrowserCookies(chosen.profile, [credentialDomain(profile.loginKind)]);
-    if (!ck.ok) {
-      return {
-        ok: false,
-        target: targetId,
-        probe: method,
-        accountId: chosen.id,
-        accountName: chosen.name ?? chosen.uname ?? chosen.mid ?? chosen.id,
-        reason: `could not read the credential: ${ck.error}`,
-      };
-    }
-    cookieHeader = ck.cookieHeader;
-  }
-  if (!cookieHeader) {
-    return { ok: false, target: targetId, probe: method, accountId: chosen.id, reason: 'no credential available' };
-  }
-  const me = await whoAmI(cfg, cookieHeader);
-  const at = new Date().toISOString();
-  if (!me?.ok) {
-    return {
-      ok: false,
-      target: targetId,
-      probe: method,
-      accountId: chosen.id,
-      at,
-      reason: `the site refused the credential: ${me?.error ?? 'unknown error'}`,
-      detail: { zh: `站点拒绝了这份登录态：${me?.error ?? ''}`, en: `the site refused the credential: ${me?.error ?? ''}` },
-    };
-  }
-  if (!me.isLogin) {
-    return {
-      ok: false,
-      target: targetId,
-      probe: method,
-      accountId: chosen.id,
-      at,
-      reason: 'the credential is not a logged-in session any more',
-      detail: { zh: '这份登录态已经失效（站点说没登录）', en: 'the credential is no longer a logged-in session' },
-    };
-  }
-  const name = me.uname ?? chosen.name ?? chosen.uname ?? chosen.mid ?? chosen.id;
-  return {
-    ok: true,
-    target: targetId,
-    probe: method,
-    accountId: chosen.id,
-    accountName: name,
-    mid: me.mid ?? null,
-    method: VERIFY_METHODS[method],
-    at,
-    // What was measured, said plainly: the site answered with this identity, which is exactly the thing
-    // that must be true before a post can be expected to land under this account.
-    measured: { isLogin: true, mid: me.mid ?? null, uname: me.uname ?? null },
-    detail: { zh: `站点确认登录态有效：${name}${me.mid ? `（mid ${me.mid}）` : ''}`, en: `the site confirmed the login: ${name}${me.mid ? ` (mid ${me.mid})` : ''}` },
-    reason: null,
-  };
-}
-
-/** The cookie domain a login kind is read from (only the kinds that are actually probed need one) */
-function credentialDomain(loginKind) {
-  return (
-    {
-      bilibili: 'bilibili.com',
-      weibo: 'weibo.com',
-      twitter: 'x.com',
-      youtube: 'youtube.com',
-      reddit: 'reddit.com',
-    }[loginKind] ?? String(loginKind ?? '')
-  );
-}
+//
+// The "measure it against the site, only on demand" half of the verification decision has no
+// implementation left to call: the only two probes this project had belonged to the two sites that were
+// removed, and both needed a credential that nothing here enumerates any more. The read-only cookie probe
+// in checkLoginState above is the measurement that remains, and it needs no account: it reads the browser
+// store for the site's own host and reports counts and names.
 
 function loginKindLabel(kind) {
-  return { bilibili: 'B 站', weibo: '微博', twitter: 'X', youtube: 'YouTube', reddit: 'Reddit', mastodon: 'Mastodon' }[kind] ?? String(kind ?? '');
+  return { weibo: '微博', youtube: 'YouTube', reddit: 'Reddit', mastodon: 'Mastodon' }[kind] ?? String(kind ?? '');
 }
 
 function siteCredentialLabel(profile) {
@@ -1928,115 +1760,6 @@ export function contentDisposition(filename) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
-// ───────────────────────────────────────────── login requirements
-
-/**
- * Whether one share target can be used right now (the send stage, flattened for callers that only need a yes/no).
- * @param {object} target
- * @param {object[]} accounts the result of listAccounts()
- * @param {object} [store] the verification store
- */
-export function checkReadiness(target, accounts = [], store = {}) {
-  if (!target) return { ok: false, reason: 'unknown target' };
-  if (target.status === 'unsupported') return { ok: false, status: 'unsupported', reason: 'unsupported' };
-  if (target.status === 'unimplemented') return { ok: false, status: 'unimplemented', reason: 'there is no publish code for this site yet' };
-  if (!target.needsLogin) return { ok: true, status: 'ready' };
-  const profile = siteProfileById(target.id);
-  const usable = pickAccount(profile, accounts);
-  const met = profile ? requirementsMet(profile, usable) : { met: false, unsatisfied: [] };
-  if (!usable || !met.met) {
-    return {
-      ok: false,
-      status: 'needs-login',
-      reason:
-        target.loginKind === 'bilibili'
-          ? '需要 B 站登录态（SESSDATA + bili_jct），并且浏览器里得是已登录状态'
-          : `需要 ${target.loginKind} 的登录态`,
-      unsatisfied: met.unsatisfied,
-    };
-  }
-  const verified = verificationFor(store, target.id, usable.id);
-  const fresh = verificationFreshness(verified);
-  const done = verified?.ok === true && !fresh.stale;
-  if (!done) {
-    return {
-      ok: false,
-      status: 'needs-verification',
-      account: usable.name ?? usable.uname ?? usable.mid ?? usable.id ?? null,
-      accountId: usable.id ?? null,
-      reason: 'this target has not been measured successfully for this account yet',
-    };
-  }
-  return {
-    ok: true,
-    status: 'ready',
-    account: usable.name ?? usable.uname ?? usable.mid ?? usable.id ?? null,
-    accountId: usable.id ?? null,
-    ready: true,
-  };
-}
-
-/** Readiness of every target at a glance (the UI uses it to show what is missing) */
-export function readinessReport(accounts = [], store = {}, cfg = {}) {
-  return shareTargets(cfg).map((t) => {
-    const r = checkReadiness(t, accounts, store);
-    const st = stageReport(t, accounts, store, { cfg });
-    return {
-      id: t.id,
-      name: t.name,
-      needsLogin: t.needsLogin,
-      status: r.status,
-      declaredStatus: t.status,
-      verified: st.verification.status === 'done',
-      canDo: r.ok,
-      reason: r.reason ?? null,
-      account: r.account ?? null,
-      accountId: r.accountId ?? null,
-      kind: t.kind,
-      hint: t.hint,
-      stages: { account: st.account, verification: st.verification, send: st.send },
-      site: st.profile
-        ? { id: st.profile.id, credential: st.profile.credential, verify: st.profile.verify, implemented: st.profile.implemented, maxImages: st.profile.maxImages }
-        : null,
-    };
-  });
-}
-
-// ───────────────────────────────────────────── accounts cache
-
-/**
- * Reading the login state is **blocking** (synchronous SQLite plus execFileSync calling PowerShell to
- * unwrap DPAPI), and Node is single-threaded -- reading it fresh on every visit to the share page would
- * stall the whole server for seconds and drag every other request down with it (in the traversal that
- * showed up as the report list sitting at "loading" forever).
- *
- * So: read once, cache for a while. But **force a refresh before speaking in public** -- basing a post
- * decision on a stale login state is like opening a new lock with an old key.
- */
-const accountsCache = { at: 0, value: null };
-export const ACCOUNTS_TTL_MS = 60000;
-
-export async function getAccounts(cfg, { force = false, ttlMs = ACCOUNTS_TTL_MS } = {}) {
-  const now = Date.now();
-  if (!force && accountsCache.value && now - accountsCache.at < ttlMs) {
-    return { accounts: accountsCache.value, cached: true };
-  }
-  try {
-    const r = await listAccounts(cfg);
-    accountsCache.value = r.accounts ?? [];
-    accountsCache.at = now;
-    return { accounts: accountsCache.value, cached: false };
-  } catch (e) {
-    // When it cannot be read, treat it as "no login state" (rather than letting the whole endpoint 500)
-    return { accounts: accountsCache.value ?? [], cached: false, error: e.message };
-  }
-}
-
-export function clearAccountsCache() {
-  accountsCache.at = 0;
-  accountsCache.value = null;
-}
-
 // ───────────────────────────────────────────── audit
 
 export function auditPath(cfg) {
@@ -2080,14 +1803,17 @@ export function readAudit(cfg, limit = 50) {
 /**
  * The gate in front of speaking in public.
  *
- * Same discipline as danmaku posting, because a failure or a wrong post is irreversible:
+ * Same discipline as any other irreversible outward action, because a failure or a wrong post is
+ * irreversible:
  *   1. an explicit confirm is mandatory
  *   2. all three stages must be settled: an account that satisfies the site's declared requirements,
  *      a verification that was measured successfully **for that account** and is not stale, and a
  *      publish implementation that exists
  *   3. the content must be non-empty and within the limit the site itself declares
- *   4. leave an audit entry
- * A scheduled run never reaches this code -- the only call sites are HTTP routes.
+ *   4. the caller leaves an audit entry (see appendAudit)
+ * It is kept even though no site in this build declares a publish implementation: it is the shape every
+ * future one has to pass through, and the "no code path exists" answer it gives today is a real answer
+ * rather than a promise. A scheduled run never reaches this code -- the only call site is an HTTP route.
  */
 export function guardPost(cfg, { target, accounts = [], verified = {}, text, confirm = false, accountId = null }) {
   const t = targetById(target, cfg);
@@ -2122,50 +1848,3 @@ export function guardPost(cfg, { target, accounts = [], verified = {}, text, con
   return { ok: true, target: t, body, profile, accountId: st.account.accountId };
 }
 
-/**
- * Actually post the content to a bilibili dynamic.
- *
- * Same discipline as danmaku: **re-read the cookie on the spot** (no caching), take CSRF from bili_jct,
- * and report the error code bilibili gives back honestly. This function is only ever called after
- * "confirmed + verified + logged in".
- */
-export async function postBilibiliDynamic(cfg, { accountId, text, log = null }) {
-  const { accounts } = await listAccounts(cfg);
-  const acct = accounts.find((a) => a.id === accountId) ?? accounts.find((a) => a.canSend);
-  if (!acct) return { ok: false, error: '没有可用的 B 站登录态' };
-  if (!acct.canSend) return { ok: false, error: `账号 ${acct.name ?? acct.id} 缺少 SESSDATA 或 bili_jct` };
-
-  const ck = await readBrowserCookies(acct.profile, ['bilibili.com']);
-  if (!ck.ok) return { ok: false, error: `读不到登录态：${ck.error}` };
-  const csrf = /(?:^|;\s*)bili_jct=([^;]+)/.exec(ck.cookieHeader)?.[1] ?? '';
-  if (!csrf) return { ok: false, error: '缺少 bili_jct，无法通过 CSRF 校验' };
-
-  const body = new URLSearchParams({ dynamic: text, csrf, csrf_token: csrf });
-  try {
-    const res = await netFetch(
-      'https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/create',
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          cookie: ck.cookieHeader,
-          referer: 'https://t.bilibili.com/',
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        },
-        body: body.toString(),
-        signal: AbortSignal.timeout(20000),
-      },
-      { cfg, mode: 'direct' }
-    );
-    const j = await res.json().catch(() => null);
-    const code = Number(j?.code ?? -1);
-    const ok = res.ok && code === 0;
-    const out = { ok, code, account: acct.name ?? acct.id, accountId: acct.id, error: ok ? null : j?.message ?? `HTTP ${res.status}` };
-    if (ok) log?.info(`dynamic posted as ${out.account}`);
-    else log?.warn(`dynamic post failed: ${out.error}`);
-    return out;
-  } catch (e) {
-    const cause = e?.cause?.code ?? e?.cause?.message ?? '';
-    return { ok: false, error: cause ? `${e.message}(${cause})` : e.message };
-  }
-}

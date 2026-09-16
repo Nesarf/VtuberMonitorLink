@@ -272,14 +272,19 @@ process.stdout.write(`   [ok]   all key files present\n`);
 // Two real defects lived in this catalogue and neither had a check, so both had to be found by hand:
 // the one built-in source without a url could not be probed at all (the probe skips a source with no
 // address, so asking for that one alone answered "nothing to probe" and the UI called it untestable),
-// and every built-in bilibili source fed the Live tab, so the app shipped showing example rooms nobody
-// chose. Both invariants cost three lines to state, which is the whole argument for stating them.
+// and every built-in source of one platform fed the Live tab, so the app shipped showing example rooms
+// nobody chose. Both invariants cost three lines to state, which is the whole argument for stating them.
+//
+// The second defect is now settled the other way: the platform, its four dynamic sources, its live
+// endpoint and the tab they fed were all removed, so the catalogue must not offer such a source at all.
+// That is checked here over the whole catalogue and over the fetch kinds the custom-source editor
+// offers, because "the product no longer knows this site" is exactly the kind of fact that comes back
+// through a helper nobody meant to keep.
 try {
   const { pathToFileURL } = await import('node:url');
   const sourcesUrl = pathToFileURL(path.join(ROOT, 'server/src/sources.js')).href;
-  const liveUrl = pathToFileURL(path.join(ROOT, 'server/src/live.js')).href;
-  const { BUILTIN_SOURCES } = await import(sourcesUrl);
-  const { liveUids } = await import(liveUrl);
+  const { BUILTIN_SOURCES, CATEGORIES, sourceLoginHost } = await import(sourcesUrl);
+  const { FETCH_KINDS } = await import(pathToFileURL(path.join(ROOT, 'server/src/fetchers/index.js')).href);
 
   const noUrl = (BUILTIN_SOURCES ?? []).filter((s) => !s.url);
   const unparsable = (BUILTIN_SOURCES ?? []).filter((s) => {
@@ -294,15 +299,97 @@ try {
   if (unparsable.length) problems.push(`built-in source(s) whose url does not parse: ${unparsable.map((s) => s.id).join(', ')}`);
   if (!noUrl.length && !unparsable.length) process.stdout.write(`   [ok]   ${BUILTIN_SOURCES.length} built-in sources, every one with a usable address\n`);
 
-  const biliInLive = (BUILTIN_SOURCES ?? []).filter((s) => s.category === 'bili' && s.liveCheck !== false);
-  if (biliInLive.length) problems.push(`built-in bilibili source(s) would decide the Live tab: ${biliInLive.map((s) => s.id).join(', ')} (each needs liveCheck: false)`);
+  // The catalogue no longer knows the two retired platforms, by id, by host or by declared category.
+  const RETIRED = /bilibili|bili[-.]|(^|[^a-z])x\.com|twitter/i;
+  const retiredSources = (BUILTIN_SOURCES ?? []).filter((s) => RETIRED.test(s.id) || RETIRED.test(String(s.url ?? '')) || RETIRED.test(String(s.category ?? '')) || RETIRED.test(JSON.stringify(s.name ?? {})));
+  if (retiredSources.length) problems.push(`the catalogue still offers the retired platform(s): ${retiredSources.map((s) => `${s.id} (${s.url})`).join(', ')}`);
+  const retiredCategories = Object.keys(CATEGORIES ?? {}).filter((c) => RETIRED.test(c));
+  if (retiredCategories.length) problems.push(`a retired platform is still a source category: ${retiredCategories.join(', ')}`);
+  const retiredKinds = (FETCH_KINDS ?? []).filter((k) => RETIRED.test(k.id) || RETIRED.test(String(k.zh ?? '')) || RETIRED.test(String(k.en ?? '')));
+  if (retiredKinds.length) problems.push(`a retired platform is still an offered fetch kind: ${retiredKinds.map((k) => k.id).join(', ')}`);
+  if (!retiredSources.length && !retiredCategories.length && !retiredKinds.length) {
+    process.stdout.write('   [ok]   no source, category or fetch kind names a retired platform\n');
+  }
 
-  // And the mechanism itself: the flag must actually be honoured, and live.uids must still be read.
-  const fromDefaults = liveUids({ live: { uids: [] } }, BUILTIN_SOURCES);
-  if (fromDefaults.length) problems.push(`the Live tab would start with rooms from built-in sources: ${fromDefaults.map((u) => u.uid).join(', ')}`);
-  const explicit = liveUids({ live: { uids: ['12345'] } }, BUILTIN_SOURCES);
-  if (!explicit.some((u) => u.uid === '12345')) problems.push('a uid in live.uids is no longer honoured');
-  if (!fromDefaults.length && explicit.some((u) => u.uid === '12345')) process.stdout.write('   [ok]   the Live tab starts empty, and a uid the user chose still counts\n');
+  // The control: the same detectors over a catalogue that does offer one, so "nothing matches" cannot be
+  // satisfied by a regex that matches nothing at all.
+  const fixture = [{ id: 'bili-opus-x', url: 'https://space.bilibili.com/1/dynamic', category: 'bili', name: { zh: 'B站动态', en: 'bilibili' } }];
+  const fixtureHits = fixture.filter((s) => RETIRED.test(s.id) || RETIRED.test(String(s.url)) || RETIRED.test(s.category) || RETIRED.test(JSON.stringify(s.name)));
+  const fixtureKind = [{ id: 'bili-opus', zh: 'B 站图文动态', en: 'bilibili dynamics' }].filter((k) => RETIRED.test(k.id) || RETIRED.test(k.zh) || RETIRED.test(k.en));
+  if (fixtureHits.length !== 1 || fixtureKind.length !== 1) {
+    problems.push('the "no retired platform in the catalogue" check does not fire on a catalogue that offers one, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, a catalogue that does offer one, is caught)\n');
+  }
+
+  // The same absence for the watch-target kinds. The kind that left read an account id from a site this
+  // product no longer knows, and the release walk pins the count on the running app; this states it offline,
+  // where a failure names the offending entry instead of only "5 kinds, expected 4".
+  const { TARGET_KINDS } = await import(pathToFileURL(path.join(ROOT, 'server/src/watch.js')).href);
+  const retiredTargetKinds = (TARGET_KINDS ?? []).filter((k) => RETIRED.test(`${k.id} ${k.zh ?? ''} ${k.en ?? ''}`));
+  const expectedTargetKinds = 4; // url / mediawiki-page / mediawiki-recentchanges / mediawiki-watchlist
+  if (retiredTargetKinds.length) problems.push(`a retired platform is still a watch-target kind: ${retiredTargetKinds.map((k) => k.id).join(', ')}`);
+  else if ((TARGET_KINDS ?? []).length !== expectedTargetKinds) problems.push(`the watch-target kinds are ${(TARGET_KINDS ?? []).length}, and this check pins ${expectedTargetKinds}: if a kind was added or removed, say which and why here`);
+  else process.stdout.write(`   [ok]   the ${expectedTargetKinds} watch-target kinds name no retired platform\n`);
+  const targetKindFixture = [{ id: 'bili-opus', zh: 'B 站动态', en: 'bilibili dynamics' }].filter((k) => RETIRED.test(`${k.id} ${k.zh} ${k.en}`));
+  if (targetKindFixture.length !== 1) problems.push('the watch-kind detector does not fire on a fixture that carries one, so it proves nothing');
+  else process.stdout.write('   [ok]   (and the control, a watch kind that names one, is caught)\n');
+
+  // A source with no url has no login host to probe, and the host is never guessed from the platform.
+  if (sourceLoginHost({ id: 'rss-x', category: 'community', fetch: 'rss' }) !== null) {
+    problems.push('a source with no url no longer answers "no host", so the check would silently do nothing');
+  } else if (sourceLoginHost({ id: 'b', url: 'https://space.bilibili.com/123/dynamic' }) !== 'space.bilibili.com') {
+    problems.push('the probe host is no longer taken from the source url itself');
+  } else {
+    process.stdout.write('   [ok]   a source is probed on its own host, and one with no url says so\n');
+  }
+
+  // No **default** source may declare `login: 'required'` -- measured on the tree this landed in: the eight
+  // literals in the catalogue are five `'none'` and three `'optional'`, and the only real `required` left is
+  // the `mediawiki-watchlist` watch-target kind, which the user adds deliberately.
+  //
+  // This is one assertion, not a rule about the field: `required` stays legal in the vocabulary (the file
+  // header documents it, and server/src/watch.js uses it), it must just not be used by a source that ships
+  // enabled by default. The reason it is worth pinning at all is that a source nobody can fetch without a
+  // login turns a first run into a wall of red, and "it came back through a helper nobody meant to keep" is
+  // how a required login returned before.
+  const requiredLogin = (BUILTIN_SOURCES ?? []).filter((s) => s.login === 'required');
+  if (requiredLogin.length) {
+    problems.push(
+      `built-in source(s) declaring login: 'required', so a default source cannot be fetched without a login state: ${requiredLogin
+        .map((s) => s.id)
+        .join(', ')} (required is still a legal value -- this pins only that no shipped source uses it)`,
+    );
+  } else {
+    process.stdout.write('   [ok]   no built-in source requires a login state\n');
+  }
+  // The control: the same detector over a catalogue that does declare one, so an empty `requiredLogin` cannot
+  // be satisfied by a comparison that never matches. If the real catalogue ever does declare one, the check
+  // above fails and its detail names the id, so this control passes for the right reason either way.
+  const requiredFixture = [{ id: 'wiki-login-only', login: 'required' }].filter((s) => s.login === 'required');
+  if (requiredFixture.length !== 1) {
+    problems.push('the "no built-in source requires a login" check does not fire on a catalogue that declares one, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, a catalogue that declares one, is caught)\n');
+  }
+
+  // The catalogue and the editor must offer only fields and categories something reads. `uid` was the field
+  // for the one fetch kind that took an account id instead of an address; the kind and the field go together,
+  // and a stored field nothing fetches is the same defect as a dead dictionary key: it looks like a setting.
+  const { CUSTOM_SOURCE_FIELDS } = await import(sourcesUrl);
+  if (CUSTOM_SOURCE_FIELDS.includes('uid')) problems.push('the custom-source field list still accepts `uid`, which no fetch kind reads any more');
+  else process.stdout.write('   [ok]   the custom-source fields do not offer a field nothing fetches\n');
+  const { TARGET_FIELDS } = await import(pathToFileURL(path.join(ROOT, 'server/src/watch.js')).href);
+  if (TARGET_FIELDS.includes('uid')) problems.push('the watch-target field list still accepts `uid`, which no target kind reads any more');
+  else process.stdout.write('   [ok]   the watch-target fields do not offer one either\n');
+
+  // Control: both detectors must fire on a list that does carry it.
+  const fieldFixture = (list) => list.includes('uid');
+  if (!fieldFixture(['id', 'url', 'uid']) || fieldFixture(CUSTOM_SOURCE_FIELDS)) {
+    problems.push('the "no dead source field" detector does not fire on a fixture that carries `uid`, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, a list that does carry it, is caught)\n');
+  }
 } catch (e) {
   problems.push(`could not read the source catalogue: ${e.message}`);
 }
@@ -407,14 +494,18 @@ try {
   const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
   const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
-  // (a) The five surfaces, and the control that they do not merely mention the affordance in a comment.
+  // (a) The four surfaces, and the control that they do not merely mention the affordance in a comment.
   //
   // The browser login probe used to live in Settings.jsx (its Browser section owned the profile dir). It is on
   // the Browser page now — the page that owns the setting is the page that checks it — and Settings points at
   // that page instead of restating the setting, so this entry moved with it.
+  //
+  // The fifth entry was the Live page's danmaku account check. That page is gone (the tab, its route and the
+  // live feature it read were removed together), so the check went with it rather than being pointed at some
+  // other file: an entry whose file no longer exists would make this section fail with an ENOENT instead of
+  // saying anything about logins.
   const surfaces = [
     ['web/src/pages/Browser.jsx', /<LoginCheckButton/, 'the browser login probe'],
-    ['web/src/pages/Live.jsx', /onClick=\{loadAccounts\}/, 'the danmaku account check'],
     ['web/src/pages/Share.jsx', /<LoginCheckButton/, 'the share login stage'],
     ['web/src/pages/Sources.jsx', /<LoginCheckButton/, 'the per-source login check'],
     ['web/src/pages/Watch.jsx', /onClick=\{checkWikiLogin\}/, 'the wiki BotPassword check'],
@@ -453,17 +544,53 @@ try {
   if (missingRoutes.length) problems.push(`check-login route(s) missing (or without their guard): ${missingRoutes.map(([r]) => r).join(', ')}`);
   else process.stdout.write(`   [ok]   the ${routes.length} routes behind those buttons exist (the long ones guarded)\n`);
 
-  // (d) The login stage is independent of the send stage: an unsupported target is still checkable, and the
+  // (d) The login stage is independent of the send stage. Every posting target must be checkable, and the
   // control is a login kind with no probe AND no host, which is the only case with nothing to measure.
+  //
+  // What changed this round: the two probes this project implemented belonged to sites that were removed, so
+  // "a site with its own probe stays checkable" is asserted on a **declared** profile rather than on a
+  // built-in one -- and the distinction that matters now is `actionable`: a site whose login state this build
+  // can read for real (the cookie probe against its own host) must say so, and a site whose probe would need a
+  // credential this build cannot look up must not claim it can run it.
   const posts = shareTargets({}).filter((x) => x.kind === 'post');
   const notCheckable = posts.filter((x) => !resolveLoginProbe(x, {}).checkable);
-  const unsupported = posts.filter((x) => x.status === 'unsupported');
-  const unsupportedStages = stagesReport([], {}, {}).filter((x) => x.declaredStatus === 'unsupported');
-  const notActionable = unsupportedStages.filter((x) => x.stages.verification.actionable !== true);
   if (notCheckable.length) problems.push(`posting target(s) with no login check at all: ${notCheckable.map((x) => x.id).join(', ')}`);
-  else if (!unsupported.length) notes.push('no target is declared unsupported any more, so the "a site that cannot post is still checkable" check is now vacuous');
-  else if (notActionable.length) problems.push(`unsupported target(s) whose login stage is not actionable: ${notActionable.map((x) => x.id).join(', ')}`);
-  else process.stdout.write(`   [ok]   all ${posts.length} posting targets are checkable, including the ${unsupported.length} that cannot post\n`);
+  else process.stdout.write(`   [ok]   all ${posts.length} posting targets are checkable\n`);
+
+  const withHost = posts.filter((x) => resolveLoginProbe(x, {}).host);
+  const notActionable = withHost.filter((x) => stagesReport([], {}, {}).find((y) => y.id === x.id)?.stages.verification.actionable !== true);
+  if (notActionable.length) {
+    problems.push(`posting target(s) with a readable host whose login stage claims nothing can be run: ${notActionable.map((x) => x.id).join(', ')}`);
+  } else {
+    process.stdout.write(`   [ok]   the ${withHost.length} target(s) with a readable host report an actionable login check\n`);
+  }
+
+  // A declared site-specific probe is reported as such, and is NOT called runnable: running it would need a
+  // credential, and nothing in this build enumerates one. The site here has no host either (its compose page
+  // is the `{instance}` placeholder of a Mastodon instance), so neither probe can run and the stage must not
+  // claim one can.
+  const probeSite = { id: 'probe-site', loginKind: 'mastodon', verify: 'token-scope', manual: { compose: 'https://{instance}/publish?text={text}' } };
+  const probeCfg = { share: { sites: [probeSite] } };
+  const probePlan = resolveLoginProbe('probe-site', probeCfg);
+  const probeStage = stagesReport([], {}, probeCfg).find((y) => y.id === 'probe-site');
+  if (probePlan.probe !== 'token-scope' || probePlan.needsAccount !== true) {
+    problems.push('a declared site-specific probe is no longer reported with its own name');
+  } else if (probeStage?.stages.verification.actionable !== false || probeStage?.stages.verification.probe !== 'token-scope') {
+    problems.push('a site-specific probe is reported as runnable, although running it needs a credential nothing here looks up');
+  } else {
+    process.stdout.write('   [ok]   a site-specific probe is named, and is not claimed runnable\n');
+  }
+
+  // The control for that: the same site with a host. Its own probe still cannot run, but the read-only cookie
+  // probe for that host can, and the stage has to say so -- otherwise "not runnable" would be satisfied by a
+  // stage that never reports a measurement at all.
+  const withHostCfg = { share: { sites: [{ ...probeSite, host: 'example.social' }] } };
+  const withHostStage = stagesReport([], {}, withHostCfg).find((y) => y.id === 'probe-site');
+  if (withHostStage?.stages.verification.actionable !== true || withHostStage?.stages.verification.fallbackProbe !== 'cookie-probe') {
+    problems.push('a site with a readable host reports no runnable login check, so "not runnable" above proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, the same site with a host, is measurable after all)\n');
+  }
 
   // The control: a cookie login kind on a site with no knowable host must be refused rather than probed.
   const noHost = resolveLoginProbe('weibo-no-host', { share: { sites: [{ id: 'weibo-no-host', loginKind: 'weibo', manual: { compose: 'https://{instance}/compose?text={text}' } }] } });
@@ -472,10 +599,9 @@ try {
 
   // (e) The sources page takes the host from the source itself, and the wiki probe stays read-only: both are
   // "the honest measurement" this round is about, so a regression in either makes the button lie.
-  if (sourceLoginHost({ id: 'bili-opus-x', category: 'bili', fetch: 'bili-opus' }) !== 'bilibili.com') problems.push('the bilibili source fallback host changed, so a bilibili source would be probed on a subdomain the cookie is not stored against');
   if (sourceLoginHost({ id: 'rss-x', category: 'community', fetch: 'rss' }) !== null) problems.push('a source with no url no longer answers "no host", so the check would silently do nothing');
   if (!/sourceProbeHost/.test(read('web/src/pages/Sources.jsx'))) problems.push('the sources page no longer resolves the probe host itself, so a source with no host cannot say so before sending a request');
-  else process.stdout.write('   [ok]   a source is probed on its own host (bilibili on the parent domain, no url -> no host)\n');
+  else process.stdout.write('   [ok]   a source is probed on its own host, and one with no url says so\n');
 
   const anon = parseWikiLoginResponse({ query: { userinfo: { id: 0, anon: true } } });
   const named = parseWikiLoginResponse({ query: { userinfo: { id: 7, name: 'Bot@Task' } } });
@@ -644,13 +770,18 @@ try {
   // exact shape the old code had (each feature reading `cfg.browser.profileDir` itself), and it is the one the
   // detector has to catch — so the control is that shape, not an invented different key (measured: a fixture
   // reading `browser.cookiesDir` proves nothing here, because this detector looks for *the* key).
+  //
+  // The consumer it mutates is taken from the inventory rather than named: it used to name the danmaku row,
+  // that row's module was removed with the live feature, and a control that names a gone row silently stops
+  // proving anything (it would mutate nothing and report "did not fire").
+  const victim = rows.find((r) => r.symbol === 'resolveProfileDir') ?? rows[0];
   const wrong = sources.map((s) =>
-    s.id === 'danmaku' ? { ...s, source: s.source.replace('resolveProfileDir(cfg)', 'cfg.browser.profileDir') } : s,
+    s.id === victim.id ? { ...s, source: s.source.replace(/resolveProfileDir\(cfg\)/, 'cfg.browser.profileDir') } : s,
   );
   const wrongProblems = target.browserConsumerProblems(wrong);
   if (wrongProblems.length !== 1) {
     problems.push(
-      `the browser-profile structural check does not fire when a consumer reads the key itself (got ${wrongProblems.length} problem(s)), so it proves nothing`,
+      `the browser-profile structural check does not fire when a consumer (${victim.id}) reads the key itself (got ${wrongProblems.length} problem(s)), so it proves nothing`,
     );
   } else if (!/directly/.test(wrongProblems[0])) {
     problems.push(`the browser-profile control fired, but on something other than the direct read: ${wrongProblems[0]}`);
@@ -713,6 +844,74 @@ try {
   else process.stdout.write('   [ok]   control: a call to a method that is not defined is flagged, a real one is not\n');
 } catch (e) {
   problems.push(`could not read the api surface: ${e.message}`);
+}
+
+// ───────────────────────────────────────────── 5i. the removed surface really is gone
+//
+// Two whole features were deleted this round: the live-status page with its own routes, and the two
+// social platforms the product used to know. A removal leaves two kinds of trace behind, and neither
+// makes a build fail: a route that is still registered (some page will find it again and call it), and a
+// page or module that is still referenced from the navigation or an import graph. So the absence is
+// stated, in the two places a reader would look for it — the file system and the app's own route table.
+//
+// Each family is checked with a control on a fixture that *does* contain the thing, because "no match"
+// produced by a pattern that can never match is the classic way an absence check proves nothing.
+try {
+  // (a) The files are gone. A file that came back would be a feature nobody asked to bring back.
+  const removed = [
+    'server/src/live.js',
+    'server/src/danmaku.js',
+    'server/src/accounts.js',
+    'server/src/wbi.js',
+    'server/src/fetchers/bilibili.js',
+    'web/src/pages/Live.jsx',
+    'tools/wbi-test.mjs',
+  ];
+  const stillThere = removed.filter((f) => fs.existsSync(path.join(ROOT, f)));
+  if (stillThere.length) problems.push(`file(s) of a removed feature are back: ${stillThere.join(', ')}`);
+  else process.stdout.write(`   [ok]   ${removed.length} file(s) of the removed features are gone\n`);
+
+  const removalFixture = (list) => list.filter((f) => f === 'server/src/live.js');
+  if (removalFixture(removed).length !== 1) problems.push('the "is the file gone" detector does not fire on a fixture that still lists one, so it proves nothing');
+  else process.stdout.write('   [ok]   (and the control, a file that is still listed, is caught)\n');
+
+  // (b) The routes are gone, and they are gone from the app's own route table -- not merely from a page.
+  // The control is the literal route strings themselves, so a detector that reads the file and finds
+  // nothing has to find those when they are present.
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const goneRoutes = ['/api/live', '/api/live/roster', '/api/danmaku', '/api/accounts'];
+  const routeStill = goneRoutes.filter((r) => serverSrc.includes(`'${r}`));
+  if (routeStill.length) problems.push(`route(s) of a removed feature are still registered: ${routeStill.join(', ')}`);
+  else process.stdout.write(`   [ok]   no route under ${goneRoutes.slice(0, 2).join(' or ')} or /api/danmaku or /api/accounts exists\n`);
+
+  const routeFixture = (src) => goneRoutes.filter((r) => src.includes(`'${r}`));
+  if (routeFixture("app.get('/api/live', handler);").length !== 1) {
+    problems.push('the "is the route gone" detector does not fire on a fixture that registers one, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, a source that registers one, is caught)\n');
+  }
+
+  // (c) The navigation lost exactly one tab, and the page it named is not reachable any more. The count is
+  // read out of App.jsx and asserted against the number of rendered pages, so a tab added without a page
+  // (or a page left behind by a removed tab) shows up here rather than as a blank screen.
+  const appSrc = fs.readFileSync(path.join(ROOT, 'web/src/App.jsx'), 'utf8');
+  const tabs = (appSrc.match(/^const TABS = \[(.*)\];$/m)?.[1] ?? '').match(/'[a-z_]+'/g) ?? [];
+  const rendered = appSrc.match(/\{tab === '[a-z_]+' &&/g) ?? [];
+  if (tabs.length !== 11) problems.push(`the navigation has ${tabs.length} tabs; the live tab was removed, so eleven are expected`);
+  else if (rendered.length !== tabs.length) problems.push(`the navigation lists ${tabs.length} tabs but renders ${rendered.length} page(s)`);
+  else if (tabs.includes("'live'")) problems.push('the navigation still offers a live tab');
+  else process.stdout.write('   [ok]   the navigation offers 11 tabs, and every one of them renders a page\n');
+
+  // The control: the same reading over a shell that still names the removed tab.
+  const tabFixture = "const TABS = ['intel', 'search', 'live', 'run'];\n{tab === 'intel' && <Intel />}\n";
+  const fixtureTabs = (tabFixture.match(/^const TABS = \[(.*)\];$/m)?.[1] ?? '').match(/'[a-z_]+'/g) ?? [];
+  if (fixtureTabs.length === 11 || !fixtureTabs.includes("'live'")) {
+    problems.push('the tab reader does not see a removed tab in a fixture that names one, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, a shell that still names the live tab, is caught)\n');
+  }
+} catch (e) {
+  problems.push(`could not read the removed surface: ${e.message}`);
 }
 
 // ───────────────────────────────────────────── 6. bug table numbering

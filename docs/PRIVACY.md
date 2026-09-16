@@ -5,7 +5,7 @@
 ## Our commitments
 
 1. **No account or cookie is ever packaged or uploaded.**
-   Sites that require login (for example X post bodies, Twitch follow lists) are always logged into by the user **in their own browser**;
+   Sites that require login (for example a Twitch follow list, or any source you declare yourself) are always logged into by the user **in their own browser**;
    this tool only "borrows" that browser's profile to render pages, and what is stored in the configuration is the **browser path + profile directory**, not the credentials themselves.
 
 2. **Nothing is ever sent back.**
@@ -84,16 +84,23 @@ The same applies to the list of private names in `.sanitize-names`.
 
 ## Browser login state (`server/src/cookies.js`)
 
-Some sources have to be logged in to scrape (bilibili dynamics with images, X post bodies). This tool offers two routes, and
-**by default neither writes cookies to any persistent location**:
+Some sources have to be logged in to scrape (the Twitch following list, a wiki watchlist, a source you
+declare yourself). This tool offers two routes, and **by default neither writes cookies to any persistent
+location**:
 
 ### Route A: read-only extraction (recommended; the browser can stay open)
 
 The browser's cookie store is **copied** to a temporary directory and then decrypted: the temporary copy is deleted once used,
 and the original profile is neither locked nor modified.
 
-- Only the domains you specify are read (default `bilibili.com`); all other domains are left untouched;
-- The decrypted plaintext is assembled into a single Cookie header in this process's memory only, and sent straight to the corresponding site;
+- The mechanism is **generic**: it reads the host the caller names (the Browser page's field starts at
+  `reddit.com`, and any host can be typed in), and it carries no per-site list of what a login looks like -
+  the one thing it recognises is the *shape* of a session-cookie name;
+- Only the host you specify is read; all other domains are left untouched;
+- The decrypted values are assembled into a single Cookie header **in this process's memory only**, and are
+  never written to disk. Nothing in this build sends that header: the login surfaces report cookie **names**
+  and counts, which is all the check needs. The header assembly stays because it is what a site-specific
+  caller would use - the mechanism was kept, the per-site callers went with their platforms;
 - **No log, no report, nothing into `feeds/`**; `POST /api/cookies/check` returns only
   "which cookie names were read", never a value;
 - The DPAPI key-decryption step invokes the local `powershell.exe` once (offline, no network);

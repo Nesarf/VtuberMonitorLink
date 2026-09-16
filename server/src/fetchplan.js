@@ -29,10 +29,6 @@ export const FETCH_LADDER = {
   'mediawiki-api': ['browser'],
   // RSS unavailable (feed dead/blocked) -> fetch the same URL with a browser
   rss: ['browser'],
-  // Anonymous dynamics hit a risk-control wall -> there is no anonymous alternative
-  // (bili-dynamic needs a login, so we must not silently upgrade to it)
-  'bili-opus': [],
-  'bili-dynamic': [],
   browser: [],
   'search-only': [],
 };

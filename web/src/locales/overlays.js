@@ -12,7 +12,6 @@
 //     showing English is preferable to showing machine-translation garbage.
 //     Bulk completion goes through tools/i18n-translate.mjs (with your own LLM key, reviewable
 //     entry by entry).
-
 /** British spelling: whole-word replacement, never a substring (meter must not turn parameter into parametre) */
 export const GB_SPELL = [
   ['color', 'colour'],
@@ -30,7 +29,6 @@ export const GB_SPELL = [
   ['aluminum', 'aluminium'],
   ['check', 'check'], // keep it: check is also common in British English
 ];
-
 /** Verb stems with a clear inflectional spelling difference (the organize -> organise family) */
 export const GB_STEMS = [
   'organiz', 'recogniz', 'optimiz', 'normaliz', 'serializ', 'summariz', 'localiz',
@@ -38,7 +36,6 @@ export const GB_STEMS = [
   'minimiz', 'maximiz', 'realiz', 'utiliz', 'memoriz', 'visualiz', 'finaliz',
   'apologiz', 'prioritiz', 'analyz',
 ];
-
 /**
  * UI elements added later (new tabs, new panels) get their own small table.
  *
@@ -77,7 +74,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "ログイン状態を確認するにはユーザー名と BotPassword を入力してください",
     loginNoDiscovery: "この種類のアカウントを見つける手段がありません（見つけられるログインは一種類だけです）。不足しているものをそのまま報告します",
     shareAccountPick: "使うアカウント",
-    shareCheck: "必要な状態を確認",
     shareConfig: "設定",
     shareImages: "画像",
     shareImagesCount: "1ファイルあたりの最大枚数",
@@ -146,7 +142,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "로그인 상태를 확인하려면 사용자 이름과 BotPassword를 입력하세요",
     loginNoDiscovery: "이 종류의 계정을 찾을 방법이 없습니다(찾을 수 있는 로그인은 한 종류뿐입니다). 부족한 것을 그대로 보고합니다",
     shareAccountPick: "사용할 계정",
-    shareCheck: "필요한 상태 확인",
     shareConfig: "설정",
     shareImages: "이미지",
     shareImagesCount: "파일당 최대 장수",
@@ -215,7 +210,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "กรอกชื่อผู้ใช้และ BotPassword ก่อนจึงจะตรวจสอบการเข้าสู่ระบบได้",
     loginNoDiscovery: "ไม่มีวิธีค้นหาบัญชีประเภทนี้ (ค้นพบได้เพียงการเข้าสู่ระบบชนิดเดียว) จึงรายงานสิ่งที่ขาดตามจริง",
     shareAccountPick: "บัญชีที่จะใช้",
-    shareCheck: "ตรวจสอบสิ่งที่ต้องมี",
     shareConfig: "ตั้งค่า",
     shareImages: "รูปภาพ",
     shareImagesCount: "จำนวนสูงสุดต่อไฟล์",
@@ -284,7 +278,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Isi nama pengguna dan BotPassword sebelum memeriksa login",
     loginNoDiscovery: "tidak ada cara menemukan akun jenis ini (hanya satu jenis login yang bisa ditemukan), jadi yang dilaporkan adalah apa yang kurang",
     shareAccountPick: "Akun yang dipakai",
-    shareCheck: "Periksa yang dibutuhkan",
     shareConfig: "Konfigurasi",
     shareImages: "Gambar",
     shareImagesCount: "Maksimum per berkas",
@@ -353,7 +346,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Hãy điền tên người dùng và BotPassword trước khi kiểm tra đăng nhập",
     loginNoDiscovery: "không có cách tìm tài khoản thuộc loại đó (chỉ tìm được một loại đăng nhập), nên nó báo đúng những gì còn thiếu",
     shareAccountPick: "Tài khoản dùng",
-    shareCheck: "Kiểm tra yêu cầu",
     shareConfig: "Cấu hình",
     shareImages: "Hình ảnh",
     shareImagesCount: "Tối đa mỗi tệp",
@@ -422,7 +414,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Rellena el usuario y la BotPassword antes de comprobar el inicio de sesión",
     loginNoDiscovery: "no hay forma de buscar una sesión de este tipo (solo se encuentra un tipo de inicio de sesión), así que informa de lo que falta",
     shareAccountPick: "Cuenta a usar",
-    shareCheck: "Comprobar lo necesario",
     shareConfig: "Configurar",
     shareImages: "Imágenes",
     shareImagesCount: "Máximo por archivo",
@@ -476,7 +467,6 @@ const LATE_KEYS = {
     tab_calendar: "Calendario",
     sourceRegion: "Región",
     shareAccountPick: "Cuenta a usar",
-    shareCheck: "Comprobar lo necesario",
     shareConfig: "Configurar",
     shareImages: "Imágenes",
     shareImagesCount: "Máximo por archivo",
@@ -521,7 +511,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Preencha o nome de utilizador e a BotPassword antes de verificar a sessão",
     loginNoDiscovery: "não há forma de encontrar uma sessão deste tipo (só se encontra um tipo de início de sessão), por isso reporta o que falta",
     shareAccountPick: "Conta a usar",
-    shareCheck: "Verificar o que é preciso",
     shareConfig: "Configurar",
     shareImages: "Imagens",
     shareImagesCount: "Máximo por ficheiro",
@@ -590,7 +579,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Preencha o usuário e a BotPassword antes de verificar o login",
     loginNoDiscovery: "não há como encontrar um login desse tipo (só um tipo de login é encontrado), então relata o que está faltando",
     shareAccountPick: "Conta a usar",
-    shareCheck: "Verificar o que é preciso",
     shareConfig: "Configurar",
     shareImages: "Imagens",
     shareImagesCount: "Máximo por arquivo",
@@ -659,7 +647,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Renseignez le nom d’utilisateur et le BotPassword avant de vérifier la connexion",
     loginNoDiscovery: "aucun moyen de rechercher une connexion de ce type (un seul type de connexion est trouvé), le manque est donc signalé tel quel",
     shareAccountPick: "Compte à utiliser",
-    shareCheck: "Vérifier ce qui manque",
     shareConfig: "Configurer",
     shareImages: "Images",
     shareImagesCount: "Maximum par fichier",
@@ -728,7 +715,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Trage Benutzername und BotPassword ein, bevor die Anmeldung geprüft wird",
     loginNoDiscovery: "es gibt keine Möglichkeit, eine Anmeldung dieser Art zu finden (nur eine Anmeldeart ist auffindbar), daher wird gemeldet, was fehlt",
     shareAccountPick: "Zu verwendendes Konto",
-    shareCheck: "Fehlendes prüfen",
     shareConfig: "Konfigurieren",
     shareImages: "Bilder",
     shareImagesCount: "Höchstens pro Datei",
@@ -797,7 +783,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Inserisci nome utente e BotPassword prima di verificare l’accesso",
     loginNoDiscovery: "non c’è modo di cercare un accesso di questo tipo (si trova un solo tipo di accesso), quindi viene riferito ciò che manca",
     shareAccountPick: "Account da usare",
-    shareCheck: "Controlla cosa manca",
     shareConfig: "Configura",
     shareImages: "Immagini",
     shareImagesCount: "Massimo per file",
@@ -866,7 +851,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Введите имя пользователя и BotPassword, прежде чем проверять вход",
     loginNoDiscovery: "способа найти вход такого типа нет (находится только один тип входа), поэтому сообщается, чего не хватает",
     shareAccountPick: "Какой аккаунт",
-    shareCheck: "Проверить, чего не хватает",
     shareConfig: "Настроить",
     shareImages: "Изображения",
     shareImagesCount: "Не больше на файл",
@@ -935,7 +919,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Введіть ім’я користувача та BotPassword, перш ніж перевіряти вхід",
     loginNoDiscovery: "способу знайти вхід такого типу немає (знаходиться лише один тип входу), тому повідомляється, чого бракує",
     shareAccountPick: "Який акаунт",
-    shareCheck: "Перевірити, чого бракує",
     shareConfig: "Налаштувати",
     shareImages: "Зображення",
     shareImagesCount: "Не більше на файл",
@@ -1004,7 +987,6 @@ const LATE_KEYS = {
     loginFieldsEmpty: "Wpisz nazwę użytkownika i BotPassword, zanim sprawdzisz logowanie",
     loginNoDiscovery: "nie ma sposobu, by znaleźć logowanie tego typu (znajdowany jest tylko jeden typ logowania), więc zgłaszane jest to, czego brakuje",
     shareAccountPick: "Które konto",
-    shareCheck: "Sprawdź, czego brakuje",
     shareConfig: "Konfiguruj",
     shareImages: "Obrazy",
     shareImagesCount: "Maksymalnie na plik",
@@ -1074,7 +1056,6 @@ const LATE_KEYS = {
     loginNoDiscovery: "не постоји начин да се пронађе пријава ове врсте (проналази се само једна врста пријаве), па се пријављује шта недостаје",
     customNamePh: "Нечији блог",
     shareAccountPick: "Који налог",
-    shareCheck: "Провери шта недостаје",
     shareConfig: "Подеси",
     shareImages: "Слике",
     shareImagesCount: "Највише по датотеци",
@@ -1137,7 +1118,6 @@ const LATE_KEYS = {
     openEditorTitle: "Paraan ng pagbukas",
     openEditorHint: "Iwanang blangko para gamitin ang editor na nakaayos sa makina, at kung wala ay ang default na paraan ng system. Ang halaga ay \"pangalan ng programa + mga argumento\" at hindi dumadaan sa shell; ang kahilingan ay nagdadala lamang ng uri at pangalan ng file, at ang landas ay hinahanap ng server sa sarili nitong mga folder.",
     shareAccountPick: "Account na gagamitin",
-    shareCheck: "Tingnan ang kailangan",
     shareConfig: "Isaayos",
     shareImages: "Mga larawan",
     shareImagesCount: "Pinakamarami bawat file",
@@ -1208,7 +1188,6 @@ const LATE_KEYS = {
     loginNoDiscovery: "لا توجد طريقة للعثور على تسجيل دخول من هذا النوع (يُعثر على نوع واحد فقط)، لذلك يبلّغ عمّا ينقص",
     outsideRange: "عناصر مستبعدة بسبب شرط الوقت",
     shareAccountPick: "الحساب المستخدم",
-    shareCheck: "تحقق مما يلزم",
     shareConfig: "إعداد",
     shareImages: "الصور",
     shareImagesCount: "الحد الأقصى لكل ملف",
@@ -1314,7 +1293,6 @@ const LATE_KEYS = {
     browserMovedOpen: "Aller aux paramètres",
   },
 };
-
 /**
  * High-visibility entries (each language's second batch) / high-visibility strings
  *
@@ -1416,11 +1394,6 @@ export const HAND_COMMON = {
     // "finish this half-done translation" task, and it still produced the same Chinese-Korean
     // mixture), so by the layering rule the hand-written layer takes over - hand-written always
     // beats machine, and a long prompt sentence like this should go through a human once anyway.
-    liveHint:
-      '방송 시작은 가장 시의성이 높은 정보입니다 — 어떤 키워드보다 먼저 알아야 할 일이죠. ' +
-      '여기서는 모니터링 대상의 방송 상태를 보여 주고, 여러 방송을 격자로 펼쳐 동시에 볼 수 있습니다' +
-      '(빌리빌리 공식 임베드 플레이어를 쓰며, 어떤 중계도 거치지 않고 로그인 정보도 건드리지 않습니다). ' +
-      '「연속 재생」은 실제 방송 시작이 아니므로 따로 표시합니다.',
   },
   'id-ID': {
     // The 41 high-visibility entries, written by hand before the machine pass runs: the machine
@@ -1469,12 +1442,6 @@ export const HAND_COMMON = {
     // Carried here instead of left to the machine pass, for the reason recorded for Korean above:
     // this is a long prompt sentence, and a long sentence is exactly where a machine pass leaves the
     // source language behind. A hand entry always wins, so this one never depends on the model.
-    liveHint:
-      'Mulai siaran adalah intel paling sensitif waktu — lebih layak langsung diketahui ' +
-      'daripada kata kunci mana pun. Di sini ditampilkan status siaran dari objek pemantauan, ' +
-      'dan beberapa ruang siaran bisa langsung disusun menjadi kisi untuk ditonton bersamaan ' +
-      '(memakai pemutar sematan resmi bilibili, tanpa perantara dan tanpa menyentuh status masuk). ' +
-      'Perhatikan bahwa "putar ulang" bukan siaran yang benar-benar mulai, jadi ditandai terpisah.',
     // ── Corrections to the first machine pass, all of them kept here (never in machine.json,
     //    which the pipeline regenerates): a hand entry wins over the machine layer.
     //    Each note quotes the Chinese source string it is about, which is the one case
@@ -1571,13 +1538,6 @@ export const HAND_COMMON = {
     // sentence, which is exactly where a machine pass leaves the source language behind, and it is
     // the first thing a user reads on the Live page. A hand entry always wins, so this sentence never
     // depends on the model.
-    liveHint:
-      'Ang pagsisimula ng live stream ang pinaka-sensitibo sa oras na impormasyon — mas mahalaga ' +
-      'pang malaman agad kaysa sa kahit anong keyword. Dito ipinapakita ang status ng live stream ng ' +
-      'mga sinusubaybayan, at puwede mong isaayos ang ilang silid sa isang grid para sabay na ' +
-      'panoorin (gamit ang opisyal na embed player ng bilibili, walang relay at walang paggamit ng ' +
-      'login). Tandaan na ang "replay" ay hindi tunay na pagsisimula ng live, kaya hiwalay itong ' +
-      'minarkahan.',
     // ── The count labels, and why they are handled by a plural table rather than by the base values.
     //
     // docs/DESIGN.md section 11 and tools/i18n-plural-test.mjs both assume a two-tier world: a
@@ -1629,7 +1589,6 @@ export const HAND_COMMON = {
     //    viewing) came back as "Live monitoring at multi-screen viewing" -- English, and not even
     //    grammatical English. Mixed-language chrome is the exact defect the whole locale chain exists
     //    to avoid, so it is hand-written.
-    liveTitle: 'Katayuan ng live at multi-screen na panonood',
     //
     // 3. A meaning-inverting mistranslation. zh "出口" is the *egress route* (how a source is reached: english-logic:allow
     //    direct or through the proxy), and the machine read it as 导出 / "export" -- `proxyMode` became english-logic:allow
@@ -1662,10 +1621,10 @@ export const HAND_COMMON = {
     //    one is a label a user reads on its own, so "the hint explains it in Filipino" does not help.
     //    The Chinese sources are ordinary words, not product names, which is why they are repaired here
     //    instead of being left alone like bilibili / YouTube / VDB.
-    multiScreen: 'Sabay-sabay na screen', // zh 多屏 english-logic:allow
-    addAllLive: 'Idagdag lahat ng live sa sabay-sabay na screen', // zh 在播的全部加入多屏 english-logic:allow
-    addToGrid: 'Idagdag sa sabay-sabay na screen', // zh 加入多屏 english-logic:allow
-    clearGrid: 'I-clear ang sabay-sabay na screen', // zh 清空多屏 english-logic:allow
+// zh 多屏 english-logic:allow
+// zh 在播的全部加入多屏 english-logic:allow
+// zh 加入多屏 english-logic:allow
+// zh 清空多屏 english-logic:allow
     headless: 'Mode na walang window', // zh 无头模式 english-logic:allow
     customSources: 'Mga sariling source', // zh 自定义来源 english-logic:allow
     addCustomSource: 'Magdagdag ng sariling source', // zh 新增自定义来源 english-logic:allow
@@ -1749,11 +1708,6 @@ export const HAND_COMMON = {
     // the Thai convention of a space before the closing parenthesis of an aside), not words. That is
     // deliberate and is also why the fingerprinter cannot use them as word boundaries - see the
     // measurement recorded on the `th-TH` plural table in locales/plurals.js.
-    liveHint:
-      'การเริ่มไลฟ์สดเป็นข้อมูลที่อ่อนไหวต่อเวลามากที่สุด — ควรรู้ก่อนคำค้นใด ๆ ' +
-      'หน้านี้แสดงสถานะการไลฟ์ของเป้าหมายที่เฝ้าติดตาม และจัดห้องไลฟ์หลายห้องเป็นตารางเพื่อดูพร้อมกันได้ ' +
-      '(ใช้เครื่องเล่นฝังตัวทางการของ bilibili ไม่ผ่านตัวกลางและไม่แตะข้อมูลการเข้าสู่ระบบ) ' +
-      'โปรดทราบว่า "เล่นซ้ำ" ไม่ใช่การเริ่มไลฟ์จริง จึงแสดงแยกไว้ต่างหาก',
     // ── The count labels, and why they are handled by a plural table rather than by the base values.
     //
     // docs/DESIGN.md section 11 describes the rule as three-tiered, with Filipino as the worked
@@ -1812,7 +1766,6 @@ export const HAND_COMMON = {
     //    half" pitfall of docs/DESIGN.md section 11 seen from the other side: the substitution is
     //    right, the sentence around it is not. Thai has no word spaces, so a glued term cannot be
     //    read as two words - it is one nonsense token.
-    liveNoTargets: 'ยังไม่มีเป้าหมายให้เฝ้าติดตาม —— เปิดใช้แหล่งข้อมูล bilibili แหล่งใดก็ได้ หรือเพิ่ม uid ด้วยตนเอง',
     // The same glued term in a shorter label: zh "监视列表需要账号名与 BotPassword" came back as english-logic:allow
     // "รายการ การเฝ้าติดตาม ต้องใช้ชื่อบัญชีและ BotPassword" -- the fragment "การเฝ้าติดตาม" sits between
     // spaces where the noun phrase belongs.
@@ -1853,7 +1806,6 @@ export const HAND_COMMON = {
     //    zh "在播的全部加入多屏" came back using "มัลติวิว" (a transliteration of "multi-view") for 多屏 english-logic:allow
     //    where the row that turns the grid off says "หน้าจอหลายจอ". One concept, one wording -- and the
     //    two buttons sit next to each other in the same toolbar, so a user reads both in one glance.
-    addAllLive: 'เพิ่มห้องไลฟ์ทั้งหมดลงหน้าจอหลายจอ',
     // 7. Consistency rows rather than machine failures - the machine never produced an entry for these
     //    keys (they are the hand-written titles below), so what follows is a decision recorded here:
     //    the same concept must have one Thai value in the file. `watchTitle` / `watchDigest` /
@@ -1885,12 +1837,13 @@ export const HAND_COMMON = {
     //    fallback", and a Thai user reads "Multi-screen" in the middle of a Thai toolbar.
     //
     //    Every one of them uses the wording already established by the row it sits next to:
-    //    หน้าจอหลายจอ for 多屏 (the same phrase `addAllLive` above and the liveHint sentence use), english-logic:allow
+    //    หน้าจอหลายจอ for 多屏 (the phrasing came from the multi-screen grid, which went with the english-logic:allow
+    //    platform, so the wording now stands on its own), english-logic:allow
     //    แหล่งข้อมูล for 来源 (the glossary override), plain Thai words for the privacy / network rows english-logic:allow
     //    because none of them is a product name.
-    multiScreen: 'หน้าจอหลายจอ', // zh 多屏 english-logic:allow
-    addToGrid: 'เพิ่มลงหน้าจอหลายจอ', // zh 加入多屏 english-logic:allow
-    clearGrid: 'ล้างหน้าจอหลายจอ', // zh 清空多屏 english-logic:allow
+// zh 多屏 english-logic:allow
+// zh 加入多屏 english-logic:allow
+// zh 清空多屏 english-logic:allow
     customSources: 'แหล่งข้อมูลที่กำหนดเอง', // zh 自定义来源 english-logic:allow
     addCustomSource: 'เพิ่มแหล่งข้อมูลที่กำหนดเอง', // zh 新增自定义来源 english-logic:allow
     browserTitle: 'เบราว์เซอร์ที่ใช้', // zh 浏览器 english-logic:allow
@@ -1963,12 +1916,6 @@ export const HAND_COMMON = {
     // entry always wins, so this sentence never depends on the model. The machine pass had produced
     // a usable sentence that still carried English inside it (it called the rooms "phòng live" and
     // wrapped the rerun note in the corner brackets the source uses), so this wording drops both.
-    liveHint:
-      'Phát trực tiếp là loại thông tin có tính thời sự nhất — đáng để biết ngay hơn bất kỳ từ khóa nào. ' +
-      'Trang này hiển thị trạng thái phát trực tiếp của các đối tượng theo dõi, và có thể xếp nhiều phòng ' +
-      'thành một lưới để xem cùng lúc (dùng trình phát nhúng chính thức của bilibili, không qua bất kỳ máy ' +
-      'chủ trung gian nào và không đụng đến trạng thái đăng nhập). Lưu ý: "phát lại" không phải là phát ' +
-      'trực tiếp thật, nên được đánh dấu riêng.',
     // ── The count labels, and why Vietnamese needs **no** form table.
     //
     // docs/DESIGN.md section 11 describes the rule as three-tiered: a locale that inflects gets a
@@ -2059,10 +2006,6 @@ export const HAND_COMMON = {
     //    multi-screen", as if joining a group) and "Xóa nhiều màn hình" for 清空多屏 ("delete several english-logic:allow
     //    screens"). All three sit in the same row beside the grid, so they name the same object with
     //    the same verb family -- the consistency decision Thai recorded for its grid buttons.
-    multiScreen: 'Nhiều màn hình',
-    addAllLive: 'Thêm mọi phòng đang phát vào nhiều màn hình',
-    addToGrid: 'Thêm vào nhiều màn hình',
-    clearGrid: 'Xóa hết khỏi nhiều màn hình',
     // 8. Two sentences whose first word stayed lower case after the machine pass, because the pinned
     //    term inside them is substituted in lower case (the rule recorded in glossary.json's
     //    `_note_en`): "lưu trữ là SQLite ghi tăng dần ..." and "nguồn là 'đơn vị thu thập' ...".
@@ -2100,7 +2043,6 @@ export const HAND_COMMON = {
     //     "Trong Giám sát" -- a capitalised pinned term inside a phrase, plus a literal "inside" that
     //     reads as a container. The chip says the target is being monitored, so it uses the wording
     //     of `tab_watch` and `watchTitle`.
-    liveMonitored: 'Đang theo dõi',
     // 12. Consistency rows rather than machine failures -- the machine agreed with the wording in
     //     most cases, and what follows is the decision that one concept must have one Vietnamese value
     //     in this file. `watchTitle` / `watchDigest` / `runWatchOnly` / `taskMode_watch` are the four
@@ -2126,8 +2068,6 @@ export const HAND_COMMON = {
     //     "Quyền riêng tư" is the label a privacy panel carries.
     privacyTitle: 'Quyền riêng tư / ẩn danh',
     anonymousMode: 'Chế độ ẩn danh',
-    liveTitle: 'Giám sát phát trực tiếp và xem nhiều màn hình',
-    llmFeat_live: 'Giám sát phát trực tiếp và xem nhiều màn hình',
     // The three keys whose zh source already embeds the numeral ("{n} 个" and "粉丝 {n}") keep a english-logic:allow
     // value with `{n}` here, because that is what the source itself carries -- the guard's placeholder
     // comparison is against the Chinese string, so a base value without it would be the mismatch
@@ -2432,7 +2372,6 @@ export const HAND_COMMON = {
     latency: 'زمن الاستجابة',
   },
 };
-
 /**
  * Each language's core UI entries.
  * Only the keys that are "visible at a glance": the UI is still usable with the English fallback,
@@ -2447,7 +2386,6 @@ export const HAND = {
     tab_watch: 'ウォッチ',
     tab_settings: '設定',
     tab_reports: 'レポート',
-    tab_live: 'ライブ',
     tab_search: '検索',
     tab_llm: 'LLM',
     save: '保存',
@@ -2490,7 +2428,6 @@ export const HAND = {
     tab_watch: '감시',
     tab_settings: '설정',
     tab_reports: '보고서',
-    tab_live: '라이브',
     tab_search: '검색',
     tab_llm: 'LLM',
     save: '저장',
@@ -2529,7 +2466,6 @@ export const HAND = {
     tab_watch: 'Vigilancia',
     tab_settings: 'Ajustes',
     tab_reports: 'Informes',
-    tab_live: 'En directo',
     tab_search: 'Buscar',
     save: 'Guardar',
     saving: 'Guardando…',
@@ -2583,7 +2519,6 @@ export const HAND = {
     tab_watch: 'Vigilância',
     tab_settings: 'Definições',
     tab_reports: 'Relatórios',
-    tab_live: 'Em direto',
     tab_search: 'Pesquisar',
     save: 'Guardar',
     saving: 'A guardar…',
@@ -2612,7 +2547,6 @@ export const HAND = {
   'pt-BR': {
     // Brazilian Portuguese's real differences
     tab_settings: 'Configurações',
-    tab_live: 'Ao vivo',
     tab_search: 'Pesquisar',
     save: 'Salvar',
     saving: 'Salvando…',
@@ -2636,7 +2570,6 @@ export const HAND = {
     tab_watch: 'Surveillance',
     tab_settings: 'Paramètres',
     tab_reports: 'Rapports',
-    tab_live: 'En direct',
     tab_search: 'Rechercher',
     save: 'Enregistrer',
     saving: 'Enregistrement…',
@@ -2672,7 +2605,6 @@ export const HAND = {
     tab_watch: 'Überwachung',
     tab_settings: 'Einstellungen',
     tab_reports: 'Berichte',
-    tab_live: 'Live',
     tab_search: 'Suche',
     save: 'Speichern',
     saving: 'Speichern…',
@@ -2708,7 +2640,6 @@ export const HAND = {
     tab_watch: 'Monitoraggio',
     tab_settings: 'Impostazioni',
     tab_reports: 'Report',
-    tab_live: 'In diretta',
     tab_search: 'Cerca',
     save: 'Salva',
     saving: 'Salvataggio…',
@@ -2742,7 +2673,6 @@ export const HAND = {
     tab_watch: 'Наблюдение',
     tab_settings: 'Настройки',
     tab_reports: 'Отчёты',
-    tab_live: 'Эфир',
     tab_search: 'Поиск',
     save: 'Сохранить',
     saving: 'Сохранение…',
@@ -2818,7 +2748,6 @@ export const HAND = {
     tab_watch: 'Спостереження',
     tab_settings: 'Налаштування',
     tab_reports: 'Звіти',
-    tab_live: 'Ефір',
     tab_search: 'Пошук',
     save: 'Зберегти',
     saving: 'Збереження…',
@@ -2884,7 +2813,6 @@ export const HAND = {
     tab_watch: 'Obserwacja',
     tab_settings: 'Ustawienia',
     tab_reports: 'Raporty',
-    tab_live: 'Na żywo',
     tab_search: 'Szukaj',
     save: 'Zapisz',
     saving: 'Zapisywanie…',
@@ -3017,7 +2945,6 @@ export const HAND = {
     tab_watch: 'المراقبة',
     tab_settings: 'الإعدادات',
     tab_reports: 'التقارير',
-    tab_live: 'البث',
     tab_search: 'بحث',
     save: 'حفظ',
     saving: 'جارٍ الحفظ…',
@@ -3055,7 +2982,6 @@ export const HAND = {
     tab_watch: 'Pantau',
     tab_settings: 'Pengaturan',
     tab_reports: 'Laporan',
-    tab_live: 'Siaran',
     tab_search: 'Cari',
     tab_llm: 'LLM',
     save: 'Simpan',
@@ -3094,7 +3020,6 @@ export const HAND = {
     tab_watch: 'Subaybayan',
     tab_settings: 'Mga setting',
     tab_reports: 'Mga ulat',
-    tab_live: 'Live',
     tab_search: 'Maghanap',
     tab_llm: 'LLM',
   },
@@ -3107,9 +3032,8 @@ export const HAND = {
     // registered in LOCALES but whose layers never landed still "works" -- it silently shows the
     // English fallback -- and only reading the rendered page out reveals it.
     //
-    // `tab_live` is the word Thai actually says for a live stream (ไลฟ์), not a transliteration of
-    // "Live"; the same word is used inside liveHint above and in the traversal's hint assertion, so
-    // a regression to English cannot pass by matching a borrowed word.
+    // `tab_live` was retired with the platform it belonged to, so the tab row itself is eight; the
+    // ninth entry below is `appSub`, which travels with the row in this block.
     appSub: 'ศูนย์ข่าวกรอง VTuber ในเครื่อง',
     tab_intel: 'ข้อมูล',
     tab_run: 'เรียกเก็บข้อมูล',
@@ -3117,7 +3041,6 @@ export const HAND = {
     tab_watch: 'เฝ้าติดตาม',
     tab_settings: 'การตั้งค่า',
     tab_reports: 'รายงาน',
-    tab_live: 'ไลฟ์',
     tab_search: 'ค้นหา',
     tab_llm: 'LLM',
   },
@@ -3129,12 +3052,10 @@ export const HAND = {
     // anchor the traversal check at the end of tools/traverse-ui.cjs asserts against: a locale that is
     // registered in LOCALES but whose layers never landed still "works" -- it silently shows the
     // English fallback -- and only reading the rendered page out reveals it. (The other two tabs,
-    // People and Calendar, are in LATE_KEYS above.)
+    // People and Calendar, are in LATE_KEYS above. `tab_live` was retired with the platform it
+    // belonged to, so the row itself is eight; the ninth entry is `appSub` below.)
     //
-    // `tab_live` is the phrase Vietnamese actually says for a live stream (Phát trực tiếp), not a
-    // borrowed "Live"; the same phrase starts the hand-written liveHint above and appears in the
-    // traversal's hint assertion, so a regression to English cannot pass by matching a borrowed word.
-    // The nine labels carry a capital at the front, which is how a standalone Vietnamese label is
+    // The labels carry a capital at the front, which is how a standalone Vietnamese label is
     // written -- the count-label base values above are lower case for the opposite reason.
     appSub: 'Trung tâm thông tin VTuber cục bộ',
     tab_intel: 'Thông tin',
@@ -3143,18 +3064,15 @@ export const HAND = {
     tab_watch: 'Theo dõi',
     tab_settings: 'Cài đặt',
     tab_reports: 'Báo cáo',
-    tab_live: 'Phát trực tiếp',
     tab_search: 'Tìm kiếm',
     tab_llm: 'LLM',
   },
 };
-
 // Merge the "UI elements added later" entries in one place at the end (it must sit after the
 // HAND_COMMON declaration, see the comment above)
 for (const [code, dict] of Object.entries(LATE_KEYS)) {
   HAND_COMMON[code] = { ...(HAND_COMMON[code] ?? {}), ...dict };
 }
-
 /**
  * A one-time repair of a translation defect the guards now catch (BUGS #75).
  *
@@ -3184,7 +3102,6 @@ const COUNT_LABEL_REPAIR = {
   'pl-PL': { cookieCount: '{n} ciasteczek', cookieCountWithSession: '{n} ciasteczek (w tym SESSDATA)' },
   'ar-SA': { cookieCount: '{n} ملفات تعريف الارتباط', cookieCountWithSession: '{n} ملفات تعريف الارتباط (بما في ذلك SESSDATA)' },
 };
-
 for (const [code, dict] of Object.entries(COUNT_LABEL_REPAIR)) {
   HAND_COMMON[code] = { ...(HAND_COMMON[code] ?? {}), ...dict };
 }

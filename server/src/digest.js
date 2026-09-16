@@ -49,28 +49,12 @@ export function digestText(text, limit = 6000) {
   return t.length > limit ? t.slice(0, limit) + `\n…（已截断，原文 ${t.length} 字符）` : t;
 }
 
-/** bilibili entries (structured items) -> compact digest / bilibili items to a compact digest */
-export function digestBilibili(items, limit = LIMIT_PER_FEED) {
-  if (!Array.isArray(items) || !items.length) return '';
-  return items
-    .slice(0, limit)
-    .map((it) => {
-      const text = String(it.text ?? '').replace(/\s+/g, ' ').slice(0, 140);
-      const like = it.stats?.like ? ` | 赞 ${it.stats.like}` : '';
-      const imgs = it.images?.length ? ` | 图×${it.images.length}` : '';
-      const when = it.time ? ` | ${it.time}` : '';
-      return `- ${text}${when}${like}${imgs} | ${it.url}`;
-    })
-    .join('\n');
-}
-
 /**
  * Build a compact digest per source type
  * @returns {string} markdown fragment
  */
 export function digestResult({ source, content, items }) {
   if (source.fetch === 'search-only' || (!content && !items?.length)) return '（仅检索类来源，交给检索阶段覆盖）';
-  if (source.fetch === 'bili-opus' || source.fetch === 'bili-dynamic') return digestBilibili(items) || '（无新动态）';
   if (source.fetch === 'rss') return digestAtom(content) || '（无条目）';
   if (source.fetch === 'mediawiki-api') return digestMediaWiki(content) || '（无变更）';
   return digestText(content);

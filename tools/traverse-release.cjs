@@ -234,11 +234,14 @@ async function main() {
     check('GET /api/proxy/detect responds', px.status === 200 && Array.isArray(px.json.found) && typeof px.json.probed === 'number', 'probed ' + (px.json && px.json.probed) + ', found ' + JSON.stringify((px.json && px.json.found) || []));
 
     // Login-state probing: whether there is a login depends on this machine, so only the
-    // "contract" is checked, not the result
-    const ck = await api('POST', '/api/cookies/check', { domains: ['bilibili.com'] });
-    check('POST /api/cookies/check answers with a contract', ck.status === 200 && typeof ck.json.ok === 'boolean' && Array.isArray(ck.json.names), ck.json.ok ? ck.json.cookieCount + ' cookies, SESSDATA=' + ck.json.hasSession : String(ck.json.error).slice(0, 60));
-    check('the cookie endpoint never returns values', !JSON.stringify(ck.json).includes('SESSDATA='), 'names only');
-    const ckBad = await api('POST', '/api/cookies/check', { profileDir: 'C:\\No\\Such\\Profile', domains: ['bilibili.com'] }); // sanitize-allow: a synthetic path that must not exist
+    // "contract" is checked, not the result. The domain is a site this build still knows -- the probe is
+    // generic, but naming a retired platform here would keep that name in the release walk for no reason.
+    const ck = await api('POST', '/api/cookies/check', { domains: ['reddit.com'] });
+    check('POST /api/cookies/check answers with a contract', ck.status === 200 && typeof ck.json.ok === 'boolean' && Array.isArray(ck.json.names), ck.json.ok ? ck.json.cookieCount + ' cookies, hasSession=' + ck.json.hasSession : String(ck.json.error).slice(0, 60));
+    // The rule is "no cookie value ever comes back", and the fixture name is whatever the probe read: the
+    // check is that no `name=value` pair of the shape a cookie header has appears in the answer.
+    check('the cookie endpoint never returns values', !/=[A-Za-z0-9%*._-]{16,}/.test(JSON.stringify(ck.json)), 'names only');
+    const ckBad = await api('POST', '/api/cookies/check', { profileDir: 'C:\\No\\Such\\Profile', domains: ['reddit.com'] }); // sanitize-allow: a synthetic path that must not exist
     check('a bogus profileDir fails cleanly', ckBad.status === 200 && ckBad.json.ok === false && !!ckBad.json.error, String(ckBad.json.error).slice(0, 60));
 
     // ---------------------------------------------------------- 5. llm + intel
@@ -264,7 +267,13 @@ async function main() {
     // ----------------------------------------------------------- 6. watch
     process.stdout.write('\n6. watch targets\n');
     const w = await api('GET', '/api/watch');
-    check('GET /api/watch returns kinds and rules', w.status === 200 && (w.json.kinds ?? []).length >= 5 && !!w.json.rules, (w.json.kinds ?? []).length + ' kinds');
+    // The count is pinned, not lower-bounded, and the absence is asserted beside it. A `>= 4` would pass just
+    // as happily with the fifth kind back in the list, and the kind that left (an account-id feed) left
+    // because the product stopped knowing the site it read: "the list may shrink" is not the property worth
+    // holding, "this list is exactly these four and none of them names a retired platform" is.
+    const watchKinds = w.json.kinds ?? [];
+    check('GET /api/watch returns kinds and rules', w.status === 200 && watchKinds.length === 4 && !!w.json.rules, watchKinds.length + ' kinds: ' + watchKinds.map((k) => k.id).join(','));
+    check('no watch kind names a retired platform', !watchKinds.some((k) => /bili|twitter|(^|[^a-z])x\.com/i.test(`${k.id} ${k.zh ?? ''} ${k.en ?? ''}`)), watchKinds.map((k) => k.id).join(','));
     check('the moegirl-style alarm rules are exposed', typeof w.json.rules.largeEditBytes === 'number' && Array.isArray(w.json.rules.keywords), JSON.stringify({ edit: w.json.rules.largeEditBytes, kw: (w.json.rules.keywords ?? []).length }));
     check('the watchlist kind is marked login-required', (w.json.kinds ?? []).find((k) => k.id === 'mediawiki-watchlist')?.login === 'required');
 
@@ -334,10 +343,12 @@ async function main() {
     const dupSrc = await api('POST', '/api/sources/custom', { id: 'traverse-feed', name: 'dup', fetch: 'rss', url: 'https://example.com/2.xml' });
     check('a duplicate id is refused', dupSrc.status === 409, 'status ' + dupSrc.status);
     const badSrc = await api('POST', '/api/sources/custom', { id: 'x' });
-    check('a source without url/uid is refused', badSrc.status === 400, 'status ' + badSrc.status);
+    check('a source with nothing to fetch is refused', badSrc.status === 400, 'status ' + badSrc.status);
     const srcs = await api('GET', '/api/sources');
     check('the custom source joins the catalog', (srcs.json.sources ?? []).some((s) => s.id === 'traverse-feed'), (srcs.json.sources ?? []).length + ' sources total');
-    check('GET /api/sources exposes the fetch kinds for the editor', (srcs.json.fetchKinds ?? []).length >= 6, (srcs.json.fetchKinds ?? []).length + ' kinds');
+    // The custom-source editor offers the kinds this build can actually fetch; the two account-id kinds went
+    // with their platform, so the count is pinned rather than lower-bounded.
+    check('GET /api/sources exposes the fetch kinds for the editor', (srcs.json.fetchKinds ?? []).length === 4, (srcs.json.fetchKinds ?? []).length + ' kinds');
     const delSrc = await api('DELETE', '/api/sources/custom/traverse-feed');
     check('DELETE removes it again', delSrc.status === 200 && delSrc.json.removed === 1);
 

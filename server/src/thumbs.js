@@ -227,15 +227,28 @@ export async function getThumbnail(siteUrl, opts = {}) {
   }
 }
 
-/** Take a small screenshot with Playwright (only taken when the user explicitly asks for it) */
+/**
+ * Take a small screenshot with Playwright (only taken when the user explicitly asks for it).
+ *
+ * The engine is Firefox, like every other browser this project launches (server/src/fetchers/browser.js), and
+ * so is the egress: it goes through `resolveBrowserEgress`, the same decision the fetching path makes. The
+ * previous version hand-rolled "HTTP proxy or nothing", which meant a screenshot taken while Tor mode was on
+ * went out **direct** — a screenshot of a page, from this machine's own address, under a setting whose entire
+ * purpose is that it does not.
+ */
 export async function screenshot(cfg, subject, url, log) {
-  const { chromium } = await import('playwright');
+  const { firefox } = await import('playwright');
+  const { resolveBrowserEgress } = await import('./net.js');
   const bcfg = cfg?.browser ?? {};
-  const launch = { headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+  const launch = { headless: true };
   const exe = subject?.executablePath || bcfg.executablePath;
   if (exe) launch.executablePath = exe;
-  const proxyUrl = cfg?.proxy?.enabled && subject?.proxy !== 'direct' ? cfg.proxy.url : '';
-  const browser = await chromium.launch(launch);
+  const egress = await resolveBrowserEgress(cfg, subject);
+  if (!egress.ok) {
+    log?.warn(`screenshot skipped: ${egress.error}`);
+    return null;
+  }
+  const browser = await firefox.launch(launch);
   const watchdog = setTimeout(() => {
     log?.error('screenshot hard timeout');
   }, bcfg.hardTimeoutMs ?? 60000);
@@ -243,7 +256,7 @@ export async function screenshot(cfg, subject, url, log) {
     const ctx = await browser.newContext({
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 1,
-      ...(proxyUrl ? { proxy: { server: proxyUrl } } : {}),
+      ...(egress.proxy ? { proxy: egress.proxy } : {}),
     });
     const page = await ctx.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});

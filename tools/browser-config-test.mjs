@@ -24,6 +24,7 @@
 // the wrong input is not checking anything.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +38,9 @@ const {
   normalizeProfile,
   normalizeProfiles,
   listProfiles,
+  profilesUnder,
+  profilesFromIni,
+  isFirefoxProfileDir,
   resolveProfileDir,
   resolveProfileTarget,
   configuredProfileDir,
@@ -124,36 +128,80 @@ function vacuously(family, buildRight, buildWrong) {
   }
 }
 
-// A stand-in machine: two browsers, one with two profiles, one installed but never signed in, and a fixed
-// filesystem so `present` is a fact of the fixture rather than of this computer.
-const ROOT_CHROME = 'R:' + path.sep + 'chrome' + path.sep + 'User Data';
-const ROOT_EDGE = 'R:' + path.sep + 'edge' + path.sep + 'User Data';
-const P_DEFAULT = path.join(ROOT_CHROME, 'Default');
-const P_WORK = path.join(ROOT_CHROME, 'Profile 1');
-const exe = (browser) =>
-  ({
-    Chrome: 'C:' + path.sep + 'Program Files' + path.sep + 'Google' + path.sep + 'Chrome' + path.sep + 'Application' + path.sep + 'chrome.exe',
-    Edge: 'C:' + path.sep + 'Program Files (x86)' + path.sep + 'Microsoft' + path.sep + 'Edge' + path.sep + 'Application' + path.sep + 'msedge.exe',
-    Brave: 'C:' + path.sep + 'Program Files' + path.sep + 'BraveSoftware' + path.sep + 'Brave-Browser' + path.sep + 'Application' + path.sep + 'brave.exe',
-  })[browser];
+// A stand-in machine: one Firefox install root whose `profiles.ini` declares two profiles, plus a second root
+// that is installed but declares none — and a fixed filesystem so `present` is a fact of the fixture rather
+// than of this computer.
+//
+// The fixture filesystem can **read**, not only `existsSync`: Firefox names its profiles in `profiles.ini`
+// rather than putting them in a fixed set of subdirectories, so the discovery cannot be checked without
+// giving it something to parse. The two-argument shape (a file map plus a directory list) is what keeps
+// "declared but gone" (a profile the ini names that no longer exists) expressible.
+const ROOT_FIREFOX = 'R:' + path.sep + 'ff' + path.sep + 'Mozilla' + path.sep + 'Firefox';
+const ROOT_LOCAL = 'R:' + path.sep + 'ff-local';
+const P_DEFAULT = path.join(ROOT_FIREFOX, 'Profiles', 'aaaa1111.default-release');
+const P_WORK = path.join(ROOT_FIREFOX, 'Profiles', 'bbbb2222.dev');
+const INI = path.join(ROOT_FIREFOX, 'profiles.ini');
+const EXE_FIREFOX = 'R:' + path.sep + 'pw-browsers' + path.sep + 'firefox-1543' + path.sep + 'firefox' + path.sep + 'firefox.exe';
+
+const PROFILES_INI = [
+  '[Install308046B0AF4A39CB]',
+  'Default=Profiles/aaaa1111.default-release',
+  'Locked=1',
+  '',
+  '[Profile1]',
+  'Name=dev',
+  'IsRelative=1',
+  'Path=Profiles/bbbb2222.dev',
+  '',
+  '[Profile0]',
+  'Name=default-release',
+  'IsRelative=1',
+  'Path=Profiles/aaaa1111.default-release',
+  'Default=1',
+  '',
+  '[General]',
+  'StartWithLastProfile=1',
+  'Version=2',
+  '',
+].join('\n');
+
+/** A filesystem with exactly the files and directories it was given — and `readFileSync`, which profiles.ini needs */
+function fixtureFs(files = {}, dirs = []) {
+  const names = new Set(dirs.map(String));
+  return {
+    existsSync: (p) => names.has(String(p)) || Object.prototype.hasOwnProperty.call(files, String(p)),
+    readFileSync: (p) => {
+      const key = String(p);
+      if (!Object.prototype.hasOwnProperty.call(files, key)) {
+        const err = new Error(`ENOENT: ${key}`);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return files[key];
+    },
+  };
+}
+
+/** What Firefox leaves in a profile: the store that makes a directory a profile to this project */
+const storeOf = (...dirs) => Object.fromEntries(dirs.map((d) => [path.join(d, 'cookies.sqlite'), '']));
+
+const FIX_FS = fixtureFs({ [INI]: PROFILES_INI, ...storeOf(P_DEFAULT, P_WORK) }, [ROOT_FIREFOX, ROOT_LOCAL, P_DEFAULT, P_WORK, EXE_FIREFOX]);
 
 const machine = {
   roots: () => [
-    ['Chrome', ROOT_CHROME],
-    ['Edge', ROOT_EDGE],
-    // A third browser, installed with a user-data root but no profile inside it: it is still offered, as a
-    // row that says "here, but nothing signed in" rather than as an absence nobody can act on.
-    ['Brave', 'R:' + path.sep + 'brave'],
+    ['Firefox', ROOT_FIREFOX],
+    // A second root with no profiles.ini at all: it is still offered, as a row that says "here, but nothing
+    // configured" rather than as an absence nobody can act on.
+    ['Firefox (local)', ROOT_LOCAL],
   ],
-  profiles: (root) => {
-    if (root === ROOT_CHROME) return [P_DEFAULT, P_WORK];
-    return [];
-  },
-  fs: { existsSync: (p) => [ROOT_CHROME, ROOT_EDGE, P_DEFAULT, P_WORK, exe('Chrome'), exe('Edge')].includes(String(p)) },
+  // The real expansion, against the fixture filesystem: the ini parsing is what this family is about, so a
+  // stub that returned a fixed profile list would check nothing.
+  profiles: (root) => profilesUnder(root, { fs: FIX_FS }),
+  fs: FIX_FS,
 };
 
 const emptyCfg = { browser: { mode: 'bundled', executablePath: '', profileDir: '' } };
-const setCfg = (dir, extra = {}) => ({ browser: { mode: 'system', executablePath: exe('Chrome'), profileDir: dir, ...extra } });
+const setCfg = (dir, extra = {}) => ({ browser: { mode: 'system', executablePath: EXE_FIREFOX, profileDir: dir, ...extra } });
 
 /** The problems with a discovery answer: every offered row must be one a pick could actually apply, and a
  *  refusal must be recorded rather than swallowed */
@@ -178,57 +226,133 @@ t('a profile entry without a path is refused, and nothing half-built is returned
   assert.equal(normalizeProfile(undefined), null);
   assert.equal(normalizeProfile(null), null);
   assert.equal(normalizeProfile({}), null);
-  assert.equal(normalizeProfile({ browser: 'Chrome' }), null);
-  assert.equal(normalizeProfile({ browser: 'Chrome', name: 'Default', path: '' }), null);
-  assert.equal(normalizeProfile({ browser: 'Chrome', name: 'Default', path: '   ' }), null);
+  assert.equal(normalizeProfile({ browser: 'Firefox' }), null);
+  assert.equal(normalizeProfile({ browser: 'Firefox', name: 'dev', path: '' }), null);
+  assert.equal(normalizeProfile({ browser: 'Firefox', name: 'dev', path: '   ' }), null);
   // A path that is not a string is not a path: `42` would otherwise resolve to a file named "42" beside the
   // process, which is a setting nobody asked for dressed up as a discovered profile.
-  assert.equal(normalizeProfile({ browser: 'Chrome', name: 'Default', path: 42 }), null);
-  assert.equal(normalizeProfile({ browser: 'Chrome', name: 'Default', path: ['x'] }), null);
-  assert.deepEqual(normalizeProfiles([{ browser: 'Chrome' }, null, { path: '' }]), []);
+  assert.equal(normalizeProfile({ browser: 'Firefox', name: 'dev', path: 42 }), null);
+  assert.equal(normalizeProfile({ browser: 'Firefox', name: 'dev', path: ['x'] }), null);
+  assert.deepEqual(normalizeProfiles([{ browser: 'Firefox' }, null, { path: '' }]), []);
 });
 
 t('a usable entry carries a digest id (never the path), the browser, the name, and whether it exists here', () => {
-  const a = normalizeProfile({ browser: 'Chrome', name: 'Default', path: P_DEFAULT }, { fs: machine.fs });
+  const a = normalizeProfile({ browser: 'Firefox', name: 'default-release', path: P_DEFAULT }, { fs: machine.fs });
   assert.ok(a, 'a path-bearing entry must survive normalisation');
-  assert.equal(a.browser, 'Chrome');
-  assert.equal(a.name, 'Default');
+  assert.equal(a.browser, 'Firefox');
+  assert.equal(a.name, 'default-release');
   assert.equal(a.path, P_DEFAULT);
   assert.equal(a.absolute, path.resolve(P_DEFAULT));
   assert.equal(a.present, true);
   assert.match(a.id, /^[A-Za-z0-9_-]{16}$/);
   // The id is handed to the client, so it must not be a readable form of the path (BUGS #69 is the precedent)
-  assert.ok(!a.id.includes('R:') && !a.id.includes('chrome'), `the id must not carry the path: ${a.id}`);
+  assert.ok(!a.id.includes('R:') && !a.id.includes('aaaa1111'), `the id must not carry the path: ${a.id}`);
   assert.equal(a.id, normalizeProfile({ browser: 'x', path: P_DEFAULT }).id, 'the same path must give the same id');
 });
 
-t('enumeration offers every profile of every installed browser, plus the browser that has none yet', () => {
+t('the discovery reads profiles.ini: every profile it declares, in declaration order, and the root that declares none', () => {
   const { profiles, dropped } = listProfiles(machine);
   const paths = profiles.map((p) => p.absolute);
-  assert.deepEqual(paths, [path.resolve(P_DEFAULT), path.resolve(P_WORK), path.resolve(ROOT_EDGE), path.resolve('R:' + path.sep + 'brave')]);
-  assert.equal(profiles[0].browser, 'Chrome');
+  // [Install…] Default= names a profile that is *also* declared by [Profile0], so it must not be listed twice.
+  assert.deepEqual(paths, [path.resolve(P_WORK), path.resolve(P_DEFAULT), path.resolve(ROOT_LOCAL)]);
+  assert.equal(profiles[0].browser, 'Firefox');
   assert.equal(profiles[0].hasProfiles, true);
-  // Edge and Brave have a user-data root and no profile inside it: they are rows too, and they say so.
+  assert.equal(profiles[1].hasProfiles, true);
+  // The second root has no ini at all: it is still a row, and it says so.
   assert.equal(profiles[2].hasProfiles, false);
-  assert.equal(profiles[3].hasProfiles, false);
   // Nothing on this fixture is unusable, so the refusals are empty rather than an absent field.
   assert.deepEqual(dropped, []);
 });
 
+t('the ini parser answers the shape, and answers [] rather than throwing on anything it cannot read', () => {
+  const parsed = profilesFromIni(ROOT_FIREFOX, { fs: FIX_FS });
+  assert.deepEqual(parsed.map((p) => p.name), ['dev', 'default-release']);
+  // The user's own choice (Default=1) and the installation's (Install Default=) are kept apart: they can
+  // disagree, and the default the page offers prefers the user's.
+  assert.deepEqual(parsed.map((p) => p.isDefault), [false, true]);
+  assert.deepEqual(parsed.map((p) => p.isInstall), [false, true]);
+  const installOnly = fixtureFs({ [INI]: '[InstallABC]\nDefault=Profiles/x\n\n[Profile0]\nName=x\nPath=Profiles/x\n' }, [ROOT_FIREFOX]);
+  assert.deepEqual(profilesFromIni(ROOT_FIREFOX, { fs: installOnly }), [
+    { name: 'x', path: path.resolve(ROOT_FIREFOX, 'Profiles/x'), isDefault: false, isInstall: true },
+  ]);
+  // An absolute Path= is taken as written rather than joined onto the root
+  const absolute = fixtureFs({ [INI]: `[Profile0]\nName=y\nIsRelative=0\nPath=${path.resolve('Q:' + path.sep + 'other')}\n` }, [ROOT_FIREFOX]);
+  assert.equal(profilesFromIni(ROOT_FIREFOX, { fs: absolute })[0].path, path.resolve('Q:' + path.sep + 'other'));
+  // No ini / unreadable / a filesystem that cannot read at all: an empty answer, never a thrown error
+  assert.deepEqual(profilesFromIni(ROOT_FIREFOX, { fs: fixtureFs({}, [ROOT_FIREFOX]) }), []);
+  assert.deepEqual(profilesFromIni(ROOT_FIREFOX, { fs: { existsSync: () => true } }), []);
+  assert.deepEqual(profilesFromIni(ROOT_FIREFOX), [], 'the real machine must not leak into an offline fixture that named no ini');
+});
+
+t('a root whose cookie store is a zero-byte placeholder is still a ROOT (measured on this machine)', () => {
+  // Measured: a real Firefox root carries empty cookies.sqlite and places.sqlite files left behind by an older
+  // layout — this machine's %APPDATA%\Mozilla\Firefox has both. An existence test therefore answers "this root
+  // is a profile", the picker offers the root, and the profile inside it is never reached.
+  const rootWithStub = fixtureFs({ [INI]: PROFILES_INI, ...storeOf(P_DEFAULT, P_WORK), [path.join(ROOT_FIREFOX, 'cookies.sqlite')]: '' }, [ROOT_FIREFOX, P_DEFAULT, P_WORK]);
+  const stubSize = {
+    existsSync: rootWithStub.existsSync,
+    readFileSync: rootWithStub.readFileSync,
+    statSync: (p) => ({ size: String(p) === path.join(ROOT_FIREFOX, 'cookies.sqlite') ? 0 : 4096 }),
+  };
+  assert.equal(isFirefoxProfileDir(ROOT_FIREFOX, { fs: stubSize }), false, 'a zero-byte store is a placeholder, not a profile');
+  assert.deepEqual(profilesUnder(ROOT_FIREFOX, { fs: stubSize }), [P_WORK, P_DEFAULT]);
+  // The control, on the same fixture: a store with real content in it *is* a profile, and an ini in the same
+  // directory is a stronger statement than any file beside it.
+  const realStore = { ...stubSize, statSync: () => ({ size: 4096 }) };
+  assert.equal(isFirefoxProfileDir(P_WORK, { fs: realStore }), true);
+  assert.equal(isFirefoxProfileDir(ROOT_FIREFOX, { fs: realStore }), false, 'profiles.ini wins over a stray cookie store');
+});
+
+t('a profile whose directory is gone is not offered (the picker must not hand out a dead path)', () => {
+  // The ini still declares both profiles, but only one of them exists on this fixture's disk.
+  const halfGone = fixtureFs({ [INI]: PROFILES_INI, ...storeOf(P_WORK) }, [ROOT_FIREFOX, P_WORK]);
+  assert.deepEqual(profilesUnder(ROOT_FIREFOX, { fs: halfGone }), [P_WORK]);
+  assert.deepEqual(profilesUnder(ROOT_FIREFOX, { fs: FIX_FS }), [P_WORK, P_DEFAULT]);
+  // A root that *is* a profile is its own answer (someone pointed straight at one)
+  assert.deepEqual(profilesUnder(P_DEFAULT, { fs: FIX_FS }), [P_DEFAULT]);
+  // And a root that neither holds a store nor declares one answers nothing rather than guessing
+  assert.deepEqual(profilesUnder(ROOT_LOCAL, { fs: FIX_FS }), []);
+});
+
 t('a discovery that refuses an entry says so instead of quietly listing fewer browsers', () => {
-  const { profiles, dropped } = listProfiles({ ...machine, roots: () => [['Chrome', ROOT_CHROME], ['Edge', '']] });
+  const { profiles, dropped } = listProfiles({ ...machine, roots: () => [['Firefox', ROOT_FIREFOX], ['Firefox', '']] });
   assert.equal(profiles.length, 2, 'the usable rows still come back');
-  assert.deepEqual(dropped, [{ browser: 'Edge', path: '', reason: 'no-path' }]);
+  assert.deepEqual(dropped, [{ browser: 'Firefox', path: '', reason: 'no-path' }]);
   // And the picker folds that refusal into the count the page shows.
   const picker = pickerFor({ profiles, dropped }, setCfg(''));
-  assert.deepEqual(picker.unusable, [{ browser: 'Edge', path: '', reason: 'no-path' }]);
+  assert.deepEqual(picker.unusable, [{ browser: 'Firefox', path: '', reason: 'no-path' }]);
 });
 
 vacuously(
   'the discovery refuses an entry with no path, and says that it did (wrong input: a discovery list holding one)',
   () => discoveryProblems(listProfiles(machine)),
-  () => discoveryProblems({ profiles: listProfiles(machine).profiles, dropped: [{ browser: 'Chrome', path: '', reason: 'no-path' }] }),
+  () => discoveryProblems({ profiles: listProfiles(machine).profiles, dropped: [{ browser: 'Firefox', path: '', reason: 'no-path' }] }),
 );
+
+t('no injected filesystem means the REAL one, not "nothing exists" (measured: `null` made the default dead)', () => {
+  // Found while checking the swap against this machine's real profiles.ini: the app passed `null` down as the
+  // filesystem, so every existence test answered false — `present` was always false in the running app and
+  // defaultProfileDir() always answered ''. The unit tests injected a filesystem, so neither showed up here.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-real-fs-'));
+  const profile = path.join(root, 'Profiles', 'aaaa1111.default');
+  fs.mkdirSync(profile, { recursive: true });
+  fs.writeFileSync(path.join(root, 'profiles.ini'), '[Profile0]\nName=x\nIsRelative=1\nPath=Profiles/aaaa1111.default\nDefault=1\n');
+  fs.writeFileSync(path.join(profile, 'cookies.sqlite'), 'x');
+  try {
+    const rows = listProfiles({ roots: () => [['Firefox', root]] }).profiles;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].present, true, 'a directory that exists on this disk must be reported as present');
+    assert.equal(defaultProfileDir({ browser: {} }, { roots: () => [['Firefox', root]] }), path.resolve(profile));
+    assert.equal(resolveProfileTarget({ browser: {} }, { roots: () => [['Firefox', root]] }).default, path.resolve(profile));
+    // The control: a filesystem that says nothing exists answers false, so the assertions above are about the
+    // real filesystem being used rather than about `present` being hard-coded or the default being invented.
+    const blind = { existsSync: () => false };
+    assert.equal(listProfiles({ roots: () => [['Firefox', root]], fs: blind }).profiles[0].present, false);
+    assert.equal(defaultProfileDir({ browser: {} }, { roots: () => [['Firefox', root]], fs: blind }), '');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // ───────────────────────────────────────────── 2. one resolution
 
@@ -247,24 +371,56 @@ t('an EMPTY setting resolves to empty -- and the documented default is reported 
   assert.equal(r.dir, '', 'an empty setting must not silently become a credential nobody named');
   assert.equal(r.source, 'none');
   assert.equal(r.configured, '');
-  // The reported default is the user-data dir of the **configured browser**. With the bundled Chromium there
-  // is no such thing to point at, so the page has to say that instead of offering a path (see the next case);
-  // what matters here is that the default is *reported beside* the answer and never substituted into it.
-  assert.equal(r.default, '');
+  // The default is *reported beside* the answer and never substituted into it — an empty setting still
+  // resolves to empty, whatever the machine happens to have signed in.
+  assert.equal(r.default, path.resolve(P_DEFAULT));
+  assert.equal(r.dir, '');
   assert.ok(r.reasons.includes('not-configured'), JSON.stringify(r.reasons));
   assert.equal(resolveProfileDir(emptyCfg, { fs: machine.fs, roots: machine.roots }), '', 'the consumers get the same empty answer');
 });
 
-t('the documented default follows the configured browser, and a bundled Chromium has none to point at', () => {
-  assert.equal(defaultProfileDir(setCfg('', { executablePath: exe('Chrome') }), { fs: machine.fs, roots: machine.roots }), path.resolve(ROOT_CHROME));
-  assert.equal(defaultProfileDir(setCfg('', { executablePath: exe('Edge') }), { fs: machine.fs, roots: machine.roots }), path.resolve(ROOT_EDGE));
-  // bundled = Playwright's own Chromium: there is no user-data dir to read cookies out of, and the page says
-  // so instead of showing an empty field with no explanation.
-  assert.equal(defaultProfileDir(emptyCfg, { fs: machine.fs, roots: machine.roots }), '');
-  assert.equal(browserFromExecutable(exe('Chrome')), 'Chrome');
-  assert.equal(browserFromExecutable(exe('Brave')), 'Brave');
+t('the documented default is the profile Firefox itself calls default, in every mode', () => {
+  assert.equal(defaultProfileDir(setCfg(''), { fs: machine.fs, roots: machine.roots }), path.resolve(P_DEFAULT));
+  // `bundled` is no longer a special case: a Firefox profile belongs to the machine rather than to one
+  // executable — measured, Playwright's Firefox opens a profile created by a stock Firefox — so the bundled
+  // engine can reuse the login sitting on this machine, and the page must therefore offer it.
+  assert.equal(defaultProfileDir(emptyCfg, { fs: machine.fs, roots: machine.roots }), path.resolve(P_DEFAULT));
+  assert.equal(defaultProfileDir({ browser: { executablePath: 'C:\\somewhere\\firefox.exe' } }, { fs: machine.fs, roots: machine.roots }), path.resolve(P_DEFAULT)); // sanitize-allow: a synthetic drive path that is deliberately not this machine's, to prove an executable does not decide the profile
+  assert.equal(browserFromExecutable(EXE_FIREFOX), 'Firefox');
   assert.equal(browserFromExecutable(''), 'bundled');
+  // A Chromium path is no longer a browser this project can drive, so it must not be recognised as one
+  // (the picker would otherwise label a path that fails at launch with a browser name it does not have).
+  assert.equal(browserFromExecutable('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'), 'custom');
 });
+
+t('a default is never invented: an ini that declares nothing, or names only profiles that are gone, answers empty', () => {
+  // The root exists but has no profiles.ini at all
+  assert.equal(defaultProfileDir({ browser: {} }, { fs: fixtureFs({}, [ROOT_LOCAL]), roots: () => [['Firefox', ROOT_LOCAL]] }), '');
+  // The ini names a profile whose directory no longer exists
+  const gone = fixtureFs({ [INI]: '[Profile0]\nName=x\nPath=Profiles/deleted\nDefault=1\n' }, [ROOT_FIREFOX]);
+  assert.equal(defaultProfileDir({ browser: {} }, { fs: gone, roots: () => [['Firefox', ROOT_FIREFOX]] }), '');
+  // A filesystem that cannot read files must not fall through to the machine's own disk
+  assert.equal(defaultProfileDir({ browser: {} }, { fs: { existsSync: () => true }, roots: () => [['Firefox', ROOT_FIREFOX]] }), '');
+});
+
+t('the documented default is a *pick*, never a substitution', () => {
+  const reported = resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots });
+  assert.equal(reported.dir, '', 'the resolution must not use the documented default behind the user');
+  assert.notEqual(reported.default, '', 'this fixture does have a default, so the check above is not vacuous');
+});
+
+vacuously(
+  'the documented default stays out of the resolution (wrong input: a resolution that took it)',
+  () => {
+    const r = resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots });
+    return r.dir === '' ? [] : [`the resolution used the documented default: ${r.dir}`];
+  },
+  () => {
+    const r = resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots });
+    const used = { ...r, dir: r.default };
+    return used.dir === '' ? [] : [`the resolution used the documented default: ${used.dir}`];
+  },
+);
 
 t('a dir handed in on purpose wins over nothing, but never over the setting the user chose', () => {
   assert.equal(resolveProfileDir(emptyCfg, { profileDir: P_WORK }).valueOf(), P_WORK);
@@ -289,7 +445,7 @@ vacuously(
   "an empty setting does not borrow an installed browser's cookies (wrong input: a resolution that fell back)",
   () => (resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots }).dir === '' ? [] : ['the resolution invented a profile']),
   () => {
-    const fellBack = { ...resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots }), dir: path.resolve(ROOT_CHROME) };
+    const fellBack = { ...resolveProfileTarget(emptyCfg, { fs: machine.fs, roots: machine.roots }), dir: path.resolve(P_DEFAULT) };
     return fellBack.dir === '' ? [] : [`the resolution invented a profile: ${fellBack.dir}`];
   },
 );
@@ -312,8 +468,9 @@ t('the selected row is the one the setting names, compared on the resolved path 
   const a = pickerFor(list, setCfg(P_DEFAULT));
   assert.equal(a.selected?.absolute, path.resolve(P_DEFAULT));
   assert.equal(a.options.filter((o) => o.selected).length, 1);
-  // `...\User Data` and `...\User Data\Default` are both acceptable values for the same store (cookies.js
-  // accepts either), so the picker must recognise both rather than reporting "nothing selected".
+  // `...\Mozilla\Firefox` (the root profiles.ini lives in) and the profile directory inside it are both
+  // acceptable values for the same login store (cookies.js accepts either), so the picker must recognise the
+  // setting it is given rather than reporting "nothing selected".
   const b = pickerFor(list, setCfg(''));
   assert.equal(b.selected, null);
   assert.equal(b.options.every((o) => !o.selected), true);
@@ -322,7 +479,7 @@ t('the selected row is the one the setting names, compared on the resolved path 
 });
 
 t('a setting that was not discovered is offered as its own row, so the page can say what is set', () => {
-  const configured = 'Q:' + path.sep + 'other' + path.sep + 'User Data';
+  const configured = 'Q:' + path.sep + 'other' + path.sep + 'Profiles' + path.sep + 'zzzz9999.default';
   const p = pickerFor(listProfiles(machine), setCfg(configured));
   assert.equal(p.options[0].current, true, 'the row from the setting comes first');
   assert.equal(p.options[0].path, configured);
@@ -331,7 +488,7 @@ t('a setting that was not discovered is offered as its own row, so the page can 
 });
 
 t('an entry with no path is skipped, and the skip is counted rather than silent', () => {
-  const p = pickerFor([{ browser: 'Chrome', name: 'Default' }, { browser: 'Chrome', name: 'Default', path: P_DEFAULT }], setCfg(''));
+  const p = pickerFor([{ browser: 'Firefox', name: 'Default' }, { browser: 'Firefox', name: 'Default', path: P_DEFAULT }], setCfg(''));
   assert.equal(p.options.length, 1);
   assert.deepEqual(p.unusable, [{ path: '', reason: 'no-path' }]);
   assert.equal(p.options[0].path, P_DEFAULT);
@@ -348,7 +505,7 @@ t('"use this one" maps a row to the config change, and cannot write an empty set
   assert.equal(applied.config.browser.profileDir, row.path);
   assert.equal(emptyCfg.browser.profileDir, '', 'the caller\'s config object is not mutated in place');
   // And the inverse: the thing a pick must never be able to do.
-  assert.equal(pickProfile({ browser: 'Chrome', name: 'Default' }).ok, false);
+  assert.equal(pickProfile({ browser: 'Firefox', name: 'Default' }).ok, false);
   assert.equal(pickProfile({ path: '' }).ok, false);
   assert.equal(applyPickProfile(emptyCfg, { path: '' }).ok, false);
 });
@@ -358,8 +515,8 @@ vacuously(
   () => rowProblems(pickerFor(listProfiles(machine), setCfg('')).options),
   () =>
     rowProblems(
-      pickerFor(normalizeProfiles([{ browser: 'Chrome', name: 'Default', path: '' }]), setCfg('')).options.concat([
-        { browser: 'Chrome', path: '' },
+      pickerFor(normalizeProfiles([{ browser: 'Firefox', name: 'Default', path: '' }]), setCfg('')).options.concat([
+        { browser: 'Firefox', path: '' },
       ]),
     ),
 );
@@ -493,10 +650,10 @@ t('with a profile configured, a dir that exists satisfies every consumer and a d
 });
 
 t('anonymous mode is reported as the reason every login-dependent feature is missing one', () => {
-  // The configured browser is named here so that "no profile" below is the switch's doing and not the
-  // bundled-Chromium case, which has no default to point at.
+  // The profile is named here so that "no profile" below is the switch's doing and not "nothing was ever
+  // configured" — the two states have to stay distinguishable on the page.
   const report = browserTargetReport(
-    { browser: { executablePath: exe('Chrome'), profileDir: P_DEFAULT }, privacy: { anonymousMode: true } },
+    { browser: { executablePath: EXE_FIREFOX, profileDir: P_DEFAULT }, privacy: { anonymousMode: true } },
     { fs: machine.fs, roots: machine.roots },
   );
   assert.equal(report.profile.anonymous, true);
@@ -621,15 +778,15 @@ vacuously(
 
 await ta('the profile enumeration still reads an injected machine (so the check above is not "the file is empty")', async () => {
   const { listProfiles } = await mod('server/src/browser-target.js');
-  const roots = () => [['Chrome', 'C:/Chrome/User Data']];
-  const profiles = (root) => (root ? ['C:/Chrome/User Data/Default'] : []);
+  const roots = () => [['Firefox', 'C:/ff/Mozilla/Firefox']];
+  const profiles = (root) => (root ? ['C:/ff/Mozilla/Firefox/Profiles/aaaa.default'] : []);
   const r = listProfiles({ roots, profiles });
   assert.equal(r.profiles.length, 1);
-  assert.equal(r.profiles[0].browser, 'Chrome');
+  assert.equal(r.profiles[0].browser, 'Firefox');
   assert.equal(r.profiles[0].hasProfiles, true);
-  // A root with no profile subdirectory is still offered as a reference row, so the page can say "Chrome is
-  // here but nothing is signed in" instead of showing nothing at all.
-  const bare = listProfiles({ roots: () => [['Edge', 'C:/Edge/User Data']], profiles: () => [] });
+  // A root that declares no profile is still offered as a reference row, so the page can say "Firefox is
+  // here but nothing is configured" instead of showing nothing at all.
+  const bare = listProfiles({ roots: () => [['Firefox (local)', 'C:/ff-local']], profiles: () => [] });
   assert.equal(bare.profiles.length, 1);
   assert.equal(bare.profiles[0].hasProfiles, false);
 });

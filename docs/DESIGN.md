@@ -13,10 +13,11 @@
       ├─ Web UI (React + Vite)      configure / run / reports
       └─ Backend (Node)
            ├─ config.js    config read/write (every path and secret lives here)
-           ├─ net.js       network layer: proxy (Node fetch does not read the system proxy by default)
+           ├─ net.js       network layer: proxy (Node fetch does not read the system proxy by default) + resolveBrowserEgress()
            ├─ sources.js   source adapter catalogue (declarative)
-           ├─ fetchers/    rss / mediawiki-api / browser / search-only
-           ├─ cookies.js   reading a browser's own cookie store, read-only (DPAPI + AES-GCM)
+           ├─ fetchers/    rss / mediawiki-api / browser (Playwright Firefox) / search-only
+           ├─ browser-target.js  the one browser-profile resolver (browser.profileDir) and Firefox profile discovery
+           ├─ cookies.js   reading Firefox's own cookies.sqlite, read-only (plaintext, no key pipeline)
            ├─ digest.js    raw feed -> condensed digest (token control)
            ├─ analyze.js   LLM analysis (OpenAI-compatible)
            ├─ runner.js    orchestration: preflight -> fetch -> write feeds -> analyze -> write report
@@ -30,12 +31,38 @@
 
 | Mode | Implementation |
 | --- | --- |
-| `bundled` | use the Chromium that ships with Playwright, works out of the box |
-| `system` | `detectBrowsers()` probes an installed Chrome / Edge / Opera / Brave / Vivaldi |
-| `custom` | the user supplies an executable path |
+| `bundled` | use **Playwright's Firefox** (the engine the package ships; 155.0 / build `firefox-1543`), works out of the box |
+| `system` | `detectBrowsers()` probes the **Playwright Firefox builds** installed on this machine (`PLAYWRIGHT_BROWSERS_PATH`, then `paths.browsersDir`, then Playwright's platform default) |
+| `custom` | the user supplies the path to a Playwright Firefox build |
 
-To reuse a logged-in session, fill in `profileDir` as well (that browser's user-data-dir).
-Note: **that browser must be closed**, otherwise the profile is locked.
+The engine is Firefox and only Firefox: the Chromium launch flags (`--no-sandbox`, `--disable-dev-shm-usage`),
+the hard-coded user agent and the packaged Chromium payload are gone with it, and `integrity-check.mjs` fails the
+build if a Chromium launch, import or flag reappears on an engine surface.
+
+Two consequences the modes inherit from that:
+
+- **Only a Playwright build can be driven.** Playwright speaks the Juggler protocol, which a stock `firefox.exe`
+  does not implement (`playwright.cfg` beside the binary is the marker of a build it can drive). A stock install
+  is therefore refused in `resolveLaunch()` **before** the launch, naming the marker and the fix
+  (`npx playwright install firefox`), instead of surfacing later as "Failed to launch the browser process".
+  `detectBrowsers()` lists Playwright builds only, so the picker never offers a path that fails the moment it is
+  used — which is also why "point it at the Chrome you already have" no longer applies to this engine.
+- **No user-agent override.** The old constant existed because Playwright's Chromium announced itself as
+  `HeadlessChrome`; measured, the headless Firefox context reports an ordinary
+  `Mozilla/5.0 (…; rv:155.0) Gecko/20100101 Firefox/155.0`, so the truthful UA is already being sent and a
+  hard-coded string would only pin a version the engine is not.
+
+To reuse a logged-in session, fill in `profileDir` as well (a **Firefox profile directory**, or a Firefox root
+carrying `profiles.ini` — `readBrowserCookies` accepts either). Note: **that Firefox must be closed**, otherwise
+the profile is locked. A Firefox profile is a property of the machine rather than of one executable, so unlike the
+Chromium it replaced the bundled engine *can* open one, and `defaultProfileDir()` offers this machine's profile in
+every mode — offered, never substituted for an empty setting.
+
+Profile discovery (server/src/browser-target.js): `profiles.ini` is the authority, not a fixed set of
+subdirectories, and three defects were fixed here — `defaultProfileDir()` answered empty in the running
+application and `present` was always false (both because an uninjected `fs` was passed down as `null`), and a real
+Firefox **root** carries zero-byte `cookies.sqlite` / `places.sqlite`, which made the root pass as a profile so the
+profiles inside it were never offered.
 
 ### 2.2 Sources (declarative adapters)
 
@@ -57,7 +84,7 @@ What `fetch` means:
 | --- | --- | --- |
 | `rss` | Atom/RSS subscription | on Reddit only `.rss` works; rate limiting is per IP, so **deliberately spacing requests out** beats hammering retries |
 | `mediawiki-api` | MediaWiki API | Fandom's `Special:RecentChanges` is blocked by Cloudflare, the API goes straight through |
-| `browser` | browser rendering | SPAs (Twitch) and Cloudflare-protected sites (Moegirlpedia) have to go through a browser |
+| `browser` | browser rendering, by the Playwright Firefox of §2.1 | SPAs (Twitch) and Cloudflare-protected sites (Moegirlpedia) have to go through a browser; the render goes out through `resolveBrowserEgress()`, so a source pinned to Tor really renders through Tor |
 | `search-only` | handed to the analysis layer to search | YouTube, Fanbox, BOOTH etc. have no stable directly scrapable endpoint |
 
 ### 2.3 Login requirements
@@ -76,7 +103,21 @@ Measured result: **Node's `fetch` (undici) does not read the system proxy by def
 So `net.js` makes the proxy explicit configuration:
 
 - Node-side fetching -> undici's `ProxyAgent` + `setGlobalDispatcher`
-- browser rendering -> Playwright's `proxy` option
+- browser rendering -> Playwright's `proxy` option, chosen by `resolveBrowserEgress()` in `net.js`
+
+`resolveBrowserEgress(cfg, subject)` is the one door a browser launch goes through: it resolves the egress with
+the same `resolveProxyMode()` every other fetch uses (so a source pinned to Tor renders through Tor rather than
+through the global mode), and under Tor it probes the SOCKS port with a plain TCP connect **before** a browser is
+started. A refusal answers with a sentence naming the SOCKS port; no browser is launched, and nothing throws.
+The probe is not hiding a working path — measured, a browser launched against a refusing SOCKS port fails the
+navigation (`NS_ERROR_PROXY_CONNECTION_REFUSED`) rather than falling back to direct, so the probe only replaces a
+confusing Mozilla error code with the actual reason. `describeEgressFailure()` does the same for a failure that
+gets past the probe (Tor up but not bootstrapped, say), and it must **not** blame the proxy for an ordinary
+navigation timeout — its control pins that.
+
+`thumbs.js` (the screenshot) goes through the same decision. It used to hand-roll "HTTP proxy or nothing", which
+meant a screenshot taken while Tor mode was on went out **direct** — a privacy setting that quietly took a picture
+from this machine's own address.
 
 The UI can probe the common local proxy ports: it tries them one by one and fills in a working address (nothing is hard-coded to a single value).
 
@@ -190,7 +231,7 @@ content; looking at added lines alone misses the case where a word is changed wi
 ## 8. Reading a browser's cookie store
 
 `server/src/cookies.js` is the one place that opens a browser's own cookie store, and it is deliberately
-**generic**: the caller names a host, the store is copied and decrypted read-only, and what comes back is
+**generic**: the caller names a host, the store is copied and read read-only, and what comes back is
 cookie **names** (and, in memory only, the header those names would form). No caller in this build sends that
 header - the login surfaces report names and counts, which is what "is this host signed in?" needs - and no
 value is ever written to a file, a log or a report. It holds no per-site knowledge either: which host is worth
@@ -201,16 +242,25 @@ because none of it was ever about that site.
 
 Measured points about `cookies.js`:
 
-- the cookie database is at `<userData>/<Profile>/Network/Cookies` (older versions may lack the `Network` level);
-- the key is in `os_crypt.encrypted_key` in `<userData>/Local State`: base64 -> strip the 5-byte
-  `DPAPI` prefix -> DPAPI-decrypt to a 32-byte AES key;
-- the value prefix `v10` = AES-256-GCM (nonce 12B / tag 16B); **the first 32 bytes of the plaintext are
-  the domain-binding hash added by Chromium 130+, and must be stripped**;
-- the prefix `v20`, or an `app_bound_encrypted_key` present in `Local State`, means App-Bound Encryption
-  (the default since Chrome 127), which cannot be decrypted externally - this has to raise an explicit
-  error rather than pretend to succeed;
+- the store is `<profile>/cookies.sqlite`, table `moz_cookies`, at the **profile root** (Chromium put it under
+  `Network/`), and the reader reaches it through the same predicate the picker uses
+  (`isFirefoxProfileDir()` / `profilesUnder()` from `browser-target.js`), so discovery and reading cannot
+  disagree about what a Firefox profile is;
+- **the value is plaintext.** There is no key to find: the Chromium reader's `Local State` /
+  `os_crypt.encrypted_key` lookup, its DPAPI round-trip through a PowerShell subprocess, the `v10`
+  AES-256-GCM envelope with its 32-byte domain-binding prefix, and the App-Bound (`v20`) dead end are all
+  **deleted rather than disabled**. The reader is short as a result, and the `warning` field the App-Bound
+  path used to fill no longer exists;
+- the table carries `id, originAttributes, name, value, host, path, expiry, …`. `host` is Chromium's
+  `host_key`, including the leading-dot convention for a domain cookie, which is why a name appearing twice
+  prefers the dotted row;
+- there is **no platform gate** any more: the old `isSupported()` existed because only Windows had DPAPI, and
+  reading a SQLite file has no such requirement;
+- a directory that is **not** a Firefox profile answers as its own state (`reason: 'no-firefox-profile'`)
+  rather than as "not signed in": a Chromium profile directory is a different fact from an unsigned-in
+  Firefox profile, and the caller can say which one it is;
 - copy `-wal`/`-shm` along with the database, otherwise the SQLite view may be inconsistent;
-- the original profile is **never modified** throughout, so this runs even with the browser open.
+- the original profile is **never modified** throughout, so this runs even with the Firefox open.
 
 Two consumers are worth naming, because both stayed for reasons that are not about any one site:
 

@@ -11,10 +11,12 @@ export const CONFIG_PATH = path.join(APP_ROOT, 'config.json');
 
 export const DEFAULT_CONFIG = {
   browser: {
-    // bundled: Chromium shipped with the package | system: a browser already installed on the machine | custom: a user-given path
+    // bundled: the Firefox shipped with the package | system: a Firefox already installed on the machine | custom: a user-given path
     mode: 'bundled',
     executablePath: '',
-    // Points at the browser's user-data-dir when reusing a login session (empty = a temporary clean profile)
+    // Points at the Firefox profile directory when reusing a login session (empty = a temporary clean profile).
+    // A Firefox profile belongs to the machine rather than to one executable, so a bundled engine can reuse
+    // the profile the installed Firefox is signed in with (see server/src/browser-target.js).
     profileDir: '',
     headless: true,
     waitMs: 6000,

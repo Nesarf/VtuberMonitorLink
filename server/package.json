@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "install-browsers": "playwright install chromium"
+    "install-browsers": "playwright install firefox"
   },
   "dependencies": {
     "express": "^4.21.2",

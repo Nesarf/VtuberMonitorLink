@@ -146,9 +146,6 @@
   "Tor": {
     "default": "Tor"
   },
-  "Chromium": {
-    "default": "Chromium"
-  },
   "Playwright": {
     "default": "Playwright"
   },

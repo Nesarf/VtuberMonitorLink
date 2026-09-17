@@ -10,7 +10,9 @@
 //   --no-install       do not run npm install for app/server
 //   --with-runtime     also bundle runtime/node.exe (the SEA exe can run the
 //                      server in-process, so this is optional and doubles size)
-//   --with-browsers    also run `playwright install chromium` into pw-browsers/
+//   --with-browsers    also run `playwright install firefox` into pw-browsers/
+//                      (Firefox is the only engine this project ships: the bundled browser is
+//                       Playwright's Firefox, and the Chromium payload is gone)
 //
 // Output layout:
 //
@@ -131,6 +133,17 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
+/** Bytes on disk under one directory (used to report the bundled-engine payload) */
+function dirBytes(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += dirBytes(p);
+    else if (entry.isFile()) total += fs.statSync(p).size;
+  }
+  return total;
+}
+
 const README_TXT = [
   "Vtuber's Monitor Link",
   '=====================',
@@ -175,9 +188,9 @@ const README_TXT = [
   '  Keep the exe and the app/ folder together - the exe loads the console',
   '  from app/. You may move or rename the whole folder freely, but a lone',
   '  copy of the exe has nothing to run.',
-  '  For browser-rendered sources, either let it use its own Chromium',
+  '  For browser-rendered sources, either let it use its own Firefox',
   '  (Settings > Browser > bundled, one-time download) or point it at an',
-  '  already installed Chrome / Edge / Opera.',
+  '  already installed Firefox.',
   '',
 ].join('\r\n');
 
@@ -432,11 +445,14 @@ function main() {
 
   if (args.browsers) {
     const pwDir = path.join(pkgDir, 'pw-browsers');
-    log('  downloading Chromium into pw-browsers/ ...');
+    log('  downloading Firefox into pw-browsers/ ...');
     const pwCli = path.join(ROOT, 'node_modules', 'playwright', 'cli.js');
     const env = Object.assign({}, process.env, { PLAYWRIGHT_BROWSERS_PATH: pwDir });
-    if (fs.existsSync(pwCli)) run(process.execPath, [pwCli, 'install', 'chromium'], { env: env });
-    else run(NPX, ['--yes', 'playwright', 'install', 'chromium'], { env: env });
+    if (fs.existsSync(pwCli)) run(process.execPath, [pwCli, 'install', 'firefox'], { env: env });
+    else run(NPX, ['--yes', 'playwright', 'install', 'firefox'], { env: env });
+    // What the engine actually costs, reported rather than assumed: the whole point of naming the payload
+    // is that the number can be checked against the package it went into.
+    log('  pw-browsers/ payload: ' + (dirBytes(pwDir) / 1048576).toFixed(1) + ' MB');
   }
 
   // -------------------------------------------------------------- 7. verify

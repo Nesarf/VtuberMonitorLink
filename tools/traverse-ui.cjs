@@ -9,8 +9,17 @@
 //   node tools/traverse-ui.cjs [--dir dist/VtuberMonitorLink] [--port 43198]
 //                              [--mock 43196] [--headed] [--keep]
 //
-// Requires `playwright` in the repo's node_modules and one usable browser
-// (an installed Chrome/Edge/Opera, or Playwright's own Chromium).
+// Requires `playwright` in the repo's node_modules and one usable engine.
+//
+// The engine is Firefox — the only one this project drives now. Two consequences of that, both learned by
+// measuring rather than by assuming:
+//   • Playwright's Firefox **cannot drive a stock firefox.exe** ("Failed to launch the browser process":
+//     Playwright speaks the Juggler protocol, which the installed Firefox does not implement), so the engine
+//     this walk uses is the one Playwright installed. PLAYWRIGHT_BROWSERS_PATH decides where that is; when it
+//     is unset the repo's own pw-browsers/ (the layout `npm run build:portable` produces) is used, and
+//     otherwise Playwright's platform default applies.
+//   • the walk asks the app for its detected engines and will use one if the app found it, so the walk's
+//     engine and the app's browser setting are resolved the same way.
 
 'use strict';
 
@@ -187,12 +196,19 @@ async function main() {
   const base = 'http://127.0.0.1:' + args.port;
   const exe = path.join(args.dir, path.basename(args.dir) + EXE);
 
-  let chromium;
+  let firefox;
   try {
-    chromium = require(path.join(ROOT, 'node_modules', 'playwright')).chromium;
+    firefox = require(path.join(ROOT, 'node_modules', 'playwright')).firefox;
   } catch (e) {
     process.stderr.write('playwright is not installed in the repo; run npm install first\n');
     process.exit(1);
+  }
+  // A repo-local pw-browsers/ is the layout the portable build produces; pointing Playwright at it keeps this
+  // walk runnable on a machine where the engine was never installed into the platform default location. Only
+  // set when nothing was configured, so an explicit choice always wins.
+  const repoBrowsers = path.join(ROOT, 'pw-browsers');
+  if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(repoBrowsers)) {
+    process.env.PLAYWRIGHT_BROWSERS_PATH = repoBrowsers;
   }
 
   process.stdout.write('\nUI traversal: ' + args.dir + ' on port ' + args.port + '\n\n');
@@ -280,11 +296,20 @@ async function main() {
 
     const br = await (await fetch(base + '/api/browsers')).json();
     const detected = (br.detected || [])[0];
-    const launchOpts = { headless: !args.headed, args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+    // No Chromium process flags: Playwright passes `args` straight through and Firefox has no --no-sandbox.
+    const launchOpts = { headless: !args.headed };
     if (detected) launchOpts.executablePath = detected.executablePath;
-    process.stdout.write('  using browser: ' + (detected ? detected.name : "Playwright's bundled Chromium") + '\n');
+    // Naming where the engine came from is worth a line: on a machine with neither a system engine nor an
+    // installed Playwright Firefox, the launch failure is the only other place that information appears.
+    let engineFrom = "Playwright's own Firefox";
+    try {
+      engineFrom += ' (' + firefox.executablePath() + ')';
+    } catch (e) {
+      engineFrom += ' — not installed here; run: npx playwright install firefox (or set PLAYWRIGHT_BROWSERS_PATH)';
+    }
+    process.stdout.write('  using engine: ' + (detected ? detected.name + ' at ' + detected.executablePath : engineFrom) + '\n');
 
-    browser = await chromium.launch(launchOpts);
+    browser = await firefox.launch(launchOpts);
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
 
@@ -1125,10 +1150,20 @@ async function main() {
     check('Search page renders', main.indexOf('情报检索') !== -1);
     check('it states that no LLM is needed', main.indexOf('不需要 LLM') !== -1);
 
-    // Search using a word from a real item (this run just scraped the enabled sources)
+    // Search using a word from a real item (this run just scraped the enabled sources).
+    //
+    // The term has to be a **word**, and it took the engine swap to make that obvious: `official-cover` is a
+    // `fetch: browser` source, so once a Firefox engine is actually installed that source really renders, its
+    // items join the corpus, and the first of them starts with "/*". The old `slice(0, 2)` then searched for two
+    // punctuation characters, found nothing, and failed a check whose entire subject is "a keyword search
+    // returns cards" — a red gate about a browser, described as a red gate about search. So the sample is the
+    // first item that contains a word, and the term is that word's first two characters.
     const corpus = await (await fetch(base + '/api/intel')).json();
-    const sample = (corpus.items ?? []).find((i) => (i.text ?? '').length > 4);
-    const term = sample ? String(sample.text).replace(/\[[^\]]+\]/g, '').trim().slice(0, 2) : '糖';
+    const wordIn = (text) => (String(text).match(/[\u4e00-\u9fff]{2,}|[\u3040-\u30ff]{2,}|[A-Za-z]{3,}/) ?? [''])[0];
+    const sample = (corpus.items ?? [])
+      .map((i) => wordIn(String(i.text ?? '').replace(/\[[^\]]+\]/g, '')))
+      .find((w) => w.length >= 2);
+    const term = sample ? sample.slice(0, 2) : '糖';
     await page.locator('main input').first().fill(term);
     await page.locator('main button', { hasText: '搜索' }).first().click();
     await page.waitForTimeout(1500);

@@ -914,6 +914,65 @@ try {
   problems.push(`could not read the removed surface: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5j. the bundled browser is Firefox, alone
+//
+// A re-based engine leaves the same kind of trace as a removed feature: nothing fails while the engine is
+// never used, and the leftovers only surface the first time somebody enables a browser-rendered source —
+// by which point the message is a launch error rather than "line 9 still imports chromium". So the two
+// facts are stated here, in the places a reader would look: what the code launches, and what the package
+// downloads. The behavioural half (which executables Playwright may actually be pointed at, and what a dead
+// Tor answers) lives in tools/browser-engine-test.mjs; this section is only about the source.
+try {
+  /** Code that would make this project reach for a Chromium again (the word in a comment is fine, the call is not) */
+  const chromiumCreep = (src) =>
+    [
+      [/\bchromium\s*\.\s*(launch|launchPersistentContext)\s*\(/, 'a Playwright Chromium launch'],
+      [/require\s*\([^)]*\)\s*\.\s*chromium\b/, 'a require(...).chromium'],
+      [/\{\s*[^}\n]*\bchromium\b[^}\n]*\}\s*=\s*(await\s+)?(import|require)\s*\(/, 'a destructured chromium import'],
+      [/['"]--no-sandbox['"]/, "Chromium's --no-sandbox process flag"],
+      [/['"]--disable-dev-shm-usage['"]/, "Chromium's --disable-dev-shm-usage process flag"],
+    ]
+      .filter(([re]) => re.test(String(src)))
+      .map(([, what]) => what);
+
+  const surfaces = ['server/src/fetchers/browser.js', 'server/src/cookies.js', 'server/src/browser-target.js', 'server/src/thumbs.js', 'web/src/pages/Browser.jsx', 'tools/traverse-ui.cjs'];
+  const creep = surfaces.flatMap((rel) => chromiumCreep(fs.readFileSync(path.join(ROOT, rel), 'utf8')).map((w) => `${rel}: ${w}`));
+  if (creep.length) problems.push(`the browser engine is Firefox, but ${creep.join('; ')}`);
+  else process.stdout.write(`   [ok]   ${surfaces.length} engine surface(s), none of them launching a Chromium\n`);
+
+  const creepFixture = chromiumCreep("const { chromium } = await import('playwright');\nbrowser = await chromium.launch({ args: ['--no-sandbox'] });");
+  if (creepFixture.length !== 3) {
+    problems.push(`the Chromium-creep detector found ${creepFixture.length} of the 3 signals in a fixture that has them, so it proves nothing`);
+  } else {
+    process.stdout.write('   [ok]   (and the control, the launch/import/flag the swap removed, is caught)\n');
+  }
+
+  // The package's payload: the one step that downloads a browser has to download the right one.
+  const buildSrc = fs.readFileSync(path.join(ROOT, 'tools/build-portable.cjs'), 'utf8');
+  const payloadProblems = [];
+  if (/install['"]\s*,\s*['"]chromium|\bplaywright\s+install\s+chromium/.test(buildSrc)) payloadProblems.push('the portable build still installs a Chromium payload');
+  if (/\bchromium_headless_shell\b/.test(buildSrc)) payloadProblems.push('the portable build still names chromium_headless_shell');
+  if (!/install['"]\s*,\s*['"]firefox|\bplaywright\s+install\s+firefox/.test(buildSrc)) payloadProblems.push('the portable build no longer installs the Firefox payload');
+  if (payloadProblems.length) problems.push(...payloadProblems);
+  else process.stdout.write('   [ok]   the portable build packages the Firefox payload and no Chromium one\n');
+
+  const payloadFixture = (src) => (/install['"]\s*,\s*['"]chromium/.test(src) ? ['chromium payload'] : []);
+  if (payloadFixture("run(process.execPath, [pwCli, 'install', 'chromium'], { env });").length !== 1) {
+    problems.push('the payload detector does not fire on the line the build used to run, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, the install line the build used to run, is caught)\n');
+  }
+
+  // The server's own dependency manifest offers a one-command install for the engine, and it has to name the
+  // engine the fetcher launches — a script nobody re-read is exactly where a stale engine survives.
+  const serverPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'server/package.json'), 'utf8'));
+  const engineScript = String(serverPkg.scripts?.['install-browsers'] ?? '');
+  if (!engineScript.includes('firefox')) problems.push(`server/package.json's install-browsers still says "${engineScript}"`);
+  else process.stdout.write(`   [ok]   server/package.json's engine install names Firefox ("${engineScript}")\n`);
+} catch (e) {
+  problems.push(`could not read the browser engine surface: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

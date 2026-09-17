@@ -18,16 +18,26 @@
 //
 // Two facts that shaped the resolution, both learned from this machine:
 //
-//   1) `browser.profileDir` is **not** mode-dependent. In `bundled` mode Playwright starts a fresh Chromium
-//      (so there is no user-data dir to reuse) while the **read-only cookie probe does not care about the
-//      mode at all** — it copies a cookie store out of whichever profile is named and reads it. The Settings
-//      page only showed the field when the mode was not `bundled`, which is exactly how a person ends up with
-//      an empty profile dir and no visible place to fill it in.
+//   1) `browser.profileDir` is **not** mode-dependent. In `bundled` mode Playwright starts a fresh browser
+//      (so there is no user-data dir of its own to reuse) while the **read-only cookie probe does not care
+//      about the mode at all** — it copies a cookie store out of whichever profile is named and reads it.
+//      The Settings page only showed the field when the mode was not `bundled`, which is exactly how a person
+//      ends up with an empty profile dir and no visible place to fill it in.
 //   2) An empty setting must **not** silently become "read cookies out of whatever browser is installed".
 //      Cookie stores are credentials. Falling back to a browser nobody named would mean every login check
 //      reads a profile the user never pointed at. So the default is *documented and shown, never used*:
-//      defaultProfileDir() says which dir this machine's configured browser would use, the page offers it as
+//      defaultProfileDir() says which dir this machine's Firefox is signed in with, the page offers it as
 //      a one-click pick, and until it is picked the resolution honestly answers "nothing is configured".
+//
+// One fact changed with the engine, and it is the reason `bundled` is no longer special:
+//
+//   A Firefox profile is a **property of the machine, not of the executable**. Chromium's user-data dir
+//   belonged to one installed build, so "the bundled engine" genuinely had nothing to point at. Playwright's
+//   Firefox opens whatever profile directory it is handed — measured: a profile directory named by the
+//   installed Firefox's own `profiles.ini` launches through `launchPersistentContext` — so the bundled engine
+//   *can* reuse the Firefox login sitting on this machine. That is the whole
+//   point of the feature, so defaultProfileDir() now offers that profile in every mode. It is still only
+//   **offered**: nothing is substituted into an empty setting.
 //
 // Pure functions all the way down (the filesystem is injected), so tools/browser-config-test.mjs can pin the
 // discovery shape, the picker's mapping and the resolution offline, and tools/integrity-check.mjs can read
@@ -38,45 +48,160 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 
 /**
- * userData roots of the common browsers (never hard-coded to one machine; all derived from env vars).
+ * What makes a directory "a Firefox profile" to this module.
  *
- * This enumeration used to live in server/src/accounts.js, a module whose only job was to turn these
- * directories into "accounts" by reading their cookie stores for one site. That module is gone; the
- * directory discovery is not site-specific, and it belongs next to the rest of the profile targeting
- * (this module enumerates profiles, resolves the configured one and offers the picker).
+ * Firefox keeps its cookie store at the profile root (Chromium put it under `Network/`), and the file is
+ * the same one server/src/cookies.js reads — so the discovery and the reader agree by construction about
+ * what they are looking at, instead of each carrying its own idea of a profile.
+ */
+const COOKIE_FILE = 'cookies.sqlite';
+
+/**
+ * The **Firefox** root(s) on this machine — the directory `profiles.ini` lives in (never hard-coded to one
+ * machine; derived from env vars).
+ *
+ * Why a root and not "the profile list": Firefox does not keep its profiles in a fixed set of
+ * subdirectories the way Chromium does (`Default` / `Profile 1` / …). `profiles.ini` is the authority, and
+ * it lives in one of these two places depending on how Firefox was installed — see profilesFromIni() for
+ * the expansion, which is what actually turns a root into profile directories.
+ *
+ * This enumeration used to list the Chromium user-data roots (Chrome / Edge / Brave / Vivaldi / Opera /
+ * Chromium) so that "which profiles does this machine have" could be answered. Those roots are gone with the
+ * engine: a Chromium profile is not a store the Firefox cookie reader can open, so offering one in the
+ * picker would offer a path that fails the moment it is used.
  */
 export function browserRoots() {
   const home = os.homedir();
   const local = process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local');
   const roaming = process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming');
   const list = [
-    ['Chrome', path.join(local, 'Google', 'Chrome', 'User Data')],
-    ['Chrome Beta', path.join(local, 'Google', 'Chrome Beta', 'User Data')],
-    ['Edge', path.join(local, 'Microsoft', 'Edge', 'User Data')],
-    ['Brave', path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data')],
-    ['Vivaldi', path.join(local, 'Vivaldi', 'User Data')],
-    ['Opera', path.join(roaming, 'Opera Software', 'Opera Stable')],
-    ['Opera GX', path.join(roaming, 'Opera Software', 'Opera GX Stable')],
-    ['Chromium', path.join(local, 'Chromium', 'User Data')],
+    // The normal location of profiles.ini on Windows; on Linux/macOS Firefox keeps the same layout
+    // under ~/.mozilla/firefox, which is what `home` resolves to there.
+    ['Firefox', path.join(roaming, 'Mozilla', 'Firefox')],
+    ['Firefox', path.join(home, '.mozilla', 'firefox')],
+    // A per-user Windows install keeps its profile here instead of under Roaming
+    ['Firefox (local)', path.join(local, 'Mozilla', 'Firefox')],
   ];
-  return list.filter(([, p]) => fs.existsSync(p));
+  const seen = new Set();
+  return list.filter(([, p]) => {
+    if (seen.has(p)) return false;
+    seen.add(p);
+    return fs.existsSync(p);
+  });
 }
 
-/** Expand every profile directory under one userData root (a root that holds a cookie store is itself one) */
-export function profilesUnder(root) {
-  const out = [];
-  const hasCookies = (p) => fs.existsSync(path.join(p, 'Network', 'Cookies')) || fs.existsSync(path.join(p, 'Cookies'));
-  if (hasCookies(root)) return [root];
-  let entries = [];
+/**
+ * Whether this directory is a Firefox **profile**, as opposed to a root that lists profiles.
+ *
+ * Three measurements, all from this machine, are why this is not simply "does cookies.sqlite exist":
+ *   • a real Firefox root carries **zero-byte** `cookies.sqlite` and `places.sqlite` files — this machine's
+ *     `%APPDATA%\Mozilla\Firefox` has both, left behind by an older layout — so an existence test answers
+ *     "this root *is* a profile", and the discovery then offers the root instead of the two profiles inside it;
+ *   • a **zero-byte** file is not a cookie store whatever it is called, which is the same fact stated the
+ *     other way round;
+ *   • and `profiles.ini` is a stronger statement than any stray file, so when it is present it wins outright.
+ *
+ * The `fs` is injectable, and a fixture that cannot `statSync` simply skips the size test rather than
+ * throwing: the injected filesystem of tools/browser-config-test.mjs is deliberately minimal.
+ */
+export function isFirefoxProfileDir(dir, { fs: fsImpl = null } = {}) {
+  const io = fsImpl ?? fs;
   try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
+    if (!io.existsSync?.(path.join(dir, COOKIE_FILE))) return false;
+    // A zero-byte store is a placeholder, not a login: reading it can only answer "no cookies".
+    const st = io.statSync?.(path.join(dir, COOKIE_FILE));
+    if (st && typeof st.size === 'number' && st.size === 0) return false;
   } catch {
-    return out;
+    return false;
   }
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const p = path.join(root, e.name);
-    if (hasCookies(p)) out.push(p);
+  try {
+    if (io.existsSync?.(path.join(dir, 'profiles.ini'))) return false;
+  } catch {
+    /* an unreadable ini is treated as absent, which is what the next branch assumes anyway */
+  }
+  return true;
+}
+
+/**
+ * Parse a `profiles.ini` into the profile sections it declares.
+ *
+ * Pure apart from the filesystem handed in, so the shape can be pinned offline (tools/browser-config-test.mjs).
+ * A missing file, an unreadable one, or an injected `fs` that cannot read at all answers **[]** rather than
+ * throwing: "this root declares no profiles" is a fact the caller can act on, while an exception here would
+ * take the whole picker down on a machine where Firefox was uninstalled but its directory stayed behind.
+ *
+ * `isDefault` and `isInstall` are kept apart because Firefox records two different defaults and they can
+ * disagree: `Default=1` is what the user chose in the Profile Manager, while `[Install…] Default=` is what the
+ * installation opens on a fresh startup. defaultProfileDir() prefers the user's own choice and documents it.
+ *
+ * @returns {Array<{name:string, path:string, isDefault:boolean, isInstall:boolean}>} absolute dirs, in ini order
+ */
+export function profilesFromIni(root, { fs: fsImpl = null } = {}) {
+  const io = fsImpl ?? fs;
+  const caught = (fn) => {
+    try {
+      return fn();
+    } catch {
+      return null;
+    }
+  };
+  const text = caught(() => io.readFileSync?.(path.join(root, 'profiles.ini'), 'utf8'));
+  if (typeof text !== 'string') return [];
+
+  const sections = [];
+  let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith(';') || line.startsWith('#')) continue;
+    const head = line.match(/^\[(.+)\]$/);
+    if (head) {
+      cur = { name: head[1], entries: {} };
+      sections.push(cur);
+      continue;
+    }
+    const kv = line.match(/^([^=]+)=(.*)$/);
+    if (kv && cur) cur.entries[kv[1].trim()] = kv[2].trim();
+  }
+
+  // `[Install…] Default=Profiles/xxx` names the profile this installation opens by default.
+  const installDefault = sections
+    .filter((s) => s.name.startsWith('Install'))
+    .map((s) => s.entries.Default)
+    .find(Boolean);
+
+  const out = [];
+  const resolve = (p) => (path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p));
+  for (const s of sections) {
+    if (!s.name.startsWith('Profile')) continue;
+    const rel = s.entries.Path;
+    if (!rel) continue;
+    const abs = resolve(rel);
+    out.push({
+      name: s.entries.Name || s.name,
+      path: abs,
+      isDefault: s.entries.Default === '1',
+      isInstall: !!installDefault && resolve(installDefault) === abs,
+    });
+  }
+  return out;
+}
+
+/** Every profile directory under one Firefox root that is actually on disk (the picker must not offer a path that is gone) */
+export function profilesUnder(root, { fs: fsImpl = null } = {}) {
+  const io = fsImpl ?? fs;
+  const out = [];
+  const exists = (p) => {
+    try {
+      return !!io.existsSync?.(p);
+    } catch {
+      return false;
+    }
+  };
+  // A root that *is* a profile (someone pointed straight at ...\Profiles\xxxx.default) is its own answer
+  if (isFirefoxProfileDir(root, { fs: io })) return [root];
+  // Firefox: profiles.ini is the authority
+  for (const p of profilesFromIni(root, { fs: io })) {
+    if (exists(p.path) && !out.includes(p.path)) out.push(p.path);
   }
   return out;
 }
@@ -96,18 +221,14 @@ export function anonymousModeKey() {
 
 /**
  * Which browser a launch path belongs to, for the picker's label and for the default.
- * `bundled` is Playwright's own Chromium: it has no user-data dir to point at, which is why the page has to
- * say so instead of leaving the field empty with no explanation.
+ * `bundled` is Playwright's own Firefox, which has no profile directory of its own — but unlike the
+ * Chromium it replaced it **can** open one, so "bundled" no longer means "nothing to point at"
+ * (see defaultProfileDir below and the header comment).
  */
 export function browserFromExecutable(executablePath) {
   const p = String(executablePath ?? '').replace(/\\/g, '/').toLowerCase();
   if (!p) return 'bundled';
-  if (p.includes('/google/chrome')) return 'Chrome';
-  if (p.includes('/microsoft/edge')) return 'Edge';
-  if (p.includes('/bravesoftware/')) return 'Brave';
-  if (p.includes('/vivaldi/')) return 'Vivaldi';
-  if (p.includes('/opera gx') || p.includes('/opera')) return 'Opera';
-  if (p.includes('/chromium')) return 'Chromium';
+  if (p.includes('/firefox')) return 'Firefox';
   return 'custom';
 }
 
@@ -128,9 +249,10 @@ function isDir(p, fs) {
  * carried along with `path: ''`: a profile entry whose path is empty is not "a profile we could not read",
  * it is one that cannot be picked, and a picker that offers it would set the setting to emptiness.
  *
+ * @param {{fs?:object}} [opts] an injected filesystem for offline pinning; absent means the real one
  * @returns {{id:string, browser:string, name:string, path:string, absolute:string, present:boolean}|null}
  */
-export function normalizeProfile(entry, { fs = null } = {}) {
+export function normalizeProfile(entry, { fs: fsImpl = null } = {}) {
   if (!entry || typeof entry !== 'object') return null;
   // A path that is not a non-empty string is not a path: `42` would otherwise resolve to a file named "42"
   // next to the process, which is a setting nobody asked for dressed up as a discovered profile.
@@ -145,12 +267,12 @@ export function normalizeProfile(entry, { fs = null } = {}) {
     id: createHash('sha256').update(absolute).digest('base64url').slice(0, 16),
     browser,
     name,
-    // The path exactly as it was given (the user's own shape, e.g. `...\User Data` rather than `...\Default`:
-    // readBrowserCookies accepts either) alongside the resolved absolute form, so a pick writes what the user
-    // can recognise while every comparison still happens on the absolute one.
+    // The path exactly as it was given (the user's own shape, e.g. `...\Mozilla\Firefox` rather than the
+    // profile inside it: readBrowserCookies accepts either) alongside the resolved absolute form, so a pick
+    // writes what the user can recognise while every comparison still happens on the absolute one.
     path: raw,
     absolute,
-    present: isDir(absolute, fs),
+    present: isDir(absolute, fsImpl ?? fs),
   };
 }
 
@@ -164,12 +286,12 @@ export function normalizeProfiles(entries, opts = {}) {
 }
 
 /**
- * Enumerate the browser profiles on this machine, in the shape the picker uses.
+ * Enumerate the Firefox profiles on this machine, in the shape the picker uses.
  *
- * The enumeration itself is browserRoots()/profilesUnder() in this module (they already knew which browsers
- * this machine has and which subdirectories hold a cookie store); what this adds is (a) the reference-browser
- * rows for the browsers that are installed but have no profile subdirectory yet, so the page can still say
- * "Chrome is here but nothing is signed in", and (b) the normalisation above, so an incomplete discovery is
+ * The enumeration itself is browserRoots()/profilesUnder() in this module (they already knew where Firefox
+ * keeps its profiles and how `profiles.ini` names them); what this adds is (a) the reference row for a root
+ * that is installed but declares no usable profile yet, so the page can still say "Firefox is here but
+ * nothing is signed in", and (b) the normalisation above, so an incomplete discovery is
  * dropped instead of offered. Nothing is written and no cookie is read (the read-only floor is unchanged).
  *
  * @param {{roots?:Function, profiles?:Function, fs?:object}={}} opts  all injectable, so the shape is pinned offline
@@ -179,13 +301,18 @@ export function normalizeProfiles(entries, opts = {}) {
  */
 export function listProfiles(opts = {}) {
   const roots = opts.roots ?? browserRoots;
-  const under = opts.profiles ?? profilesUnder;
-  const fs = opts.fs ?? null;
+  // An **injected** filesystem replaces the real one; the absence of one means the real one, never "nothing
+  // exists". That distinction is not cosmetic: passing `null` down meant every `existsSync` answered false, so
+  // `present` was always false in the running app and the documented default was always '' (found while
+  // checking the swap against this machine's real profiles.ini — the unit tests injected a filesystem, so
+  // neither showed up there).
+  const fsImpl = opts.fs ?? fs;
+  const under = opts.profiles ?? ((root) => profilesUnder(root, { fs: fsImpl }));
   const profiles = [];
   const dropped = [];
   const seen = new Set();
   const offer = (entry, hasProfiles) => {
-    const n = normalizeProfile(entry, { fs });
+    const n = normalizeProfile(entry, { fs: fsImpl });
     if (!n) {
       dropped.push({ browser: String(entry?.browser ?? ''), path: String(entry?.path ?? ''), reason: 'no-path' });
       return;
@@ -212,28 +339,36 @@ export function configuredProfileDir(cfg) {
 }
 
 /**
- * The **documented default**: the user-data dir of the configured browser on this machine.
+ * The **documented default**: the Firefox profile this machine is signed in with.
  *
  * Documented means: shown on the page next to the empty field with a one-click "use this one", and reported
- * by the route, so a person never has to hand-write `C:\Users\...\User Data`. It is deliberately NOT used as
- * a silent fallback by the resolution below — see the header comment.
+ * by the route, so a person never has to hand-write `C:\Users\...\AppData\Roaming\Mozilla\Firefox\Profiles\…`.
+ * It is deliberately NOT used as a silent fallback by the resolution below — see the header comment.
  *
- * @returns {string} '' when the configured browser is the bundled Chromium (nothing to point at) or when no
- *   such directory exists on this machine
+ * The preference order is Firefox's own: the profile whose `profiles.ini` section carries `Default=1` (or the
+ * one `[Install…] Default=` names), otherwise the first profile the ini declares. Nothing is invented: if the
+ * ini names no profile, or the directory it names is gone, the answer is '' and the page says there is no
+ * default rather than offering a path that cannot be opened.
+ *
+ * @returns {string} '' when this machine has no Firefox profile to point at
  */
 export function defaultProfileDir(cfg, opts = {}) {
   const roots = opts.roots ?? browserRoots;
-  const fs = opts.fs ?? null;
-  const want = browserFromExecutable(cfg?.browser?.executablePath);
-  if (want === 'bundled') return '';
+  // An injected filesystem replaces the real one; **no** injection means the real one. Passing `null` down
+  // instead made every existence test false, so in the running app this function always answered '' — the
+  // documented default existed only inside tests that injected a filesystem.
+  const fsImpl = opts.fs ?? fs;
   for (const row of roots() ?? []) {
     const [browser, root] = Array.isArray(row) ? row : [row?.browser, row?.root];
-    if (!barePath(root, fs)) continue;
-    // A custom build (and a bundled-but-overridden engine) is still a Chromium, so its user-data root is
-    // matched by name when the executable names a browser we know; otherwise only an exact name match counts.
-    if (want !== 'custom' && browser !== want) continue;
-    if (!isDir(root, fs)) continue;
-    return path.resolve(root);
+    if (!barePath(root)) continue;
+    if (!isDir(root, fsImpl)) continue;
+    void browser; // one engine now: the root list itself is what says "this is Firefox"
+    const declared = profilesFromIni(root, { fs: fsImpl }).filter((p) => isDir(p.path, fsImpl));
+    // The user's own choice first (`Default=1`), then what the installation opens, then whatever the ini
+    // lists first. The order is written down because the page states this path as "the default on this
+    // machine" — an arbitrary pick would make that sentence untrue.
+    const picked = declared.find((p) => p.isDefault) ?? declared.find((p) => p.isInstall) ?? declared[0];
+    if (picked) return path.resolve(picked.path);
   }
   return '';
 }
@@ -257,9 +392,8 @@ export function defaultProfileDir(cfg, opts = {}) {
  * @returns {{dir:string, source:'anonymous'|'configured'|'given'|'none', configured:string, default:string, anonymous:boolean, reasons:string[]}}
  */
 export function resolveProfileTarget(cfg, opts = {}) {
-  const fs = opts.fs ?? null;
+  const documented = defaultProfileDir(cfg, { fs: opts.fs, roots: opts.roots });
   const configured = configuredProfileDir(cfg);
-  const documented = defaultProfileDir(cfg, { fs, roots: opts.roots });
   const anonymous = isAnonymousMode(cfg);
   const base = { configured, default: documented, anonymous };
   if (anonymous) return { ...base, dir: '', source: 'anonymous', reasons: ['anonymous-mode'] };

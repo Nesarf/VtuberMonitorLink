@@ -9,9 +9,11 @@
 //      switch, which is the other thing that decides whether a login may be touched at all. There is one
 //      config path behind all of it (`browser.profileDir`), resolved by one function on the server
 //      (server/src/browser-target.js) — this page never decides what the setting means.
-//   2. **discovery, not typing**: `server/src/cookies.js` already enumerates this machine's browser profiles,
-//      so the page lists them with a "use this one" action. Nobody has to hand-write
-//      `C:\Users\...\User Data`, and the documented default is shown next to the empty field.
+//   2. **discovery, not typing**: `server/src/browser-target.js` already enumerates this machine's Firefox
+//      profiles (they are named by `profiles.ini`, not by a fixed set of subdirectories), so the page lists
+//      them with a "use this one" action. Nobody has to hand-write
+//      `C:\Users\...\AppData\Roaming\Mozilla\Firefox\Profiles\…`, and the documented default is shown next to
+//      the empty field.
 //   3. **tell each dependent feature where it stands**: the per-feature table is the route's own inventory
 //      (server/src/browser-consumers.js), so this table and the features it describes cannot drift. The
 //      check button is `LoginCheck.jsx` — the same affordance every other login surface uses, not a second
@@ -172,7 +174,7 @@ export default function Browser() {
               <input
                 value={cfg.browser?.executablePath ?? ''}
                 onChange={(e) => patch('browser.executablePath', e.target.value)}
-                placeholder="C:\\path\\to\\browser.exe"
+                placeholder="…\\pw-browsers\\firefox-1543\\firefox\\firefox.exe"
               />
             </div>
           </div>
@@ -184,7 +186,7 @@ export default function Browser() {
             <input
               value={cfg.browser?.profileDir ?? ''}
               onChange={(e) => patch('browser.profileDir', e.target.value)}
-              placeholder="C:\\Users\\you\\AppData\\...\\User Data"
+              placeholder="C:\\Users\\you\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\xxxxxxxx.default-release"
             />
             <div className="hint" style={{ margin: 0 }}>{t('browserProfileHint')}</div>
             {/* What the setting resolves to *right now*, straight from the server's resolver. `source` is how

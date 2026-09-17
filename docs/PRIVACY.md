@@ -90,33 +90,58 @@ location**:
 
 ### Route A: read-only extraction (recommended; the browser can stay open)
 
-The browser's cookie store is **copied** to a temporary directory and then decrypted: the temporary copy is deleted once used,
-and the original profile is neither locked nor modified.
+Firefox's cookie store (`cookies.sqlite`) is **copied** to a temporary directory and then read: the temporary copy
+is deleted once used, and the original profile is neither locked nor modified.
 
 - The mechanism is **generic**: it reads the host the caller names (the Browser page's field starts at
   `reddit.com`, and any host can be typed in), and it carries no per-site list of what a login looks like -
   the one thing it recognises is the *shape* of a session-cookie name;
 - Only the host you specify is read; all other domains are left untouched;
-- The decrypted values are assembled into a single Cookie header **in this process's memory only**, and are
+- The values are assembled into a single Cookie header **in this process's memory only**, and are
   never written to disk. Nothing in this build sends that header: the login surfaces report cookie **names**
   and counts, which is all the check needs. The header assembly stays because it is what a site-specific
   caller would use - the mechanism was kept, the per-site callers went with their platforms;
 - **No log, no report, nothing into `feeds/`**; `POST /api/cookies/check` returns only
   "which cookie names were read", never a value;
-- The DPAPI key-decryption step invokes the local `powershell.exe` once (offline, no network);
-  on failure it reports an explicit error and does not silently degrade.
+- A directory that is **not** a Firefox profile answers as its own state (`no-firefox-profile`) rather than as
+  "not signed in". A Chromium profile directory is not a store this reader can open, and a blanket "no cookies"
+  would have described a missing store as an absent login;
+- The original profile is never modified, so this works while Firefox is open.
 
-Measured: the `v10` scheme of Opera / Chromium 130+ can be decrypted; **when Chrome 127+ has
-App-Bound Encryption (`v20`) enabled by default, it cannot be decrypted externally** -- in that case the tool says so
-and guides you to route B.
+Measured: **Firefox keeps cookie values in plaintext** (`cookies.sqlite`, table `moz_cookies`). There is no key
+to find, so there is no decryption step that can fail - either the cookie is read, or the profile simply has none
+for that domain. The whole Chromium key pipeline this route used to describe (DPAPI via a local `powershell.exe`
+subprocess, the `v10` AES-256-GCM envelope, the 32-byte domain-binding prefix, and the App-Bound Encryption
+`v20` state that could not be decrypted externally and sent you to route B) is **deleted rather than disabled**,
+along with the platform gate: reading a SQLite file is not a Windows-only operation.
 
 ### Route B: Playwright reusing a profile
 
-Point `profileDir` at a logged-in browser and Playwright starts with a persistent context.
-**That browser must be fully closed** (otherwise the profile is locked); the cost is higher but it works with every browser.
+Point `profileDir` at a Firefox profile that is logged in and Playwright starts with a persistent context.
+**That Firefox must be fully closed** (otherwise the profile is locked); the cost is higher, but this route is
+what carries a login the read-only probe cannot see.
 
 > If you do not want any tool reading your cookies, do not configure `profileDir`:
 > when it is not configured, no extraction is performed, and sources that need login fail honestly with a hint.
+
+## What the browser's own traffic does (egress)
+
+A browser-rendered fetch and a screenshot both go out through **this project's egress**, not straight from the
+machine: `resolveBrowserEgress()` in `server/src/net.js` resolves the route with the same `resolveProxyMode()`
+every other fetch uses, so a source pinned to Tor renders through Tor rather than through the global mode.
+
+- **The Tor SOCKS port is probed before a browser is started.** When Tor is not running the answer is a sentence
+  naming the SOCKS port and no browser is launched - a browser is never started on the assumption that Tor will
+  come up. (Measured: a browser launched against a refusing SOCKS port fails the navigation rather than falling
+  back to a direct connection, so a probe that passes is not hiding a working direct path.)
+- **Thumbnails are on that same egress.** They used to hand-roll "HTTP proxy or nothing", which meant a
+  screenshot taken while Tor mode was on went out **direct** - a privacy setting that quietly took a picture of a
+  page from this machine's own address.
+- **One measured engine limit, stated rather than hidden**: Playwright's Firefox cannot authenticate to a SOCKS5
+  proxy (it offers only the no-authentication method, and Firefox's own `network.proxy.socks_username` /
+  `socks_password` prefs change nothing). Browser traffic through Tor therefore rides the **default circuit**.
+  The per-subject `IsolateSOCKSAuth` rotation still applies to every non-browser fetch, and no username is put on
+  the browser's proxy at all - putting one there would only have looked like isolation while the wire carried none.
 
 ## Confirm before going live
 

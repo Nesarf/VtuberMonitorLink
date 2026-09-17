@@ -252,7 +252,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const discovered = listProfiles();
     const picker = pickerFor(discovered, cfg);
     res.json({
-      detected: detectBrowsers(),
+      // `paths.browsersDir` is handed in as an extra root: it is the setting that decides where engines live
+      // when PLAYWRIGHT_BROWSERS_PATH was not already set at startup, and an engine the page cannot see is an
+      // engine the user cannot pick.
+      detected: detectBrowsers({ extraRoots: [cfg?.paths?.browsersDir] }),
       target: resolveProfileTarget(cfg),
       report: browserTargetReport(cfg),
       profiles: picker.options,
@@ -266,7 +269,8 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // The older name of the route above, kept because a page may still ask for it: same detection, and the
   // browser config it used to return (the target answers everything it did, and more).
   app.get('/api/browsers', (_req, res) => {
-    res.json({ detected: detectBrowsers(), config: getConfig().browser });
+    const cfg = getConfig();
+    res.json({ detected: detectBrowsers({ extraRoots: [cfg?.paths?.browsersDir] }), config: cfg.browser });
   });
 
   // ── login availability ───────────────────────────────────────────

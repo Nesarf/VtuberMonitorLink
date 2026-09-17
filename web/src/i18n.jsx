@@ -264,8 +264,8 @@ export const STRINGS = {
     browserHint:
       '抓取、登录态检查、来源与分享页的登录检查 —— 所有要用浏览器的功能都读这里的设置。只有这一处配置：换一个配置目录，全部功能一起换。',
     mode: '模式',
-    mode_bundled: '随包 Chromium（开箱即用）',
-    mode_system: '系统已装浏览器（可复用登录）',
+    mode_bundled: '随包 Firefox（开箱即用）',
+    mode_system: '本机已装的 Playwright Firefox',
     mode_custom: '自定义路径',
     detected: '已探测到',
     executablePath: '浏览器可执行文件',
@@ -280,8 +280,8 @@ export const STRINGS = {
     loginNone: '没读到登录 cookie',
     loginHint:
       '这里会**只读地**复制一份浏览器的 cookie 库来取登录态（浏览器开着也没关系，不会锁定或改动它）。' +
-      '日志与报告里都不会出现 cookie 内容。若浏览器启用了 App-Bound Encryption（Chrome 127+ 默认），' +
-      '外部无法解密，这时只能关掉浏览器让 Playwright 复用 profile。',
+      '日志与报告里都不会出现 cookie 内容。Firefox 的 cookies.sqlite 是明文存放的，所以没有解密失败这回事：' +
+      '要么读到，要么这个 profile 里就没有该域名的 cookie。',
     domainLabel: '要读的域名',
     cookieDomain: '读的是 {domain} 的登录态',
     // The `title` of a check-login button. A separate, plain-text entry because `loginHint` carries `**`
@@ -301,7 +301,7 @@ export const STRINGS = {
     browserScanFound: '找到 {n} 个',
     browserProfileUse: '用这个',
     browserProfileSelected: '当前使用',
-    browserProfileDefaultHint: '本机 {browser} 的默认位置（留空时会用它）',
+    browserProfileDefaultHint: '本机 Firefox 的默认配置目录：{browser} —— 点「用这个」才会写进设置，不会自动套用',
     browserProfileCustom: '设置里的目录（本机没扫到）',
     browserProfileNone: '还没指定配置目录',
     browserFeatureStatus: '功能与状态',
@@ -1049,12 +1049,12 @@ export const STRINGS = {
     browserHint:
       'Scraping, every login-state check and one-click sharing all read the setting on this page. This is the only place it is configured: change the profile here and every feature changes with it.',
     mode: 'Mode',
-    mode_bundled: 'Bundled Chromium (works out of the box)',
-    mode_system: 'Installed system browser (can reuse login)',
+    mode_bundled: 'Bundled Firefox (works out of the box)',
+    mode_system: 'Playwright Firefox installed here',
     mode_custom: 'Custom path',
     detected: 'Detected',
     executablePath: 'Browser executable',
-    profileDir: 'User data dir (optional, for reusing login)',
+    profileDir: 'Firefox profile dir (optional, for reusing login)',
     profileHint: 'Leave empty for a clean temp profile (no login). The dir is locked while that browser is running.',
     headless: 'Headless',
     waitMs: 'Wait after render (ms)',
@@ -1066,8 +1066,8 @@ export const STRINGS = {
     loginHint:
       'This makes a **read-only copy** of the browser cookie store to pick up a login — the browser can stay open, ' +
       'nothing is locked or modified, and cookie values never reach a log or a report. ' +
-      'If the browser uses App-Bound Encryption (the default in Chrome 127+), outside decryption is impossible and ' +
-      'you have to close the browser so Playwright can reuse the profile.',
+      'Firefox keeps its cookie values in a plaintext cookies.sqlite, so there is no decryption step that can ' +
+      'fail: either the cookie is read, or the profile simply has none for that domain.',
     domainLabel: 'Domains to read',
     cookieDomain: 'reading the login state of {domain}',
     // The `title` of a check-login button. A separate, plain-text entry because `loginHint` carries `**`
@@ -1079,13 +1079,13 @@ export const STRINGS = {
     browserFromSettings: 'from Settings',
     // The browser page owns `browser.profileDir` and shows what every dependent feature needs (see
     // web/src/pages/Browser.jsx and server/src/browser-consumers.js).
-    browserProfile: 'Browser profile (user data dir)',
-    browserProfileHint: 'Empty = a clean temporary profile that carries no login. The dir is locked while that browser is running; a read-only cookie check is not affected.',
-    browserProfileScan: 'Scan this machine for browser profiles',
+    browserProfile: 'Firefox profile dir',
+    browserProfileHint: 'Empty = a clean temporary profile that carries no login. The dir is locked while that Firefox is running; a read-only cookie check is not affected.',
+    browserProfileScan: 'Scan this machine for Firefox profiles',
     browserScanFound: '{n} found',
     browserProfileUse: 'Use this one',
     browserProfileSelected: 'In use',
-    browserProfileDefaultHint: 'Default location for {browser} on this machine (used while the field above is empty)',
+    browserProfileDefaultHint: 'Default Firefox profile on this machine: {browser} — offered, never applied on its own',
     browserProfileCustom: 'the dir in the setting (not found on this machine)',
     browserProfileNone: 'no profile dir set yet',
     browserFeatureStatus: 'Features and their status',

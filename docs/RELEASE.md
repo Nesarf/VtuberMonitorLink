@@ -1,5 +1,69 @@
 # Release notes
 
+## v1.0.4
+
+**The bundled browser is now Firefox, and it goes out through Tor.** Chromium is gone from the product and from the
+package, and the browser's traffic uses the Tor egress this project already had.
+
+The engine was chosen for what could be measured rather than assumed, and two measurements shaped the result.
+Playwright's Firefox **does** support a persistent context over a profile directory - so the "reuse a login"
+feature survived the swap intact - and its cookies are stored in plaintext `cookies.sqlite`, which made the
+cookie-reading half of this project *smaller*: the Chromium path needed DPAPI, a PowerShell subprocess,
+AES-256-GCM and a workaround for App-Bound Encryption, and all of that is deleted rather than disabled. The other
+two measurements are constraints, and they are stated in the code rather than hidden: Playwright **cannot drive a
+stock Firefox** (its build carries a `playwright.cfg` a stock install does not), so the browser picker offers
+Playwright engines only and refuses a stock path up front with the reason and the fix; and Playwright's Firefox
+**cannot authenticate to SOCKS5**, so browser traffic through Tor rides the default circuit - per-subject circuit
+rotation still applies to every non-browser fetch, and putting a username on the browser proxy would only have
+looked like isolation.
+
+### Changed
+
+1. **The bundled engine is Playwright Firefox** (155.0). The Chromium flags, the hard-coded user agent, the
+   `install chromium` build step and the packaged Chromium payload are gone. The browser payload went from
+   705.6 MB to **345.3 MB**; the package without browsers is unchanged.
+2. **Browser egress has one door** (`resolveBrowserEgress`): the Tor SOCKS port is probed *before* a browser is
+   started, so "Tor is not running" is a clear reason with no browser launched rather than a crash three seconds
+   later. Screenshots moved onto the same egress - they used to go **direct** even in Tor mode, which meant a
+   privacy setting that quietly took a picture from this machine's own address.
+3. **Cookie reading is Firefox's `cookies.sqlite`**: plaintext `moz_cookies`, no key pipeline, and no longer
+   Windows-only. A directory that is not a Firefox profile answers as its own state rather than as "not signed in".
+4. **Profile discovery reads Firefox** (`profiles.ini`, per-profile stores), and the documented default profile is
+   now a real one in every mode.
+5. The portable build installs Firefox and logs the payload size; the UI traversal drives the same engine.
+
+### Fixed
+
+Three pre-existing defects the swap exposed, all invisible before because every unit test injects a filesystem:
+`defaultProfileDir()` answered empty in the running application, so the default the documentation promised did not
+exist outside tests; `present` was always false for the same reason; and a real Firefox *root* carries zero-byte
+`cookies.sqlite`/`places.sqlite` files, which made the root masquerade as a profile and hid the two profiles
+actually inside it. Each is now pinned by a named test with a control.
+
+### Verification evidence
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Fast self-check | `npm run verify:fast` | exit 0, including the new browser-engine suite (23 checks) |
+| Release traversal | `npm run traverse` | **86/86** |
+| UI traversal (real browser, 11 tabs) | `npm run traverse:ui` | **242/242** |
+| Flow traversal | `node tools/traverse-flows.cjs` | **36/36** |
+| Browser config suite | `node tools/browser-config-test.mjs` | 43/43 |
+| Pre-publish scans | `sanitize-check`, `sanitize:history` | clean |
+
+A new structural section pins the engine itself: the bundled browser must be Firefox, with a Chromium survivor in
+the code or in the packaging script failing the build.
+
+### Not yet verified
+
+No browser-through-Tor render has been observed end to end, because Tor was not running on the machine where this
+was built. What is proven: the SOCKS port is probed first, a refusal produces a clear reason with no browser
+started, and the `proxy` option is honoured by the engine (measured against a local SOCKS5 server). Once Tor runs,
+that path deserves a first real render. Posting from a real account and vision tagging with a real key remain
+credential-dependent as in every release so far.
+
+---
+
 ## v1.0.3
 
 **This build no longer knows Twitter/X or bilibili.** They are gone from the product rather than disabled: no

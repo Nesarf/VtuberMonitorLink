@@ -13,7 +13,7 @@
 //   - playwrightProxy() the browser-side proxy (can be turned off per source)
 import crypto from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
-import { socksAgent, socksForPlaywright } from './socks.js';
+import { socksAgent, socksForPlaywright, torPortOpen } from './socks.js';
 import { decision as autoDecision } from './egress.js';
 
 let appliedUrl = null;
@@ -87,12 +87,60 @@ export async function applyProxy(cfg) {
   return { applied: appliedUrl, mode, changed: true };
 }
 
-/** proxy option for Playwright's launch/newContext */
+/**
+ * proxy option for Playwright's launch/newContext.
+ *
+ * A measured limit is recorded here because it is a **property of the browser**, not of this function, and
+ * the next person to reach for stream isolation will look in this place:
+ *
+ *   Playwright's Firefox cannot authenticate to a SOCKS5 proxy. Given `socks5://user:pass@host:port` it
+ *   offers only the "no authentication" method on the wire (a recording SOCKS5 server saw method 0), and
+ *   given the explicit `proxy: { server, username, password }` fields it refuses the launch outright with
+ *   "Browser does not support socks5 proxy authentication". Setting Firefox's own
+ *   `network.proxy.socks_username` / `socks_password` prefs changes nothing (also measured).
+ *
+ *   Consequence, stated rather than hidden: a browser fetch through Tor lands on the **default circuit**
+ *   (empty SOCKS username), while every non-browser fetch still rotates per subject through
+ *   dispatcherFor()'s IsolateSOCKSAuth username. The username is therefore not put on the browser's proxy
+ *   at all — putting it there would only look like isolation while the wire carried none.
+ */
 export function playwrightProxy(cfg, mode) {
   if (mode === 'direct') return undefined;
   if (mode === 'tor' || (mode === undefined && cfg?.proxy?.mode === 'tor')) return socksForPlaywright(torSocksUrl(cfg));
   const want = httpProxyUrl(cfg);
   return want ? { server: want } : undefined;
+}
+
+/**
+ * The egress one browser launch must use, or a reason it cannot be used.
+ *
+ * This is the seam between "which door" (egress.js / resolveProxyMode, shared with every other fetch) and
+ * "start a browser" — and it exists because of one specific failure the owner will otherwise meet on a
+ * machine where Tor is simply not running: a raw Juggler `NS_ERROR_PROXY_CONNECTION_REFUSED` is accurate
+ * and tells nobody anything. The SOCKS port is therefore probed with a plain TCP connect **before** a
+ * browser is started (measured: a browser launched against a refusing SOCKS port fails the navigation
+ * rather than falling back to a direct connection, so the probe is not hiding a working path — it only
+ * replaces a confusing error with the actual reason).
+ *
+ * `probePort` is injectable so the decision can be pinned offline, with a control that must not be
+ * described as a proxy problem.
+ *
+ * @returns {Promise<{ok:true, mode:string, proxy:object|undefined}|{ok:false, mode:string, error:string}>}
+ */
+export async function resolveBrowserEgress(cfg, subject = null, { probePort = torPortOpen } = {}) {
+  const mode = resolveProxyMode(cfg, subject);
+  if (mode === 'tor') {
+    const socks = torSocksUrl(cfg);
+    const open = await probePort(socks).catch(() => false);
+    if (!open) {
+      return {
+        ok: false,
+        mode,
+        error: `Tor 出口不可用：SOCKS 端口拒绝连接（${socks}）—— Tor 没在跑 / Tor egress unavailable: the SOCKS port refuses (${socks}) — Tor is not running`,
+      };
+    }
+  }
+  return { ok: true, mode, proxy: playwrightProxy(cfg, mode) };
 }
 
 /**

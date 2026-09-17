@@ -97,7 +97,7 @@ embedded player and danmaku sending), the account-discovery and send-verificatio
 removed features, and `docs/LIVE.md`. What was **kept on purpose** is everything that was never actually
 about those sites:
 
-- **The read-only cookie probe is generic.** It copies a browser's own store and decrypts it read-only for **a host the caller names**, reporting cookie *names* and never values. Only the per-site uses that belonged to those platforms went; the mechanism, its DPAPI/App-Bound notes and the page that owns the setting all stay.
+- **The read-only cookie probe is generic.** It copies a browser's own store and reads it read-only for **a host the caller names**, reporting cookie *names* and never values. Only the per-site uses that belonged to those platforms went; the mechanism and the page that owns the setting all stay — though the browser it reads is now Firefox (see below), so the Chromium decryption notes that used to be here are gone with the code.
 - **The posting table is still three stages.** Account / verification / send are answered separately per site, because collapsing them hides which step is missing. No posting site in this build declares publish code, so the send stage says exactly that — and `/api/share/post` still refuses every call for that stated reason, behind its explicit-confirm and audit gate. That gate is the discipline, not a platform feature.
 - **The manual hand-off stays.** Where this app cannot post, it hands the composed body and images to the site's own compose page and records the click as a **manual** action.
 - **The roster's per-platform accounts stay** (see the VDB section above): they are data about people.
@@ -109,7 +109,7 @@ Some sources need a login (the Twitch following list, a wiki watchlist, or a sou
 The old answer was "close the browser, then let Playwright reuse the profile" — a steep price for one Cookie
 header. So there is a lighter path:
 
-**Copy the browser's cookie store and decrypt it read-only.** The browser can stay open; nothing is
+**Copy the browser's cookie store and read it read-only.** The browser can stay open; nothing is
 locked or modified.
 
 - The **Browser** tab → *Check login*, with the host to read (the field starts at `reddit.com`; name any
@@ -117,14 +117,47 @@ locked or modified.
   feature reports what it needs and whether it has it.
 - The probe is **generic on purpose**: it knows nothing about any particular site, reads only the host the
   caller named, and never holds a per-site list of what a login looks like.
-- Measured: on Opera / Chromium 130+ the `v10` scheme (AES-256-GCM, key protected by DPAPI) reads
-  fine, including stripping the 32-byte domain-binding prefix Chromium 130+ prepends.
-- **Chrome 127+ enables App-Bound Encryption by default** (`v20`), which cannot be decrypted from
-  outside. The tool says so explicitly and points you back at the close-the-browser route instead
-  of failing silently.
+- Measured: Firefox keeps its cookies in `cookies.sqlite` (table `moz_cookies`) and the value is
+  **plaintext**. There is no key to find, so there is no decryption step that can fail — either the
+  cookie is read, or that profile simply has none for the domain. `host` is what Chromium called
+  `host_key`, leading dot included, which is how a domain cookie outranks a host-only row of the same name.
+- A directory that is **not** a Firefox profile answers as its own state (`no-firefox-profile`) rather
+  than as "not signed in" — a Chromium profile is not a store this reader can open, and saying so is
+  more useful than reporting an empty result.
 - The login is used only to call that site's own API. **Cookie values never reach a log, a report
   or `feeds/`**, the copied store is deleted immediately, and the HTTP endpoint only ever reports
   cookie *names*, never values.
+
+## The browser engine is Firefox
+
+The bundled browser is **Playwright's Firefox** (155.0, build `firefox-1543`); Chromium is gone from the
+code, the flags, the hard-coded user agent and the packaged payload. What that means in practice:
+
+- **Only a Playwright Firefox build can be driven.** Playwright speaks the Juggler protocol, which a stock
+  `firefox.exe` does not implement, so a stock install is refused up front with the reason instead of
+  failing three seconds later as "Failed to launch the browser process". The fix is named in the message:
+  `npx playwright install firefox`. That means the `system` / `custom` modes offer Playwright engines only,
+  and the old advice — "point it at the Chrome you already have" — no longer holds.
+- **Every browser this app launches uses that engine** — a `fetch: browser` render, a screenshot thumbnail,
+  and the UI traversal. The egress is shared too (`resolveBrowserEgress` in `server/src/net.js`), the same
+  door every other fetch uses: the Tor SOCKS port is probed **before** a browser starts, so "Tor is not
+  running" is a clear reason and no browser is launched. Screenshots moved onto that same egress — they used
+  to go **direct** during Tor mode, which meant a privacy setting that quietly took a picture from this
+  machine's own address.
+- **A measured engine limit, stated rather than hidden**: Playwright's Firefox cannot authenticate to
+  SOCKS5 (it offers only the no-auth method and ignores Firefox's own `socks_username` prefs). Browser
+  traffic through Tor therefore rides the **default circuit**; the per-subject `IsolateSOCKSAuth` exit
+  rotation still applies to every non-browser fetch.
+- **Measured payload**: the `--with-browsers` payload went from 705.6 MB (Chromium) to **345.3 MB**
+  (Firefox); the `--with-browsers` zip is 169.5 MB, and the zip without browsers is unchanged at 40.4 MB.
+- **Profile discovery reads Firefox, not a fixed layout.** A Firefox profile is named by the `profiles.ini`
+  in its install root rather than living in a `Default` / `Profile 1` subdirectory, and a profile belongs to
+  **the machine rather than to one executable** — so the bundled engine can reuse the Firefox login you
+  already have, and the default profile is offered in every mode. It is only **offered** (a one-click "use
+  this one"), never substituted for an empty setting. Three pre-existing defects were fixed with this: the
+  documented default answered empty in the running app, `present` was always false, and a real Firefox
+  *root* (which carries zero-byte `cookies.sqlite` / `places.sqlite` from an older layout) could pass as a
+  profile, so the profiles inside it were never offered.
 
 ## LLM
 

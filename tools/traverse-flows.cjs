@@ -221,8 +221,18 @@ ${entries}
     check('POST /api/config/import accepts the document', imp.status === 200 && imp.json?.ok === true, `status ${imp.status}`);
     const after = await api('GET', '/api/config');
     check('imported layout took effect', after.json.ui?.layout?.mode === 'timeline', String(after.json.ui?.layout?.mode));
-    check('an empty key does NOT wipe the stored one', after.json.llm?.providers?.[0]?.apiKey === 'k', JSON.stringify(after.json.llm?.providers?.[0]?.apiKey));
+    // The stored key is no longer readable from GET /api/config (it is masked there, v1.0.5), so "the empty
+    // key did not wipe it" is measured where the real value lives: the explicit ?secrets=1 backup export.
+    // Reading it back through the default GET would require the fix to be undone to make the check pass.
+    const afterExport = await (await fetch(base + '/api/config/export?secrets=1')).json().catch(() => null);
+    check('an empty key does NOT wipe the stored one', afterExport?.config?.llm?.providers?.[0]?.apiKey === 'k', JSON.stringify(afterExport?.config?.llm?.providers?.[0]?.apiKey));
+    check('the masked config never carries the stored key', after.json.llm?.providers?.[0]?.apiKey === '***' && after.json.llm?.providers?.[0]?.hasApiKey === true, JSON.stringify(after.json.llm?.providers?.[0]?.apiKey));
     check('imported source state took effect', after.json.sources?.['official-hololive']?.enabled === false, JSON.stringify(after.json.sources?.['official-hololive']));
+    // The other half of the same rule, end to end: the masked config a page holds can be posted straight back
+    // and the key survives. This is what "a masked value sent back is not a new value" means to the UI.
+    const roundTrip = await api('PUT', '/api/config', after.json);
+    const afterPut = await (await fetch(base + '/api/config/export?secrets=1')).json().catch(() => null);
+    check('saving the masked config back keeps the key', roundTrip.status === 200 && afterPut?.config?.llm?.providers?.[0]?.apiKey === 'k', JSON.stringify(afterPut?.config?.llm?.providers?.[0]?.apiKey));
     await api('POST', '/api/config/import', { config: { sources: { 'official-hololive': { enabled: true } }, ui: { layout: { mode: 'cards' } } } });
 
     // ─────────────────────────────────────────── 2. alert delivery
@@ -236,6 +246,15 @@ ${entries}
     check('a webhook target can be stored', saved.status === 200 && (saved.json.notify?.targets ?? []).length === 1);
     const masked = await api('GET', '/api/notify');
     check('GET /api/notify masks the URL path (origin may stay)', masked.status === 200 && /\/\*\*\*$/.test(String(masked.json.targets?.[0]?.webhookUrl ?? '')), JSON.stringify(masked.json.targets?.[0]?.webhookUrl));
+    // The same webhook as it appears in the config: the credential in the path must not travel there either,
+    // and the origin is kept so the page can still show where it points.
+    const cfgWithHook = await api('GET', '/api/config');
+    const hookSeen = String(cfgWithHook.json?.notify?.targets?.[0]?.webhookUrl ?? '');
+    check('GET /api/config masks the webhook path too', hookSeen.startsWith('http://127.0.0.1:') && hookSeen.endsWith('/***'), JSON.stringify(hookSeen));
+    // Control: the same string is still readable through a route that is allowed to hand it over unmasked, so
+    // the check above is about the mask and not about the value having been dropped somewhere.
+    const realHook = await (await fetch(base + '/api/config/export?secrets=1')).json().catch(() => null);
+    check('control: the unmasked export still carries the full webhook', String(realHook?.config?.notify?.targets?.[0]?.webhookUrl ?? '').includes('/hook'), 'secrets=1 keeps it');
 
     const test = await api('POST', '/api/notify/test', { target: { id: 'flow-hook', kind: 'custom', webhookUrl: `http://127.0.0.1:${args.hook}/hook` } });
     check('POST /api/notify/test reports success', test.json?.ok === true, JSON.stringify(test.json?.result ?? test.json?.error));

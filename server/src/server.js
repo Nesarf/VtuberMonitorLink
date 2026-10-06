@@ -2,7 +2,8 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { APP_ROOT, resolveDir } from './config.js';
+import { APP_ROOT, isMaskedSecret, preserveSecretStrings, publicConfig, resolveDir } from './config.js';
+import { requestGuard } from './request-guard.js';
 import { CATEGORIES, effectiveSources, mergeSourceOverride, sanitizeCustomSource } from './sources.js';
 import { FETCH_KINDS } from './fetchers/index.js';
 import { detectBrowsers } from './fetchers/browser.js';
@@ -115,6 +116,10 @@ import { browserTargetReport } from './browser-consumers.js';
 
 export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   const app = express();
+  // Before anything else, and before the body parser: a request that fails the loopback check must not be
+  // parsed, routed or answered with data. This is what closes DNS rebinding — see request-guard.js for why
+  // the Host header, and not the bind address, is the decision point.
+  app.use(requestGuard());
   app.use(express.json({ limit: '8mb' }));
 
   /**
@@ -128,8 +133,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
    * `node --check` is blind to both (the syntax is fine); only actually hitting the endpoint exposes them —
    * which is why the traversal needs an assertion that really writes config, like "add an anniversary".
    */
+  // Every config write goes through here, for one reason: the client now reads a **masked** config, so the
+  // object it sends back carries '***' where a secret used to be. Storing that would destroy the user's key
+  // on the first save of the settings page. `preserveSecretStrings` puts the stored value back at every
+  // position that arrived masked or blank (see the secrets section of config.js); the route handlers below
+  // therefore stay as they were and keep their own semantics — a narrow PUT stays a narrow PUT.
+  const persist = (next) => setConfig(preserveSecretStrings(next, getConfig()));
+
+  /**
+   * A change that arrived from a client, with every secret the client only knows as a mask replaced by the
+   * stored one. Applied to the **request body** and before the handler touches it, because the two
+   * alternatives are both wrong: restoring after the write would store the mask first (the handlers call
+   * setConfig themselves in a few places), and restoring after a sanitiser has already run would find the
+   * mask sitting where the real value used to be.
+   *
+   * No key is invented: only keys the client actually sent are returned, so "PUT {watch:{enabled:false}}"
+   * still means "change that one thing".
+   */
+  const preserveSecretsIn = (body) => {
+    const stored = getConfig();
+    const out = {};
+    for (const [k, v] of Object.entries(body ?? {})) out[k] = preserveSecretStrings(v, stored?.[k]);
+    return out;
+  };
+
   const patchConfig = (cfg, patch) => {
-    const next = setConfig({ ...cfg, ...patch });
+    const next = persist({ ...cfg, ...patch });
     onConfigChanged?.(next);
     return next;
   };
@@ -152,11 +181,16 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── config ───────────────────────────────────────────────────────
-  app.get('/api/config', (_req, res) => res.json(getConfig()));
+  // The whole config, minus its secrets: this route is what a DNS-rebound page used to be able to read, and
+  // it is also what every settings page round-trips. `publicConfig` masks at any depth and states which
+  // fields are secret in one place (config.js); the matching write-side restore lives in `persist`.
+  app.get('/api/config', (_req, res) => res.json(publicConfig(getConfig())));
   app.put('/api/config', (req, res) => {
-    const next = setConfig(req.body ?? {});
+    // The body is applied as sent (a settings page posts the whole config back), with the masked secrets
+    // restored from storage first. Narrow patches go through the same helper; see preserveSecretsIn below.
+    const next = persist(preserveSecretsIn(req.body ?? {}));
     onConfigChanged?.(next);
-    res.json(next);
+    res.json(publicConfig(next));
   });
 
   // ── source catalog ───────────────────────────────────────────────
@@ -187,10 +221,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   app.patch('/api/sources/:id', (req, res) => {
-    const cfg = getConfig();
+    let cfg = getConfig();
     const { id } = req.params;
     if (!effectiveSources(cfg).some((s) => s.id === id)) return res.status(404).json({ error: `unknown source: ${id}` });
-    const { enabled, login, url, uid, proxy, note, region } = req.body ?? {};
+    const { enabled, login, url, uid, proxy, note, region } = preserveSecretsIn(req.body ?? {});
     cfg.sources = cfg.sources ?? {};
     cfg.sources[id] = {
       ...(cfg.sources[id] ?? {}),
@@ -211,30 +245,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       if (customIdx >= 0) cfg.customSources[customIdx] = merged;
       else cfg.customSources = [...(cfg.customSources ?? []), merged];
     }
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, sources: effectiveSources(cfg) });
   });
 
   // ── custom sources ───────────────────────────────────────────────
   app.post('/api/sources/custom', (req, res) => {
-    const cfg = getConfig();
-    const s = sanitizeCustomSource(req.body ?? {});
+    let cfg = getConfig();
+    // A user-added source carries free-form keys (url / proxy / note), so the mask rule is applied before
+    // the sanitiser picks the fields out.
+    const s = sanitizeCustomSource(preserveSecretsIn(req.body ?? {}));
     if (!s.id) return res.status(400).json({ error: 'id is required' });
     // Every fetch kind this build offers reads a url: the uid-only kind (an account-id feed) was removed
     // with its platform, and a source that carries nothing to fetch would be refused by the fetch stage anyway.
     if (!s.url) return res.status(400).json({ error: 'url is required' });
     if (effectiveSources(cfg).some((x) => x.id === s.id)) return res.status(409).json({ error: `source already exists: ${s.id}` });
     cfg.customSources = [...(cfg.customSources ?? []), s];
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, source: s, sources: effectiveSources(cfg) });
   });
 
   app.delete('/api/sources/custom/:id', (req, res) => {
-    const cfg = getConfig();
+    let cfg = getConfig();
     const before = (cfg.customSources ?? []).length;
     cfg.customSources = (cfg.customSources ?? []).filter((s) => s.id !== req.params.id);
     if (cfg.sources?.[req.params.id]) delete cfg.sources[req.params.id];
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, removed: before - cfg.customSources.length, sources: effectiveSources(cfg) });
   });
 
@@ -366,20 +402,27 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const p = activeProvider(cfg);
     res.json({
       presets: PRESETS,
-      providers: cfg.llm?.providers ?? [],
+      // The masked profile list, not `cfg.llm.providers` verbatim: masking only `active` (which this route
+      // did at first) left every *other* profile's apiKey in the response — the same leak as /api/config,
+      // one endpoint over. `publicConfig` is the one place the rule lives; the masker here is the same
+      // function applied to the single active profile, so the two can never disagree.
+      providers: publicConfig({ providers: cfg.llm?.providers ?? [] }).providers,
       activeId: cfg.llm?.activeId ?? '',
-      active: { ...p, apiKey: p.apiKey ? '***' : '' }, // never send the plaintext Key back
+      // Never send the plaintext key back. `active` is wrapped in a one-key object so the walk has a field
+      // *name* to judge (the rule is name-based, see config.js) instead of treating the profile itself as
+      // the value under a nameless root.
+      active: publicConfig({ provider: p }).provider,
       hasKey: !!p.apiKey,
     });
   });
 
   app.post('/api/llm/new', (req, res) => {
-    const cfg = getConfig();
+    let cfg = getConfig();
     const p = newProvider(req.body?.preset ?? 'deepseek', req.body?.overrides ?? {});
     cfg.llm = cfg.llm ?? {};
     cfg.llm.providers = [...(cfg.llm.providers ?? []), p];
     cfg.llm.activeId = p.id;
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, provider: p });
   });
 
@@ -406,7 +449,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.get('/api/watch', (_req, res) => {
     const cfg = getConfig();
     const baselines = allBaselines(cfg);
-    const targets = (cfg.watch?.targets ?? []).map((t) => {
+    // `targets` goes out through the same serializer as /api/config: a target may carry username +
+    // botPassword (the wiki login), and this route spreads `...t` verbatim, so it was the second copy of the
+    // same leak. The baseline object below is computed here and carries no secret.
+    const masked = publicConfig({ targets: cfg.watch?.targets ?? [] }).targets;
+    const targets = masked.map((t) => {
       const b = baselines[sanitizeId(t.id)] ?? null;
       return {
         ...t,
@@ -437,21 +484,26 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   app.put('/api/watch', (req, res) => {
     const cfg = getConfig();
-    const { targets, rules, enabled } = req.body ?? {};
-    cfg.watch = cfg.watch ?? {};
-    if (Array.isArray(targets)) {
+    // `body` is the incoming change and `cfg` is what is stored, so the mask rule is applied to the
+    // *request* (see the helper above). Doing it after the sanitiser would be too late: `sanitizeTarget`
+    // keeps only the fields it knows, and by then the masked password would already have replaced the real
+    // one in the object being written.
+    const changed = preserveSecretsIn(req.body ?? {});
+    const { targets, rules, enabled } = changed;
+    const watch = { ...(cfg.watch ?? {}) };
+    if (Array.isArray(changed.targets)) {
       const seen = new Set();
-      cfg.watch.targets = targets.map((t, i) => {
+      watch.targets = changed.targets.map((t, i) => {
         const clean = sanitizeTarget(t, i);
         while (seen.has(clean.id)) clean.id = `${clean.id}-2`;
         seen.add(clean.id);
         return clean;
       });
     }
-    if (rules && typeof rules === 'object') cfg.watch.rules = { ...DEFAULT_RULES, ...cfg.watch.rules, ...rules };
-    if (enabled !== undefined) cfg.watch.enabled = !!enabled;
-    setConfig(cfg);
-    res.json({ ok: true, watch: cfg.watch });
+    if (rules && typeof rules === 'object') watch.rules = { ...DEFAULT_RULES, ...watch.rules, ...rules };
+    if (enabled !== undefined) watch.enabled = !!enabled;
+    const next = persist({ ...cfg, watch });
+    res.json({ ok: true, watch: next.watch });
   });
 
   app.post('/api/watch/check', async (req, res) => {
@@ -487,10 +539,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     // The saved target is the fallback, so an already-configured target can be checked without the page
     // sending its secret back at all.
     const saved = (cfg.watch?.targets ?? []).find((t) => t.id === body.id) ?? {};
+    // '***' is what the page now holds for a saved password (the config it read is masked), so it means
+    // "the stored one". Without this the check would authenticate with the literal three asterisks and
+    // report the wiki's rejection as if the credential had stopped working — a false negative that looks
+    // exactly like a real one.
+    const sentPw = body.botPassword;
     const target = {
       apiUrl: body.apiUrl ?? saved.apiUrl,
       username: body.username ?? saved.username,
-      botPassword: body.botPassword ?? saved.botPassword,
+      botPassword: sentPw && !isMaskedSecret(sentPw) ? sentPw : saved.botPassword,
       proxy: body.proxy ?? saved.proxy,
     };
     const r = await checkWatchLogin(target, { cfg, log });
@@ -860,11 +917,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   app.post('/api/notify/new', (req, res) => {
-    const cfg = getConfig();
+    let cfg = getConfig();
     const t = newTarget(req.body?.kind ?? 'bark', req.body?.overrides ?? {});
     cfg.notify = cfg.notify ?? {};
     cfg.notify.targets = [...(cfg.notify.targets ?? []), t];
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, target: maskTarget(t) });
   });
 
@@ -876,7 +933,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     // what the frontend sends back is a mask, so never send with ***
     const merged = { ...(saved ?? {}), ...wanted, enabled: true, on: 'always' };
     for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
-      if (!wanted[k] || /\*\*\*/.test(String(wanted[k]))) merged[k] = saved?.[k] ?? wanted[k] ?? '';
+      // Same rule as everywhere else, now through the one shared predicate: a masked field means "the saved
+      // one". The local regex it replaces only recognised a run of asterisks, so the partial mask the
+      // notifier sends for a webhook URL ('https://host/***') was pushed as a live URL.
+      if (!wanted[k] || isMaskedSecret(wanted[k])) merged[k] = saved?.[k] ?? wanted[k] ?? '';
     }
     const r = await notify({ ...cfg, notify: { targets: [merged] } }, log, {
       title: "Vtuber's Monitor Link 测试通知",
@@ -929,6 +989,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── config import & export ───────────────────────────────────────
+  // This route keeps its own blank-the-fields redaction on purpose, and it is the precedent the read-side
+  // rule was built to match: an export is a *file*, `?secrets=1` is the deliberate "give me the backup with
+  // keys" switch, and the blank form is what `/api/config/import` documents ("apiKey:'' must not overwrite a
+  // stored value") — a masked '***' in a file would read as a value to anyone opening it in an editor.
+  // The blanket `publicConfig` pass afterwards is not decoration: the hand-kept list below covered the LLM key
+  // and the wiki password but **not** `proxy.controlSecret`, so a redacted export still carried a live
+  // credential for the mihomo/Clash control API (found by tools/config-secrets-test.mjs). Layering the
+  // serializer over the blanking covers every secret the rule knows about, while the fields the list does
+  // blank keep their '' shape — which is what the import path and its traversal check depend on.
   app.get('/api/config/export', (req, res) => {
     const cfg = getConfig();
     const withSecrets = req.query.secrets === '1';
@@ -941,7 +1010,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       }
     }
     const body = JSON.stringify(
-      { app: "Vtuber's Monitor Link", version: 2, exportedAt: new Date().toISOString(), secrets: withSecrets, config: clone },
+      {
+        app: "Vtuber's Monitor Link",
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        secrets: withSecrets,
+        // ?secrets=1 is the deliberate "back up everything" switch and stays verbatim.
+        config: withSecrets ? clone : publicConfig(clone),
+      },
       null,
       2
     );
@@ -950,9 +1026,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   app.post('/api/config/import', (req, res) => {
-    const incoming = req.body?.config ?? req.body;
-    if (!incoming || typeof incoming !== 'object') return res.status(400).json({ error: 'expected a config object' });
+    const raw = req.body?.config ?? req.body;
+    if (!raw || typeof raw !== 'object') return res.status(400).json({ error: 'expected a config object' });
     const cur = getConfig();
+    // A masked import (the UI can post back what /api/config just handed it) means "unchanged" for every
+    // secret, the same rule the '':''-does-not-overwrite behaviour below expresses.
+    const incoming = preserveSecretsIn(raw);
 
     // Merge the objects inside arrays by id (providers / targets / customSources / tasks …).
     // A plain "replace the whole array" would not work — the apiKey:'' of a redacted export would wipe the Key
@@ -978,9 +1057,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       }
       return b;
     };
-    const next = setConfig(merge(cur, incoming));
+    const next = persist(merge(cur, incoming));
     onConfigChanged?.(next);
-    res.json({ ok: true, config: next });
+    // The merged config is answered masked: an import is usually fed back by the UI, and this response is a
+    // config object like any other. The import itself still stores the real values (`persist` restored them).
+    res.json({ ok: true, config: publicConfig(next) });
   });
 
   // ── search ───────────────────────────────────────────────────────
@@ -1213,7 +1294,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // ── bulk source toggles ──────────────────────────────────────────
   // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature exists because of exactly that trap)
   app.post('/api/sources/bulk', (req, res) => {
-    const cfg = getConfig();
+    let cfg = getConfig();
     const { action, category, ids } = req.body ?? {};
     const all = effectiveSources(cfg);
     const picked = all.filter((s) => (ids?.length ? ids.includes(s.id) : category ? s.category === category : true));
@@ -1225,7 +1306,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       else if (action === 'reset') delete cfg.sources[s.id];
       else return res.status(400).json({ error: 'action must be enable | disable | reset' });
     }
-    setConfig(cfg);
+    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
     res.json({ ok: true, changed: picked.length, action, sources: effectiveSources(cfg) });
   });
 
@@ -1583,11 +1664,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // silently kept the old value is exactly the failure a settings form cannot show.
   app.patch('/api/share/settings', (req, res) => {
     const cfg = getConfig();
+    // A hand-added site entry accepts free-form keys, so this body is one more place a secret can arrive;
+    // the mask rule is applied to whatever it carries (see preserveSecretsIn).
+    const body = preserveSecretsIn(req.body ?? {});
     const patch = {
-      images: req.body?.images,
-      accounts: req.body?.accounts,
-      sites: req.body?.sites,
-      removeSites: req.body?.removeSites,
+      images: body.images,
+      accounts: body.accounts,
+      sites: body.sites,
+      removeSites: body.removeSites,
     };
     const next = applyShareSettings(cfg, patch);
     const saved = patchConfig(cfg, { share: next.share });

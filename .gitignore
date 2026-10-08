@@ -35,7 +35,10 @@ Desktop.ini
 !.vscode/tasks.json
 !.vscode/extensions.json
 
-# playwright browser cache (if downloaded locally)
+# playwright browser cache (if downloaded locally). The real name carries no leading dot - the packaging
+# script writes pw-browsers/ at the repository root - so the dot-prefixed line below never matched
+# anything and the directory showed up as untracked. Both are kept: the dotted one costs nothing.
+pw-browsers/
 .pw-browsers/
 
 # local private-name list for sanitize-check (never commit)

@@ -1,14 +1,13 @@
 // index.js — entry point
 // Start the local server -> open the browser automatically -> start the built-in scheduler
 import { spawn } from 'node:child_process';
-import { loadConfig, saveConfig, resolveDir, APP_ROOT } from './config.js';
+import { configHealthSnapshot, loadConfig, saveConfig, setConfigHealthLogger, resolveDir, APP_ROOT } from './config.js';
 import { createLogger } from './logger.js';
 import { createApp } from './server.js';
 import { runOnce } from './runner.js';
 import * as scheduler from './scheduler.js';
 import { ensureDirs } from './reports.js';
 import { applyProxy } from './net.js';
-import fs from 'node:fs';
 import path from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 43110);
@@ -38,6 +37,27 @@ applyPathEnv(cfg);
 await applyProxy(cfg);
 
 const log = createLogger(path.join(resolveDir(cfg, 'logsDir'), 'server.log'));
+// The durability state is recorded by config.js during `loadConfig()` above, before this logger
+// existed. Hand the logger over now so every later write and every retry of a standing condition is
+// logged where the user will see it, and state the load result once here — the startup line is the
+// one place a first-run and a damaged file must not look the same.
+setConfigHealthLogger(log);
+{
+  const h = configHealthSnapshot();
+  if (h.state === 'corrupt' || h.state === 'unreadable') {
+    const what = h.events.at(-1) ?? {};
+    log.error(
+      `config file is ${h.state}${what.code ? ` (${what.code})` : ''}: ${what.error ?? 'see /api/config/health'}`
+    );
+    log.error(
+      what.movedTo
+        ? `the damaged file was kept as ${path.basename(what.movedTo)}; running on defaults, and nothing will be written over it until you save or call POST /api/config/recover (${h.backupExists ? 'a .bak copy is available' : 'no .bak copy exists'})`
+        : `running on defaults; the damaged file was left untouched at ${h.path} — fix or move it, then restart`
+    );
+  } else if (h.state === 'fresh') {
+    log.warn(`no config file yet (${h.path}), starting from defaults; set your LLM API key in the UI, and the first save creates the file`);
+  }
+}
 log.info(`Vtuber's Monitor Link starting… (root: ${APP_ROOT})`);
 
 /** A scheduled task fired -> run once and record the history */
@@ -128,7 +148,7 @@ process.on('uncaughtException', (err) => {
   if (/EADDRINUSE/.test(String(err?.code ?? ''))) process.exit(1);
 });
 
-// first-run hint
-if (!fs.existsSync(path.join(APP_ROOT, 'config.json'))) {
-  log.warn('config.json not found, using defaults; set your LLM API key in the UI');
-}
+// The first-run hint that used to live here is gone: it tested `!fs.existsSync(config.json)` on its
+// own, which is true both on a genuine first run and after a damaged file had been moved aside -- so
+// the one line meant to explain "start here" also fired in the state that must not look like a fresh
+// install. The load state is reported once, from the single record kept by config.js, above.

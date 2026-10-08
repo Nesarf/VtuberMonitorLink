@@ -973,6 +973,81 @@ try {
   problems.push(`could not read the browser engine surface: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5k. config.json has one write path, and it is atomic
+//
+// The config is the one file in this project whose loss the user cannot undo: it holds every setting and
+// every secret. v1.0.5 found it being written with a bare `writeFileSync` -- truncate the target, then
+// write -- and read back with "defaults on any error", so a write cut short produced a file that looked
+// like a fresh install and was then overwritten by the defaults on the next save.
+//
+// tools/config-durability-test.mjs proves the behaviour (with its controls). What this section checks is
+// the thing a future change can quietly break without any test noticing: that the *only* place that opens
+// config.json for writing is the atomic writer, i.e. that no new `writeFileSync(CONFIG_PATH, ...)` grew
+// back somewhere else. The writer itself is asserted to keep its sequence -- temp file, fsync, rename --
+// because "atomic write" is a claim about order, and a later refactor that drops the fsync would still
+// look atomic in every test that only checks the bytes.
+try {
+  const configSrc = fs.readFileSync(path.join(ROOT, 'server/src/config.js'), 'utf8');
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  const indexSrc = fs.readFileSync(path.join(ROOT, 'server/src/index.js'), 'utf8');
+
+  // A write aimed at the config path that is not `openSync(<temp>)` + `writeSync(fd)` is the defect back.
+  const bareWrites = (src) =>
+    [
+      [/\bwriteFileSync\s*\(\s*CONFIG_PATH\b/, 'a bare writeFileSync(CONFIG_PATH, ...)'],
+      [/\bappendFileSync\s*\(\s*CONFIG_PATH\b/, 'a bare appendFileSync(CONFIG_PATH, ...)'],
+      [/\bwriteFileSync\s*\(\s*[`'"][^`'"]*config\.json/, 'a writeFileSync aimed at config.json'],
+      [/\bcreateWriteStream\s*\(\s*CONFIG_PATH\b/, 'a createWriteStream(CONFIG_PATH)'],
+    ]
+      .filter(([re]) => re.test(String(src)))
+      .map(([, what]) => what);
+
+  const surfaces = ['server/src/config.js', 'server/src/server.js', 'server/src/index.js', 'server/src/scheduler.js', 'server/src/reports.js'];
+  const bare = surfaces.flatMap((rel) => {
+    const p = path.join(ROOT, rel);
+    if (!fs.existsSync(p)) return [];
+    return bareWrites(fs.readFileSync(p, 'utf8')).map((w) => `${rel}: ${w}`);
+  });
+  if (bare.length) problems.push(`the config must only be written through the atomic writer, but ${bare.join('; ')}`);
+  else process.stdout.write(`   [ok]   none of ${surfaces.length} config-writing surface(s) writes the file directly\n`);
+
+  // The control: the exact line the audit found.
+  const fixture = "  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });\n  fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf8');";
+  if (bareWrites(fixture).length !== 1) {
+    problems.push('the "no bare config write" detector does not fire on the line the audit found, so it proves nothing');
+  } else {
+    process.stdout.write('   [ok]   (and the control, the bare writeFileSync the audit found, is caught)\n');
+  }
+
+  // The order inside the writer: temp -> fsync -> rename -> (directory fsync). Each has a reason stated
+  // in config.js; what is checked here is only that they are all still there and in that order.
+  const seq = ['openSync(tmp', 'writeSync(fd', 'fsyncSync(fd)', 'renameSync(tmp, CONFIG_PATH)'];
+  const at = seq.map((needle) => configSrc.indexOf(needle));
+  const missing = seq.filter((_, i) => at[i] < 0);
+  const outOfOrder = at.some((v, i) => i > 0 && v < at[i - 1]);
+  if (missing.length) problems.push(`writeConfigText no longer contains ${missing.join(', ')}`);
+  else if (outOfOrder) problems.push('writeConfigText no longer performs temp -> write -> fsync -> rename in that order');
+  else process.stdout.write('   [ok]   the config writer still goes temp -> write -> fsync -> rename\n');
+
+  if (!/copyFileSync\(CONFIG_PATH, BAK_PATH\)/.test(configSrc)) problems.push('the writer no longer keeps the previous-good copy (config.json.bak)');
+  else process.stdout.write('   [ok]   the writer still keeps the previous-good copy\n');
+
+  // The three states are exported as data, and the routes that report them exist. A state machine nobody
+  // can read from the outside is the silent fallback with extra steps.
+  for (const name of ['CONFIG_STATES', 'configHealthSnapshot', 'recoverConfigFromBackup', 'verifyBackup']) {
+    if (!new RegExp(`export (function|const) ${name}\\b`).test(configSrc)) problems.push(`config.js no longer exports ${name}`);
+  }
+  if (!/app\.get\('\/api\/config\/health'/.test(serverSrc)) problems.push('the config health route is gone, so the condition cannot be reported');
+  if (!/app\.post\('\/api\/config\/recover'/.test(serverSrc)) problems.push('the config recovery route is gone, so a damaged config cannot be repaired');
+  if (!problems.length) process.stdout.write('   [ok]   the states are exported and both routes are registered\n');
+
+  // The startup line: the load result has to be stated once, or a damaged file and a first run look alike.
+  if (!/setConfigHealthLogger\(log\)/.test(indexSrc)) problems.push('index.js no longer hands the logger to the config health record, so a load fault is never logged');
+  else process.stdout.write('   [ok]   index.js reports the load state through the logger\n');
+} catch (e) {
+  problems.push(`could not read the config durability surface: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── 6. bug table numbering
 //
 // Three times I wrote "add a line" as "replace the adjacent line", which silently lost a record from the bug table.

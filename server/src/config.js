@@ -7,7 +7,18 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Project root */
 export const APP_ROOT = path.resolve(__dirname, '..', '..');
-export const CONFIG_PATH = path.join(APP_ROOT, 'config.json');
+/**
+ * The config file, next to `app/` in a packaged release and at the repository root in a source
+ * checkout.
+ *
+ * `VML_CONFIG_PATH` moves it, and it exists for exactly one reason: the durability test has to drive
+ * the real read/write path against a file of its own. It must never be aimed at the user's real
+ * config.json, which is why the override is a full path and not a directory. Nothing in this
+ * repository sets it; a process that starts without it resolves the path exactly as it always did.
+ */
+export const CONFIG_PATH = process.env.VML_CONFIG_PATH
+  ? path.resolve(process.env.VML_CONFIG_PATH)
+  : path.join(APP_ROOT, 'config.json');
 
 export const DEFAULT_CONFIG = {
   browser: {
@@ -331,22 +342,389 @@ export function mergeDefaults(user, defaults = DEFAULT_CONFIG) {
   return out;
 }
 
-export function loadConfig() {
+// ─────────────────────────────────────────────────────────────────────────────
+// Config durability: one file, three ways it can be there, and a write that cannot truncate it
+//
+// The v1.0.5 audit found the config being *silently replaced*. Both halves of that are here, because
+// they are one defect seen at two moments:
+//
+//   · `loadConfig` returned `structuredClone(DEFAULT_CONFIG)` when the file was missing **and** when
+//     `JSON.parse` threw, and the only difference between the two was `console.error`, which nobody
+//     reads. A file damaged by a half-finished write, a killed editor or a stray byte therefore looked
+//     exactly like a fresh install — and a fresh install is a state the user is *told* to expect.
+//   · `saveConfig` wrote with a bare `writeFileSync`, which truncates the target first. An interrupted
+//     write left a truncated file, so the damage that produced the silent fallback was itself easy to
+//     produce. Worse, the next save then persisted the **defaults** over it: the user does not
+//     experience "my settings look reset", they experience "the file that could have been repaired is
+//     gone". That second step is why this is the sharpest of the three findings, and it is why the
+//     damaged file is moved aside rather than read once and forgotten.
+//
+// So there are two rules in this section, and the rest is bookkeeping for them:
+//
+//   R1. **A damaged config is never silently replaced.** Missing is a normal first run and stays
+//       silent; corrupt and unreadable are conditions. The damaged file is moved aside as
+//       `config.json.broken-<stamp>`, the condition is recorded here, reported on `/api/config/health`
+//       and logged until it is resolved.
+//   R2. **A write can never leave a truncated config.** Everything goes to a temp file in the same
+//       directory, is flushed with `fsync`, and only then replaces the target with one `rename`; the
+//       previous good file is copied to `config.json.bak` first.
+//
+// Why the condition is reported by a route **of the app** and not by a file on disk: the damage is a
+// property of the process that is running. A `.broken-` marker file would have to be found, and the
+// user who needs it most is the one who never opens the app folder. The running app already has a
+// place the pages poll (see the /api/config/health route in server/src/server.js), and it can say what
+// the file's name is, whether a `.bak` exists, and what to do next.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The four states a config can be in at load time. There is no fifth "unknown, carry on". */
+export const CONFIG_STATES = ['fresh', 'ok', 'corrupt', 'unreadable'];
+
+/** Where the previous good copy lives, and how a moved-aside damaged file is named. */
+export const BAK_PATH = CONFIG_PATH + '.bak';
+export const brokenPathFor = (stamp = new Date().toISOString()) => `${CONFIG_PATH}.broken-${stamp.replace(/[:.]/g, '-')}`;
+
+/** The states that mean "something is wrong", i.e. the ones that must be visible until fixed. */
+export const isConfigFault = (state) => state === 'corrupt' || state === 'unreadable';
+
+/** Error codes that mean "we were not allowed to read it", as opposed to "its bytes are not JSON". */
+const PERMISSION_CODES = new Set(['EACCES', 'EPERM', 'EROFS', 'EISDIR']);
+const permissionProblem = (err) => PERMISSION_CODES.has(String(err?.code ?? ''));
+const codeOf = (err) => String(err?.code ?? err?.name ?? 'error');
+
+/**
+ * The running process's view of the config file.
+ *
+ * `state` is the load result, and it is the *persistent* part: until a load or a repair says
+ * otherwise, it keeps saying `corrupt`. `lastWrite` is separate on purpose — a save that succeeded
+ * after a corrupt load must not be able to look like "there was never a problem", and a save that
+ * *failed* (a read-only folder) must not be able to look like one that worked.
+ */
+const health = {
+  state: 'fresh',
+  at: null,
+  events: [],
+  writeCount: 0,
+  writeFailures: 0,
+  lastWrite: null,
+  lastWriteError: null,
+  log: null,
+  lastLogged: '',
+  lastProblem: null,
+};
+
+/**
+ * The app's logger, injected once at startup (server/src/index.js). config.js cannot import
+ * logger.js: the logger needs a directory from the config, so a direct import would be a cycle.
+ */
+export function setConfigHealthLogger(log) {
+  health.log = log ?? null;
+}
+
+/**
+ * Log a condition once, at the moment it is detected or retried. The dedupe key is the *condition*
+ * (`state|code|file`), not the state alone: a second, differently-broken file is news, and a
+ * per-write warning that repeats is how a real problem gets filtered out as noise.
+ */
+function logProblem(message, detail = {}) {
+  const key = `${health.state}|${detail.code ?? ''}|${detail.movedTo ?? ''}|${detail.path ?? ''}`;
+  if (key === health.lastLogged) return;
+  health.lastLogged = key;
+  health.lastProblem = { state: health.state, code: detail.code ?? null, at: new Date().toISOString() };
+  const line = `[config] ${message}`;
+  if (health.log) health.log.warn(line);
+  // Before the logger exists (a load failure happens before the log directory is known) the run has
+  // exactly one channel left, and staying quiet there is the behaviour being fixed.
+  else console.error(line);
+}
+
+function recordEvent(kind, state, detail = {}) {
+  const at = new Date().toISOString();
+  health.state = state;
+  health.at = at;
+  health.events.push({ at, kind, state, ...detail });
+  // Bounded: this is a ring of "what happened to my config recently", not an audit log. A run writes
+  // the config on every settings save, so an unbounded list would grow for the life of the process.
+  if (health.events.length > 20) health.events.splice(0, health.events.length - 20);
+  return at;
+}
+
+/** What a caller (the health route, a test) is told. Never carries a config value, only filenames. */
+export function configHealthSnapshot() {
+  return {
+    state: health.state,
+    ok: health.state === 'ok' || health.state === 'fresh',
+    fault: isConfigFault(health.state),
+    at: health.at,
+    path: CONFIG_PATH,
+    backupPath: BAK_PATH,
+    backupExists: fs.existsSync(BAK_PATH),
+    lastWrite: health.lastWrite,
+    lastWriteError: health.lastWriteError,
+    writeCount: health.writeCount,
+    writeFailures: health.writeFailures,
+    // When the standing condition was last announced. A page that polls this route can tell "the same
+    // fault, still standing" from "a new one", which is what makes the repeat visible instead of
+    // repeating itself into the background.
+    lastProblem: health.lastProblem,
+    events: health.events.map((e) => ({ ...e })),
+  };
+}
+
+/** Tests only: forget everything, including the file paths, which a fixture overrides at import. */
+export function resetConfigHealthForTest(state = 'fresh') {
+  health.state = state;
+  health.at = null;
+  health.events = [];
+  health.writeCount = 0;
+  health.writeFailures = 0;
+  health.lastWrite = null;
+  health.lastWriteError = null;
+  health.lastLogged = '';
+  health.lastProblem = null;
+}
+
+/**
+ * Put the damaged file aside, under a name that keeps its bytes and its reason.
+ *
+ * Copy, then delete — not `rename`, although a rename is the tidier one-liner. The difference only
+ * shows up on the machines this matters on: a file that cannot be deleted (Windows marks it read-only
+ * when it is open in an editor, a folder ACL may forbid the delete) still has its bytes preserved by
+ * the copy, and the copy is what the recovery below depends on. If the delete fails as well we keep
+ * going and report `stillInPlace`, because the one thing that must not happen here is a load that
+ * silently proceeds over a config we could not preserve.
+ */
+function moveAsideDamaged() {
+  const movedTo = brokenPathFor();
   try {
-    if (!fs.existsSync(CONFIG_PATH)) return structuredClone(DEFAULT_CONFIG);
-    const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    return mergeDefaults(raw);
+    fs.copyFileSync(CONFIG_PATH, movedTo);
   } catch (err) {
-    console.error('[config] load failed:', err.message);
-    return structuredClone(DEFAULT_CONFIG);
+    return { movedTo: null, stillInPlace: true, error: `could not preserve the damaged file: ${err.message}` };
+  }
+  let stillInPlace = false;
+  try {
+    fs.unlinkSync(CONFIG_PATH);
+  } catch {
+    stillInPlace = true;
+  }
+  return { movedTo, stillInPlace, error: null };
+}
+
+/**
+ * What the app runs on when the config file is not usable. It is a decision, not a fallback that
+ * happens to look like one: continuing with defaults keeps a dashboard and a scheduler alive (a local
+ * tool that refuses to start over one byte is worse than one that starts degraded and says so), and
+ * the *record* kept above is what makes the difference visible. It is never written back without the
+ * user asking — see `moveAsideDamaged` and the write path below.
+ */
+function defaultsOnFault() {
+  return structuredClone(DEFAULT_CONFIG);
+}
+
+/**
+ * Read the config file and say which of the three conditions it was in.
+ *
+ * A missing file is a genuine first run: defaults, no diagnostic, nothing written. It must not be
+ * conflated with the two failures, which is why this no longer has a single `catch` around everything.
+ */
+export function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    recordEvent('load', 'fresh', { note: 'no config file yet: this is a first run, not a fault' });
+    return defaultsOnFault();
+  }
+  let text;
+  try {
+    text = fs.readFileSync(CONFIG_PATH, 'utf8');
+  } catch (err) {
+    // The file may well be perfectly good and we were simply not allowed to look. Running on
+    // defaults is the only option here, but it is *reported* as what it is, and nothing is written:
+    // a folder we cannot read in is a folder we must not write in either.
+    const state = permissionProblem(err) ? 'unreadable' : 'corrupt';
+    recordEvent('load', state, { code: codeOf(err), error: err.message, action: 'kept the file untouched' });
+    logProblem(`config is ${state} (${codeOf(err)}): ${err.message}`, { code: codeOf(err), path: CONFIG_PATH });
+    return defaultsOnFault();
+  }
+  try {
+    const cfg = mergeDefaults(JSON.parse(text));
+    recordEvent('load', 'ok', { bytes: Buffer.byteLength(text) });
+    return cfg;
+  } catch (err) {
+    const aside = moveAsideDamaged(err);
+    recordEvent('load', 'corrupt', {
+      code: codeOf(err),
+      error: err.message,
+      movedTo: aside.movedTo,
+      stillInPlace: aside.stillInPlace,
+      preserveError: aside.error,
+    });
+    logProblem(
+      aside.movedTo
+        ? `config is not valid JSON (${err.message}) and was moved aside to ${path.basename(aside.movedTo)}; running on defaults`
+        : `config is not valid JSON (${err.message}) and could not be moved aside; running on defaults`,
+      { code: codeOf(err), movedTo: aside.movedTo, path: CONFIG_PATH }
+    );
+    return defaultsOnFault();
+  }
+}
+
+/**
+ * Run one fsync call, if the platform has it, and never let a refusal break the write. Returns null on
+ * success and a short reason otherwise, so the snapshot can say whether the directory flush happened
+ * instead of leaving the caller to guess from the absence of an error.
+ */
+function syncQuietly(what, run) {
+  try {
+    run();
+    return null;
+  } catch (err) {
+    return `fsync of ${what} refused (${codeOf(err)})`;
+  }
+}
+
+/**
+ * The one way config text reaches the disk.
+ *
+ * Sequence, in this order and for these reasons:
+ *   1. temp file **in the target's own directory** — a rename is only atomic within one filesystem,
+ *      and a temp in the OS temp dir can silently degrade to copy+unlink, which is the truncation
+ *      window this is here to close;
+ *   2. write, then `fsync` the **file**, so the bytes are on the medium before anything points at
+ *      them (otherwise a power loss can leave a correctly named file full of zeroes);
+ *   3. copy the current file to `.bak` — the one step back, taken while the target is still good;
+ *   4. `rename` over the target — the only step that is atomic, and the only step the outside world
+ *      can observe;
+ *   5. `fsync` the **directory**, so the rename itself survives a power loss. Not on Windows: opening
+ *      a directory as a file and flushing it is refused (EPERM/EISDIR) there, and the refusal is
+ *      recorded rather than thrown, because a rename that is already done must not be reported as a
+ *      failed write.
+ *
+ * Any failure before the rename leaves the previous file exactly as it was, and the temp file is
+ * removed in the `finally` — a failed write must not leave a partial file that the next start would
+ * try to parse.
+ */
+export function writeConfigText(text) {
+  const dir = path.dirname(CONFIG_PATH);
+  let tmp = null;
+  let fd = null;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    // Unique per process: two processes that both rewrite the config (a second instance started by
+    // hand) must not share one temp name, or one removes the other's file between its fsync and its
+    // rename. The name stays in the same directory, which is the part the atomicity depends on.
+    tmp = path.join(dir, `${path.basename(CONFIG_PATH)}.${process.pid}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}.tmp`);
+    fd = fs.openSync(tmp, 'w');
+    fs.writeSync(fd, text);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+
+    if (fs.existsSync(CONFIG_PATH)) fs.copyFileSync(CONFIG_PATH, BAK_PATH);
+
+    fs.renameSync(tmp, CONFIG_PATH);
+    tmp = null;
+
+    // The very first save of a fresh install has no previous file to copy, and that is exactly the
+    // state a user is in on the day a config gets damaged by something else entirely. "Always one step
+    // back" has to hold then too, so the backup is seeded from the file that was just written. It is
+    // the same bytes as the config at that instant and therefore not a second opinion -- but it is a
+    // readable file, and the day the config is truncated or half-synced it is the difference between a
+    // repair and a rewrite.
+    if (!fs.existsSync(BAK_PATH)) fs.copyFileSync(CONFIG_PATH, BAK_PATH);
+
+    const dirSync = syncQuietly('the directory', () => {
+      const dfd = fs.openSync(dir, 'r');
+      try {
+        fs.fsyncSync(dfd);
+      } finally {
+        fs.closeSync(dfd);
+      }
+    });
+
+    health.writeCount++;
+    health.lastWriteError = null;
+    health.lastWrite = recordEvent('write', health.state, { bytes: Buffer.byteLength(text), dirSync });
+    return { ok: true, bytes: Buffer.byteLength(text), path: CONFIG_PATH, dirSync };
+  } catch (err) {
+    health.writeFailures++;
+    health.lastWriteError = { at: new Date().toISOString(), code: codeOf(err), error: err.message, path: CONFIG_PATH };
+    recordEvent('write', health.state, { code: codeOf(err), error: err.message, failed: true });
+    logProblem(`could not write ${path.basename(CONFIG_PATH)} (${codeOf(err)}): ${err.message}`, { code: codeOf(err), path: CONFIG_PATH });
+    throw err;
+  } finally {
+    // The fd first: an unflushed handle on a file we are about to delete is how a temp file survives
+    // on Windows (the delete is refused while the handle is open).
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* the write has already failed; closing is best-effort */
+      }
+    }
+    if (tmp !== null) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* leaving a .tmp behind is untidy; leaving a truncated config.json is the bug */
+      }
+    }
   }
 }
 
 export function saveConfig(cfg) {
   const merged = mergeDefaults(cfg);
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf8');
+  writeConfigText(JSON.stringify(merged, null, 2));
   return merged;
+}
+
+/**
+ * Read the `.bak` copy back, as a candidate. Returns `{ ok, error, bytes }` — separating "the backup
+ * is bad" from "the backup could not be read" is what lets the caller print a sentence a user can act
+ * on rather than a stack trace.
+ */
+export function verifyBackup() {
+  if (!fs.existsSync(BAK_PATH)) return { ok: false, error: `no ${path.basename(BAK_PATH)} to recover from`, bytes: 0 };
+  try {
+    const text = fs.readFileSync(BAK_PATH, 'utf8');
+    JSON.parse(text);
+    return { ok: true, error: null, bytes: Buffer.byteLength(text) };
+  } catch (err) {
+    return { ok: false, error: `${path.basename(BAK_PATH)} is not usable either: ${err.message}`, bytes: 0 };
+  }
+}
+
+/**
+ * Repair: put the `.bak` copy back as the config.
+ *
+ * Only for the two fault states, and deliberately **not automatic at startup**. Restoring a backup
+ * without being asked is the same silent substitution this change exists to remove — the user would
+ * watch their settings change and have no way to know why. An explicit call (the route, the button)
+ * makes both the act and the timestamp visible.
+ *
+ * The target must be **absent** for this to do anything: a config.json that is already there is never
+ * overwritten, including by its own backup. After a load fault the damaged file has been moved aside,
+ * so this holds; and when it does not hold, refusing is the honest answer.
+ */
+export function recoverConfigFromBackup() {
+  if (!isConfigFault(health.state)) {
+    return { ok: false, error: `the config is not in a fault state (state: ${health.state}); nothing to recover` };
+  }
+  if (health.state === 'unreadable') {
+    // A file we may not read is a file we may not replace with a copy of itself.
+    return { ok: false, error: `the config is present but unreadable, so it is left alone: check the permissions of ${CONFIG_PATH}` };
+  }
+  if (fs.existsSync(CONFIG_PATH)) {
+    return { ok: false, error: `${path.basename(CONFIG_PATH)} is in the way; it is never overwritten by a recovery` };
+  }
+  const check = verifyBackup();
+  if (!check.ok) return { ok: false, error: check.error };
+  try {
+    const text = fs.readFileSync(BAK_PATH, 'utf8');
+    writeConfigText(text);
+    const cfg = loadConfig(); // the state only becomes 'ok' if the restored file really parses
+    recordEvent('recover', health.state, { bytes: check.bytes, from: BAK_PATH });
+    return { ok: true, state: health.state, bytes: check.bytes, config: cfg };
+  } catch (err) {
+    return { ok: false, error: `recovery failed: ${err.message}` };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

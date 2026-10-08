@@ -2,7 +2,16 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { APP_ROOT, isMaskedSecret, preserveSecretStrings, publicConfig, resolveDir } from './config.js';
+import {
+  APP_ROOT,
+  configHealthSnapshot,
+  isMaskedSecret,
+  preserveSecretStrings,
+  publicConfig,
+  recoverConfigFromBackup,
+  resolveDir,
+  verifyBackup,
+} from './config.js';
 import { requestGuard } from './request-guard.js';
 import { CATEGORIES, effectiveSources, mergeSourceOverride, sanitizeCustomSource } from './sources.js';
 import { FETCH_KINDS } from './fetchers/index.js';
@@ -191,6 +200,32 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const next = persist(preserveSecretsIn(req.body ?? {}));
     onConfigChanged?.(next);
     res.json(publicConfig(next));
+  });
+
+  // ── config integrity ─────────────────────────────────────────────
+  //
+  // Why this is a route of its own rather than three extra fields on /api/state: "is my config file
+  // damaged" and "is a run in progress" are different questions with different lifetimes, and a page
+  // that greys out a settings form should not have to read the run state to find out. It is also the
+  // answer a support conversation starts from, and it stays readable when the config itself is the
+  // thing that is broken — the payload describes the file, never a value from it.
+  //
+  // The state is a property of the running process (see the durability section of config.js for why),
+  // so it is read from the module rather than through getConfig(): a damaged file is exactly the case
+  // where getConfig() is an in-memory default that says nothing about the disk.
+  app.get('/api/config/health', (_req, res) => {
+    const backup = verifyBackup();
+    res.json({ ...configHealthSnapshot(), backupUsable: backup.ok, backupError: backup.ok ? null : backup.error });
+  });
+
+  // The deliberate half of "never silently": the app runs on defaults after a damaged config and does
+  // **not** put the backup back on its own, because a config that changes itself is the failure this
+  // release is about. This is the one call that restores it, and the answer states what happened.
+  app.post('/api/config/recover', (_req, res) => {
+    const result = recoverConfigFromBackup();
+    const { config, ...rest } = result;
+    res.status(result.ok ? 200 : 409).json({ ...rest, health: configHealthSnapshot() });
+    if (result.ok) onConfigChanged?.(config);
   });
 
   // ── source catalog ───────────────────────────────────────────────

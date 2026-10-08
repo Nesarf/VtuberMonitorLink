@@ -1,5 +1,5 @@
 // App.jsx — the six-page shell + theme + layout variables + run-finished notification
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useI18n, applyTheme } from './i18n.jsx';
 import { LOCALES } from './locales/index.js';
 import { applyLayout, GOTO_EVENT } from './layout.js';

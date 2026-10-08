@@ -18,6 +18,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { netFetch } from './net.js';
+import { validateRemoteUrl } from './remote-url.js';
 import { resolveDir } from './config.js';
 import { recordProbe } from './egress.js';
 
@@ -73,6 +74,8 @@ export function parseTrace(text) {
 /** Measure one egress's exit country. Never throws: a failure is an answer too. */
 export async function exitCountry(cfg, mode, { timeoutMs = 8000 } = {}) {
   try {
+    // TRACE_URL is a constant of this module, not user input, so it is not under the policy; it is listed in
+    // URL_POLICY_EXEMPT in server/src/remote-url.js with that reason.
     const res = await netFetch(
       TRACE_URL,
       { headers: { accept: 'text/plain' }, signal: AbortSignal.timeout(timeoutMs) },
@@ -89,7 +92,7 @@ export async function exitCountry(cfg, mode, { timeoutMs = 8000 } = {}) {
 }
 
 
-async function httpTtfb(url, cfg, mode, timeoutMs) {
+async function httpTtfb(url, cfg, mode, timeoutMs, policy = {}) {
   const t0 = process.hrtime.bigint();
   try {
     const res = await netFetch(
@@ -103,7 +106,7 @@ async function httpTtfb(url, cfg, mode, timeoutMs) {
         },
         signal: AbortSignal.timeout(timeoutMs),
       },
-      { cfg, mode }
+      { cfg, mode, policy }
     );
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
     // Only the first byte is wanted, so the body is dropped immediately
@@ -168,6 +171,26 @@ export async function probeUrl(url, opts = {}) {
   const samples = Math.max(1, Math.min(10, Number(opts.samples) || DEFAULT_SAMPLES));
   const timeoutMs = Number(opts.timeoutMs) || DEFAULT_TIMEOUT;
   const modes = opts.modes ?? ['direct', 'proxy'];
+  // A probe *is* a fetch of a user-supplied address: the direct tier opens a TCP connection to the host and
+  // port it was handed, which is the same reach the HTTP tiers have. So the address goes through the policy
+  // here, at the one entry point every probe uses (/api/probe, the egress decision route, and diagnose.js),
+  // and the allowance comes from the entry being probed — a custom source or a watch target carries it, and a
+  // bare URL typed into the probe box carries nothing, which is the default-refuses case.
+  //
+  // `skipDns` follows the same rule net.js uses and for the same reason: the **direct** tier is this machine
+  // resolving and connecting, so the answers have to be checked here; the proxy and Tor tiers hand the name to
+  // the exit, so whether this machine can resolve it is a statement about the wrong machine. (Measured: the
+  // socks suite probes a `.invalid` name through a fake SOCKS service on purpose — the whole point of that
+  // case is that DNS never leaves this machine — and an unconditional resolve refused it.)
+  const policy = {
+    allowLoopback: opts.subject?.allowLoopback === true,
+    skipDns: !modes.includes('direct'),
+  };
+  const checked = await validateRemoteUrl(url, policy);
+  if (!checked.ok) {
+    throw Object.assign(new Error(checked.message), { code: checked.code, urlRefused: true, host: checked.host });
+  }
+  url = checked.url;
   const { host, port } = hostPortOf(url);
   const out = {};
 
@@ -186,7 +209,7 @@ export async function probeUrl(url, opts = {}) {
     } else {
       const s = [];
       for (let i = 0; i < samples; i++) {
-        s.push(await httpTtfb(url, cfg, 'proxy', timeoutMs));
+        s.push(await httpTtfb(url, cfg, 'proxy', timeoutMs, policy));
         if (i < samples - 1) await sleep(150);
       }
       out.proxy = { mode: 'proxy', method: 'http-ttfb', url, ...stats(s) };
@@ -203,7 +226,7 @@ export async function probeUrl(url, opts = {}) {
     } else {
       const s = [];
       for (let i = 0; i < samples; i++) {
-        s.push(await httpTtfb(url, cfg, 'tor', timeoutMs));
+        s.push(await httpTtfb(url, cfg, 'tor', timeoutMs, policy));
         if (i < samples - 1) await sleep(150);
       }
       out.tor = { mode: 'tor', method: 'socks-ttfb', socks: cfg.proxy.torSocks, url, ...stats(s) };

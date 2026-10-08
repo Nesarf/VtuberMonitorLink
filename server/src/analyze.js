@@ -2,7 +2,7 @@
 // Talks to an OpenAI-compatible /chat/completions directly, with no vendor-specific SDK.
 // The profile (provider / model / key) comes from activeProvider() in llm.js; the web UI can switch between several.
 import { digestResult, digestWatch } from './digest.js';
-import { activeProvider, chatRequest } from './llm.js';
+import { activeProvider, checkedChatRequest } from './llm.js';
 import { netFetch } from './net.js';
 
 const SYSTEM_PROMPT = `你是 VTuber 情报监测助手。你会收到三类输入：
@@ -80,10 +80,22 @@ export async function analyze({ cfg, results, watchResults = [], mode = 'daily',
 
   const digests = results.map((r) => ({ ...r, digest: digestResult(r) }));
   const keywords = cfg?.watch?.rules?.keywords ?? [];
-  const req = chatRequest(p, [
-    { role: 'system', content: mode === 'merch' ? MERCH_SYSTEM_PROMPT : SYSTEM_PROMPT },
-    { role: 'user', content: buildUserPrompt({ digests, watchResults, mode, keywords }) },
-  ]);
+  const req = await checkedChatRequest(
+    p,
+    [
+      { role: 'system', content: mode === 'merch' ? MERCH_SYSTEM_PROMPT : SYSTEM_PROMPT },
+      { role: 'user', content: buildUserPrompt({ digests, watchResults, mode, keywords }) },
+    ],
+    {},
+    cfg
+  );
+  // A refused address is reported like any other unusable endpoint, with the policy's own words: the person
+  // gets "loopback is not allowed" (and which flag allows it) instead of a socket error from a fetch that
+  // should never have been attempted.
+  if (!req.ok) {
+    log?.error(req.error);
+    return { ok: false, error: req.error, provider: { id: p.id, name: p.name } };
+  }
 
   log?.info(`LLM → ${req.url} (provider=${p.name ?? p.id}, model=${req.body.model})`);
   try {
@@ -126,7 +138,8 @@ export async function preflight(cfg, provider) {
   if (!p.apiKey) return { ok: false, error: '未配置 API Key', provider: { id: p.id, name: p.name } };
   if (!p.baseUrl) return { ok: false, error: '未配置接口地址', provider: { id: p.id, name: p.name } };
 
-  const req = chatRequest(p, [{ role: 'user', content: 'ping' }], { max_tokens: 4 });
+  const req = await checkedChatRequest(p, [{ role: 'user', content: 'ping' }], { max_tokens: 4 }, cfg);
+  if (!req.ok) return { ok: false, error: req.error, provider: { id: p.id, name: p.name } };
   try {
     const res = await netFetch(
       req.url,

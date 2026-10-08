@@ -36,6 +36,8 @@ import { firefox } from 'playwright';
 import { APP_ROOT } from '../config.js';
 import { resolveBrowserEgress, torSocksUrl } from '../net.js';
 import { resolveProfileDir } from '../browser-target.js';
+import { sourcePolicy } from '../sources.js';
+import { validateRemoteUrl } from '../remote-url.js';
 
 /**
  * The file that marks a **Playwright Firefox build**, as opposed to a Firefox a user installed.
@@ -202,7 +204,7 @@ export function describeEgressFailure(err, { mode = 'direct', socks = '' } = {})
 }
 
 /** render a URL and return its text */
-export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject = null } = {}) {
+export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject = null, policy = null } = {}) {
   const bcfg = cfg?.browser ?? {};
   const hardMs = bcfg.hardTimeoutMs ?? 90000;
   const watchdog = setTimeout(() => {
@@ -247,8 +249,43 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
     }
 
     const page = context.pages()?.[0] ?? (await context.newPage());
+    // ── redirects, in the browser
+    //
+    // The egress switch above only says *where* the browser goes out; it says nothing about *which addresses*
+    // the page may reach, and a browser fetches far more than the one URL it was handed: the document
+    // redirects, and everything the page then pulls in. A check on the starting URL is therefore a check on
+    // the first hop of a chain the page controls — the same hole net.js closes for HTTP fetches, one layer
+    // down. Playwright's route interception is the seam that exists for this: every request the browser is
+    // about to make is offered here first, including each redirect hop and each subresource, so the same
+    // policy is applied to all of them and a refused one is aborted before a socket is opened.
+    //
+    // Measured on this engine (Playwright 1.63 / Firefox 155): the handler may be async — the request is held
+    // until the promise settles — which matters because resolving a name is I/O.
+    const refusals = [];
+    const activePolicy = { ...(policy ?? {}), ...(egressMode !== 'direct' ? { skipDns: true } : {}) };
+    await page.route('**/*', async (route) => {
+      const target = route.request().url();
+      if (!/^https?:/i.test(target)) return route.continue(); // about:blank / data: — no address to judge
+      const check = await validateRemoteUrl(target, activePolicy);
+      if (check.ok) return route.continue();
+      refusals.push({ url: target, code: check.code, reason: check.reason });
+      log?.warn(`browser request refused (${check.code}): ${target} — ${check.reason}`);
+      return route.abort('addressunreachable').catch(() => {});
+    });
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     await page.waitForTimeout(waitMs ?? bcfg.waitMs ?? 6000);
+    // A refused hop is the answer, not a footnote: the page content that did come back was fetched *around*
+    // the refusal, so reporting it as a successful render would describe a page that was never fully loaded.
+    if (refusals.length) {
+      const first = refusals[0];
+      return {
+        ok: false,
+        error: `页面要求的地址被拒绝 / the page asked for a refused address (${first.code}): ${first.url} — ${first.reason}`,
+        url,
+        egress: egressMode,
+        refused: refusals,
+      };
+    }
     const content =
       mode === 'html'
         ? await page.content()
@@ -288,5 +325,9 @@ export async function fetchBrowser(source, ctx) {
     log: ctx.log,
     waitMs: ctx.cfg?.browser?.waitMs,
     subject: source,
+    // The source's own allowance, read in the one place it is defined (sources.js). The default (no
+    // allowance, no policy object at all) refuses loopback, so a source cannot reach this machine by
+    // accident.
+    policy: sourcePolicy(source),
   });
 }

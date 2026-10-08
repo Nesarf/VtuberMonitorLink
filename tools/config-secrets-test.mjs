@@ -102,6 +102,11 @@ const baseConfig = () =>
           username: 'Bot@Task',
           botPassword: SECRETS.botPassword,
           enabled: true,
+          // This fixture's apiUrl is pointed at a fake wiki on 127.0.0.1 by the masked-password case below, so
+          // the target carries the explicit loopback allowance (server/src/remote-url.js). Without it the check
+          // would be refused before it left the process — which is the default the policy test pins, not an
+          // accident this fixture should depend on.
+          allowLoopback: true,
         },
         { id: 'w-url', kind: 'url', label: 'plain', url: 'https://example.com/', enabled: true },
       ],

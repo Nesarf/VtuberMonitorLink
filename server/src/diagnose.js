@@ -125,7 +125,7 @@ export async function diagnoseSource(source, cfg, log) {
   let probe = { modes: {} };
   if (source.url) {
     try {
-      probe = await probeUrl(source.url, { cfg, samples, modes });
+      probe = await probeUrl(source.url, { cfg, samples, modes, subject: source });
     } catch (e) {
       probe = { modes: {}, error: e.message };
     }

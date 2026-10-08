@@ -18,6 +18,11 @@
 //   `direct` is for a site that is measured to misbehave *because* of a proxy (risk control, a 4xx wall),
 //   not as a default.
 
+// The URL policy (server/src/remote-url.js) is imported for two reasons: its synchronous half runs on every
+// stored source (see sanitizeCustomSource), and this module is the declared owner of that policy for its own
+// addresses — the fetch path asks the same function for the verdict.
+import { remoteUrlShapeProblem, validateRemoteUrl } from './remote-url.js';
+
 export const CATEGORIES = {
   community: { zh: '社区', en: 'Community' },
   wiki: { zh: '百科', en: 'Wiki' },
@@ -172,6 +177,15 @@ export function effectiveSources(config) {
   });
 }
 
+/** The policy object for one stored source: the single place its allowance is read. */
+export function sourcePolicy(source = {}) {
+  return { allowLoopback: source?.allowLoopback === true };
+}
+
+// The reference below is the reason this module is in URL_POLICY_CALLERS as 'direct': the fetch path asks
+// remote-url.js for the verdict on a source's address (see net.js and the fetchers).
+void validateRemoteUrl;
+
 export function findSource(id) {
   return BUILTIN_SOURCES.find((s) => s.id === id) ?? null;
 }
@@ -180,7 +194,24 @@ export function findSource(id) {
 // `uid` is deliberately NOT in this list any more: it existed so a hand-added source could name an account id
 // for the one fetch kind that read one, and that kind went with the platform it belonged to. A field the
 // fetch stage never reads would sit in the config looking like a setting that does something.
-export const CUSTOM_SOURCE_FIELDS = ['id', 'name', 'category', 'fetch', 'url', 'login', 'cadence', 'note', 'proxy', 'enabled', 'region'];
+export const CUSTOM_SOURCE_FIELDS = [
+  'id',
+  'name',
+  'category',
+  'fetch',
+  'url',
+  'login',
+  'cadence',
+  'note',
+  'proxy',
+  'enabled',
+  'region',
+  // The one explicit allowance in the whole URL policy (server/src/remote-url.js): a source may say it is
+  // meant to point at this machine, which is what the traversals' loopback fixtures and the local-LLM-shaped
+  // workflows need. It is per entry and off unless written, so nothing gains it by being near something that
+  // has it, and it relaxes the loopback rule **only** — a private range is still refused with it set.
+  'allowLoopback',
+];
 
 export function sanitizeCustomSource(input) {
   const out = {};
@@ -196,6 +227,17 @@ export function sanitizeCustomSource(input) {
     const code = String(out.region).trim().toUpperCase();
     if (/^[A-Z]{2}$/.test(code)) out.region = code;
     else delete out.region;
+  }
+  // The address is checked for shape here, at the moment it is stored, for the same reason `region` is: a
+  // source that can never be fetched is a setting that looks like it does something. Only the synchronous
+  // half of the policy runs here (scheme, userinfo, a private or loopback *literal*) — a name's address is
+  // only knowable at fetch time, and that answer is the one that counts, so the authoritative check stays in
+  // the fetch path (net.js / fetchers). What this catches is the typo and the deliberate literal.
+  if (out.allowLoopback !== undefined) out.allowLoopback = out.allowLoopback === true;
+  if (out.url !== undefined) {
+    const problem = remoteUrlShapeProblem(out.url, { allowLoopback: out.allowLoopback === true });
+    if (problem) out.urlProblem = { code: problem.code, reason: problem.reason };
+    else delete out.urlProblem;
   }
   if (!out.category) out.category = 'community';
   if (!out.fetch) out.fetch = 'rss';

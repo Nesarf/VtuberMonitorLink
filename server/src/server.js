@@ -33,14 +33,14 @@ import {
 } from './reports.js';
 import { diffHunks, diffLines, diffStats } from './diff.js';
 import { preflight } from './analyze.js';
-import { PRESETS, activeProvider, newProvider, listModels } from './llm.js';
+import { PRESETS, activeProvider, listModels, newProvider, providerPolicy } from './llm.js';
 import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, checkWatchLogin, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
 import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
-import { chatRequest } from './llm.js';
+import { checkedChatRequest } from './llm.js';
 import { netFetch } from './net.js';
 import { applyFeatures, extractFeatures, featureStats, loadFeatureCache } from './features.js';
 import { buildDocx, buildXlsx, itemsToMarkdown, itemsToSheet } from './office.js';
@@ -584,6 +584,12 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       username: body.username ?? saved.username,
       botPassword: sentPw && !isMaskedSecret(sentPw) ? sentPw : saved.botPassword,
       proxy: body.proxy ?? saved.proxy,
+      // The saved target's loopback allowance travels with the saved address: this route builds a *partial*
+      // target from the request body plus the saved one, and a field left out of it is a field the URL policy
+      // will read as "not set". The page has no reason to send this back, and a target that was configured to
+      // point at a wiki on this machine must not be refused at its own login check (measured: it was, and the
+      // refusal is what the config-secrets suite caught).
+      allowLoopback: saved.allowLoopback === true,
     };
     const r = await checkWatchLogin(target, { cfg, log });
     res.json(r);
@@ -817,7 +823,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const out = [];
     for (const t of targets) {
       try {
-        const r = await probeUrl(t.url, { cfg, samples, modes: perTarget.get(t.id) ?? effectiveModes ?? modes });
+        // The allowance travels from the entry being probed (a custom source or a watch target carries it);
+        // nothing is probed with an allowance it did not itself declare.
+        const r = await probeUrl(t.url, {
+          cfg,
+          samples,
+          modes: perTarget.get(t.id) ?? effectiveModes ?? modes,
+          subject: t.source ?? null,
+        });
         out.push({ id: t.id, label: t.label, sourceId: t.source?.id ?? null, ...r });
       } catch (e) {
         out.push({ id: t.id, label: t.label, url: t.url, error: e.message, at: new Date().toISOString() });
@@ -1141,7 +1154,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (!description.trim()) return res.status(400).json({ error: 'description is required' });
 
     const sample = corpusSample(cfg, 150);
-    const req2 = chatRequest(p, [
+    const req2 = await checkedChatRequest(p, [
       {
         role: 'system',
         content:
@@ -1156,12 +1169,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
           '请输出：{"candidates":[{"name":"可能的名字","reason":"为什么这么猜","confidence":0-1}],' +
           '"searchTerms":["可直接检索的词"],"tags":["可能的标签"]}',
       },
-    ]);
+    ], {}, cfg);
+    // The refusal is the answer here too: this route talks to a provider profile that arrived in the request
+    // body, so the endpoint is exactly as user-supplied as the one the settings page tests.
+    if (!req2.ok) return res.json({ ok: false, error: req2.error });
     try {
       const r = await netFetch(
         req2.url,
         { method: 'POST', headers: req2.headers, body: JSON.stringify(req2.body), signal: AbortSignal.timeout(120000) },
-        { cfg }
+        { cfg, policy: providerPolicy(p, cfg) }
       );
       const text = await r.text();
       if (!r.ok) return res.json({ ok: false, error: `LLM HTTP ${r.status} — ${text.slice(0, 200)}` });
@@ -1410,7 +1426,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const results = [];
     for (const s of sources) {
       try {
-        const p = await probeUrl(s.url, { cfg, samples: Number(req.body?.samples ?? 3) });
+        const p = await probeUrl(s.url, { cfg, samples: Number(req.body?.samples ?? 3), subject: s });
         updateCache(cfg, [{ id: s.id, label: s.name?.zh ?? s.id, sourceId: s.id, ...p }]);
         const d = egressDecision(cfg, s);
         results.push({ id: s.id, mode: d?.mode ?? null, reason: d?.reason ?? '', confidence: d?.confidence ?? 'none' });

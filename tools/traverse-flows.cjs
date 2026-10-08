@@ -125,7 +125,10 @@ ${entries}
         proxy: { enabled: false },
         llm: {
           activeId: 'mock',
-          providers: [{ id: 'mock', preset: 'custom', name: 'Mock', baseUrl: `http://127.0.0.1:${args.mock}`, apiKey: 'k', model: 'mock-model' }],
+          // allowLoopback is the explicit, per-entry allowance (server/src/remote-url.js): the mock model is a
+          // local server, and the default refuses loopback. Written here rather than defaulted anywhere, so the
+          // walk proves the fixture is what is allowed.
+          providers: [{ id: 'mock', preset: 'custom', name: 'Mock', baseUrl: `http://127.0.0.1:${args.mock}`, apiKey: 'k', model: 'mock-model', allowLoopback: true }],
         },
         notify: { desktop: false, targets: [] },
         // `official-hololive` is a real site, and it is a browser-rendered one: the run is asserted to finish
@@ -148,6 +151,7 @@ ${entries}
             category: 'community',
             fetch: 'rss',
             url: `http://127.0.0.1:${args.feed}/feed.xml`,
+            allowLoopback: true,
             login: 'none',
             cadence: 'daily',
             enabled: true,
@@ -240,7 +244,7 @@ ${entries}
     const targets = (await api('GET', '/api/config')).json;
     targets.notify = {
       desktop: false,
-      targets: [{ id: 'flow-hook', kind: 'custom', name: 'flow hook', enabled: true, on: 'always', webhookUrl: `http://127.0.0.1:${args.hook}/hook` }],
+      targets: [{ id: 'flow-hook', kind: 'custom', name: 'flow hook', enabled: true, on: 'always', allowLoopback: true, webhookUrl: `http://127.0.0.1:${args.hook}/hook` }],
     };
     const saved = await api('PUT', '/api/config', targets);
     check('a webhook target can be stored', saved.status === 200 && (saved.json.notify?.targets ?? []).length === 1);

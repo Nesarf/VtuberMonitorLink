@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveDir } from './config.js';
-import { activeProvider, chatRequest } from './llm.js';
+import { activeProvider, checkedChatRequest } from './llm.js';
 import { netFetch } from './net.js';
 
 /** Allowed image kinds (these are the only things a model can see) */
@@ -160,11 +160,20 @@ export async function tagOneImage(cfg, { url, provider, context = '', prompt = n
       ],
     },
   ];
-  // Same calling convention as features.js: chatRequest only assembles the request description; the fetching is ours
-  const req = chatRequest(provider, messages, {
-    max_tokens: Number(cfg?.vision?.maxTokens ?? 300),
-    temperature: 0,
-  });
+  // Same calling convention as features.js: the request builder only assembles the description; the fetching
+  // is ours. `req.url` carries the verdict on the address (see URL_POLICY_CLEARED in server/src/remote-url.js),
+  // which is what lets this fetch reach a profile that was configured with the loopback allowance — the
+  // property is non-enumerable and travels with the string, so logging req.url does not show it.
+  const req = await checkedChatRequest(
+    provider,
+    messages,
+    {
+      max_tokens: Number(cfg?.vision?.maxTokens ?? 300),
+      temperature: 0,
+    },
+    cfg
+  );
+  if (!req.ok) return { ok: false, error: req.error };
   const attempt = async () => {
     try {
       const res = await netFetch(

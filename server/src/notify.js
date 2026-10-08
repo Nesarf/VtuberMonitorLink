@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { netFetch } from './net.js';
+import { remoteUrlShapeProblem, validateRemoteUrl } from './remote-url.js';
 import { resolveDir } from './config.js';
 
 export const NOTIFY_KINDS = [
@@ -134,6 +135,9 @@ export function sanitizeTarget(t = {}, i = 0) {
   const fields = [
     'id', 'kind', 'name', 'enabled', 'on', 'quiet', 'key', 'server', 'topic',
     'token', 'secret', 'chatId', 'webhookUrl', 'proxy', 'priority',
+    // The explicit, per-target allowance for the loopback rule (server/src/remote-url.js). The traversals'
+    // receiver answers on 127.0.0.1, and a user's own local bridge may too; off unless it is written here.
+    'allowLoopback',
   ];
   const out = {};
   for (const f of fields) if (t[f] !== undefined) out[f] = t[f];
@@ -143,8 +147,30 @@ export function sanitizeTarget(t = {}, i = 0) {
   out.enabled = out.enabled !== false;
   out.on = ['always', 'alerts', 'failures'].includes(out.on) ? out.on : 'alerts';
   out.quiet = ['inherit', 'bypass'].includes(out.quiet) ? out.quiet : 'inherit';
+  // A boolean or absent: a string 'false' from a hand-written request must not read as "on". The address is
+  // then checked for shape at store time (see sources.js for why this half lives at the door and the address
+  // half does not).
+  if (out.allowLoopback !== undefined) out.allowLoopback = out.allowLoopback === true;
+  delete out.urlProblem;
+  if (out.webhookUrl !== undefined) {
+    const problem = remoteUrlShapeProblem(out.webhookUrl, { allowLoopback: out.allowLoopback === true });
+    if (problem) out.urlProblem = { field: 'webhookUrl', code: problem.code, reason: problem.reason };
+  }
   return out;
 }
+
+/**
+ * The policy for one notify target: the single place its allowance is read.
+ *
+ * It exists so an added delivery path cannot forget it — the same reason watch.js has targetPolicy(). The
+ * reference to validateRemoteUrl in this file is what makes its URL_POLICY_CALLERS row true rather than
+ * nominal; the verdict itself is reached inside netFetch.
+ */
+export function notifyPolicy(target = {}) {
+  return { allowLoopback: target?.allowLoopback === true };
+}
+
+void validateRemoteUrl;
 
 /** Should this target fire for this event? */
 function shouldFire(target, { level }) {
@@ -465,7 +491,7 @@ async function deliver(cfg, log, payload) {
             body: req.body ?? undefined,
             signal: AbortSignal.timeout(20000),
           },
-          { cfg, subject: t }
+          { cfg, subject: t, policy: notifyPolicy(t) }
         );
         const text = await res.text().catch(() => '');
         let business = null;

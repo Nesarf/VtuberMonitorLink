@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { netFetch } from './net.js';
 import { resolveDir } from './config.js';
+import { validateRemoteUrl } from './remote-url.js';
 
 const MAX_IMAGE_BYTES = 768 * 1024;
 const EXT_BY_TYPE = {
@@ -85,9 +86,23 @@ function parseHead(html, baseUrl) {
   return null;
 }
 
+/**
+ * The policy for a thumbnail fetch: the subject it belongs to carries the allowance (a custom source or a
+ * watch target), and the derived addresses — the homepage, an og:image, an icon — inherit it from that
+ * subject. Nothing here reads its own flag: there is one place a subject's allowance is defined
+ * (sources.js / watch.js), and this is a consumer of it.
+ */
+function thumbPolicy(subject) {
+  return { allowLoopback: subject?.allowLoopback === true };
+}
+
 async function fetchImage(url, cfg, subject) {
+  // The image address is often *derived* from the page (an og:image / icon href can point anywhere, including
+  // this machine), so it is checked on its own rather than trusted because the page was.
+  const checked = await validateRemoteUrl(url, thumbPolicy(subject));
+  if (!checked.ok) return { ok: false, error: checked.message, refused: true };
   const res = await netFetch(
-    url,
+    checked.url,
     {
       headers: {
         'user-agent':
@@ -96,7 +111,7 @@ async function fetchImage(url, cfg, subject) {
       },
       signal: AbortSignal.timeout(15000),
     },
-    { cfg, subject }
+    { cfg, subject, policy: thumbPolicy(subject) }
   );
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   const type = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
@@ -127,6 +142,12 @@ export async function getThumbnail(siteUrl, opts = {}) {
   const mode = opts.mode === 'icon' || opts.mode === 'screenshot' ? opts.mode : 'auto';
   const home = homepageOf(siteUrl);
   if (!home) return { ok: false, error: `地址不合法 / bad URL: ${siteUrl}` };
+  // Same address rule as every other fetch of a user-supplied URL (server/src/remote-url.js). The homepage is
+  // derived from the source/target address, so this is the second entry rather than a new one — and it is
+  // checked because a thumbnail is a fetch this process makes with its own address and its own cookies-free
+  // browser, which is exactly the reach the policy is about.
+  const homeCheck = await validateRemoteUrl(home, thumbPolicy(subject));
+  if (!homeCheck.ok) return { ok: false, error: homeCheck.message, refused: true, code: homeCheck.code };
 
   const dir = thumbsDir(cfg);
   const stem = key(siteUrl, mode);
@@ -176,7 +197,7 @@ export async function getThumbnail(siteUrl, opts = {}) {
   // ── og:image / icon: look at the homepage <head> first
   try {
     const res = await netFetch(
-      home,
+      homeCheck.url,
       {
         headers: {
           'user-agent':
@@ -185,7 +206,7 @@ export async function getThumbnail(siteUrl, opts = {}) {
         },
         signal: AbortSignal.timeout(15000),
       },
-      { cfg, subject }
+      { cfg, subject, policy: thumbPolicy(subject) }
     );
     const type = String(res.headers.get('content-type') ?? '');
     if (res.ok && /html/i.test(type)) {
@@ -238,6 +259,14 @@ export async function getThumbnail(siteUrl, opts = {}) {
  */
 export async function screenshot(cfg, subject, url, log) {
   const { firefox } = await import('playwright');
+  // A screenshot drives a real browser at a real address, so it is a fetch like any other: the same policy,
+  // read from the same subject. The redirect hops inside the browser are covered by the same route
+  // interception the browser fetcher uses (fetchers/browser.js explains why that seam and not another).
+  const shotCheck = await validateRemoteUrl(url, thumbPolicy(subject));
+  if (!shotCheck.ok) {
+    log?.warn(`screenshot refused: ${shotCheck.message}`);
+    return null;
+  }
   const { resolveBrowserEgress } = await import('./net.js');
   const bcfg = cfg?.browser ?? {};
   const launch = { headless: true };
@@ -259,7 +288,18 @@ export async function screenshot(cfg, subject, url, log) {
       ...(egress.proxy ? { proxy: egress.proxy } : {}),
     });
     const page = await ctx.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
+    // Every hop and every subresource of the screenshot goes through the policy, like the browser fetcher.
+    // Measured elsewhere in this project (fetchers/browser.js): an async route handler is awaited by this
+    // engine, which is what makes a resolving check possible here at all.
+    await page.route('**/*', async (route) => {
+      const target = route.request().url();
+      if (!/^https?:/i.test(target)) return route.continue();
+      const check = await validateRemoteUrl(target, thumbPolicy(subject));
+      if (check.ok) return route.continue();
+      log?.warn(`screenshot request refused (${check.code}): ${target}`);
+      return route.abort('addressunreachable').catch(() => {});
+    });
+    await page.goto(shotCheck.url, { waitUntil: 'domcontentloaded', timeout: 35000 }).catch(() => {});
     await page.waitForTimeout(bcfg.waitMs ?? 4000);
     const buf = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: 1280, height: 640 } });
     await ctx.close().catch(() => {});

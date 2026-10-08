@@ -231,6 +231,11 @@ const server = http.createServer((req, res) => {
 });
 const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 const hookUrl = `http://127.0.0.1:${port}/hook`;
+// The receiver is a local HTTP server on loopback, so the target has to say so: since v1.0.5 an address that
+// points at this machine is refused unless the entry carries the explicit allowance
+// (server/src/remote-url.js). The allowance is written on the target here rather than defaulted anywhere in
+// the product — the default must refuse, and this is the test that has to prove the fixture is what is allowed.
+const LOOPBACK_OK = { allowLoopback: true };
 
 const liveCfg = {
   paths: { logsDir: dir },
@@ -238,7 +243,7 @@ const liveCfg = {
   notify: {
     dedupeMinutes: 0,
     quietHours: { enabled: true, start: '23:00', end: '08:00', timeZone: 'UTC' },
-    targets: [{ ...newTarget('custom'), id: 'hook1', name: '测试接收器', webhookUrl: hookUrl, on: 'always' }],
+    targets: [{ ...newTarget('custom'), ...LOOPBACK_OK, id: 'hook1', name: '测试接收器', webhookUrl: hookUrl, on: 'always' }],
   },
 };
 
@@ -295,7 +300,7 @@ await ta('a business failure code (code!=0) is recognized as a failure', async (
       dedupeMinutes: 0,
       quietHours: { enabled: false },
       // Uses the custom channel: serverchan's URL is assembled from the key, so it cannot point at a local receiver (learned the hard way)
-      targets: [{ ...newTarget('custom'), id: 'x', webhookUrl: `http://127.0.0.1:${bp}/hook`, on: 'always' }],
+      targets: [{ ...newTarget('custom'), ...LOOPBACK_OK, id: 'x', webhookUrl: `http://127.0.0.1:${bp}/hook`, on: 'always' }],
     },
   };
   const r = await notify(c2, null, { title: 'T', body: 'B', level: 'info' });

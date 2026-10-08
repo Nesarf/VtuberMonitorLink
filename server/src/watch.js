@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { resolveDir } from './config.js';
 import { netFetch, resolveProxyMode } from './net.js';
 import { gapWithJitter } from './observe.js';
+import { remoteUrlShapeProblem, validateRemoteUrl } from './remote-url.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const UA =
@@ -47,6 +48,9 @@ export const TARGET_FIELDS = [
   'botPassword',
   'executablePath',
   'profileDir',
+  // The explicit, per-target allowance for the loopback rule (see server/src/remote-url.js). Off unless it is
+  // written on the target itself: the traversals' watch fixture is on 127.0.0.1, and nothing else should be.
+  'allowLoopback',
 ];
 
 export function sanitizeTarget(input = {}, index = 0) {
@@ -61,6 +65,19 @@ export function sanitizeTarget(input = {}, index = 0) {
   if (Array.isArray(out.ignorePatterns)) out.ignorePatterns = out.ignorePatterns.filter((x) => typeof x === 'string').slice(0, 50);
   if (Array.isArray(out.namespaces)) out.namespaces = out.namespaces.map((n) => Number(n)).filter((n) => Number.isFinite(n));
   if (out.limit !== undefined) out.limit = Math.max(1, Math.min(500, Number(out.limit) || 50));
+  // The allowance is a boolean or it is absent: a string 'false' from a hand-written request must not read as
+  // "on". Then the addresses this target can carry are checked for shape, at store time, for the same reason
+  // the sources sanitiser does it — a target that can never be fetched is a setting that looks like it works.
+  // Only the synchronous half runs here (scheme, userinfo, an address literal); a name is judged where it is
+  // resolved, which is the only place the answer is current.
+  if (out.allowLoopback !== undefined) out.allowLoopback = out.allowLoopback === true;
+  const policy = { allowLoopback: out.allowLoopback === true };
+  delete out.urlProblem;
+  for (const key of ['url', 'apiUrl']) {
+    if (out[key] === undefined) continue;
+    const problem = remoteUrlShapeProblem(out[key], policy);
+    if (problem) out.urlProblem = { field: key, code: problem.code, reason: problem.reason };
+  }
   return out;
 }
 
@@ -225,6 +242,14 @@ function withTimeout(ms) {
   return AbortSignal.timeout(ms);
 }
 
+/**
+ * The policy object for one watch target: the single place its allowance is read, so an added request path
+ * cannot forget it. `skipDns` is left to net.js, which is the one that knows which egress will be used.
+ */
+export function targetPolicy(target = {}) {
+  return { allowLoopback: target?.allowLoopback === true };
+}
+
 async function jget(url, { cfg, target, timeout = 25000, headers } = {}) {
   const r = await netFetch(
     url,
@@ -237,7 +262,7 @@ async function jget(url, { cfg, target, timeout = 25000, headers } = {}) {
       },
       signal: withTimeout(timeout),
     },
-    { cfg, subject: target }
+    { cfg, subject: target, policy: targetPolicy(target) }
   );
   return r;
 }
@@ -420,6 +445,10 @@ async function checkRecentChanges(target, ctx) {
 // The returned "safe request" carries no credential at all, so it is the one thing that may be logged.
 
 /** The wiki host of an api.php address ('' when the address has no parseable host) */
+// The reference is the reason this module is in URL_POLICY_CALLERS as 'direct': the verdict on a target's
+// address comes from remote-url.js, through netFetch and through the login checker below.
+void validateRemoteUrl;
+
 export function wikiHostOf(apiUrl) {
   try {
     return new URL(String(apiUrl ?? '').trim()).host.toLowerCase();
@@ -592,7 +621,7 @@ async function mwLogin(target, ctx) {
       body: body.toString(),
       signal: withTimeout(25000),
     },
-    { cfg: ctx.cfg, subject: target }
+    { cfg: ctx.cfg, subject: target, policy: targetPolicy(target) }
   );
   const j = await r.json().catch(() => null);
   const result = j?.login?.result;

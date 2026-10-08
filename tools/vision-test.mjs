@@ -53,7 +53,13 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-vision-'));
 const cfgFor = (port, extra = {}) => ({
   paths: { feedsDir: tmp, logsDir: tmp },
   proxy: { enabled: false },
-  llm: { activeId: 'mock', providers: [{ id: 'mock', name: 'Mock Vision', baseUrl: `http://127.0.0.1:${port}`, apiKey: 'test-key', model: 'mock-vision-1' }] },
+  // `allowLoopback` is the explicit, per-profile allowance: the mock provider is a local server, and since
+  // v1.0.5 an address on this machine is refused without it (server/src/remote-url.js). The default refuses —
+  // which is what the "the default refuses loopback" test in tools/remote-url-test.mjs pins.
+  llm: {
+    activeId: 'mock',
+    providers: [{ id: 'mock', name: 'Mock Vision', baseUrl: `http://127.0.0.1:${port}`, apiKey: 'test-key', model: 'mock-vision-1', allowLoopback: true }],
+  },
   vision: { enabled: true, concurrency: 2, ...extra },
 });
 

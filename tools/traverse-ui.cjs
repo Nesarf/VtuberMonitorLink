@@ -151,6 +151,10 @@ function seedConfig(mockPort, feedPort) {
           preset: 'custom',
           name: '本地 Mock（测试用）',
           baseUrl: `http://127.0.0.1:${mockPort}`,
+          // The explicit, per-entry allowance for the loopback rule (server/src/remote-url.js). The mock model
+          // is a local server, so without this line the walk would be asserting against refusals — which is
+          // exactly what the default must do, and what tools/remote-url-test.mjs pins with its control.
+          allowLoopback: true,
           apiKey: 'mock-key-not-a-real-secret',
           model: 'mock-model',
           models: ['mock-model', 'mock-reasoner'],
@@ -169,7 +173,7 @@ function seedConfig(mockPort, feedPort) {
         // Pointed at the loopback feed on purpose: it is the one target whose content this walk controls, so
         // its "changed" verdict (and therefore the change digest on the Intel page) does not depend on a real
         // site being reachable or on its content happening to move.
-        { id: 'watch-feed', kind: 'url', label: 'traverse feed', url: `http://127.0.0.1:${feedPort}/feed.xml`, enabled: true },
+        { id: 'watch-feed', kind: 'url', label: 'traverse feed', url: `http://127.0.0.1:${feedPort}/feed.xml`, enabled: true, allowLoopback: true },
       ],
       rules: { largeEditBytes: 5000, largeDeleteBytes: 2000, keywords: ['毕业', '解约', '直播'] },
     },
@@ -183,6 +187,7 @@ function seedConfig(mockPort, feedPort) {
         category: 'community',
         fetch: 'rss',
         url: `http://127.0.0.1:${feedPort}/feed.xml`,
+        allowLoopback: true,
         login: 'none',
         cadence: 'daily',
         enabled: true,

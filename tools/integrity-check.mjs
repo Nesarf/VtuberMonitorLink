@@ -1082,6 +1082,133 @@ if (fs.existsSync(bugsPath)) {
   else process.stdout.write(`   [ok]   bug table has ${nums.length} entries, numbering unique and contiguous\n`);
 }
 
+// ───────────────────────────────────────────── 5l. the URL policy has one owner, and every fetch goes through it
+//
+// The finding this section answers (v1.0.5, P0 #3): the product fetches addresses the user or the config
+// supplies — a custom source, a watch target, an LLM baseUrl, a notification webhook, a VDB endpoint — and
+// before the rule existed nothing looked at the scheme, the host, or where the host resolves. What this
+// section checks is the *structure* the rule depends on, which tools/remote-url-test.mjs cannot: the test
+// proves the verdicts (and proves each one can fail, through its mutation controls), while a future change can
+// quietly defeat all of them by adding a second copy of the rules or a fetch that skips them.
+//
+// Three properties, and each is a different way for the rule to stop being true:
+//   1) **one implementation.** The address rules live in server/src/remote-url.js and nowhere else. A second
+//      module that starts classifying addresses *and fetching* is the beginning of two policies that will
+//      drift, and the one that drifts is the one that gets used. The detector deliberately requires both halves
+//      (a range literal and a network call in the same file): plenty of modules legitimately name `127.0.0.1`
+//      for reasons that are not this rule — request-guard.js's loopback *allowlist* for the inbound HTTP
+//      surface is the sibling security item, cookies.js/test fixtures name a local path, and flagging those
+//      would make the check noise that people learn to skip.
+//   2) **every caller named.** The inventory in remote-url.js lists each module that fetches a user-supplied
+//      URL, and each row's `via` has to be true of the file it names. This is the same shape as the
+//      browser-profile section above (5g): one list, read by the check and by the code it describes.
+//   3) **no unnamed fetcher.** Every file under server/src that performs a network call appears in the
+//      inventory or the exemption list. This is the one that catches the *new* caller — the module someone adds
+//      next release that fetches an address from the config and never asks whether it may.
+try {
+  const policyPath = path.join(ROOT, 'server/src/remote-url.js');
+  if (!fs.existsSync(policyPath)) {
+    problems.push('server/src/remote-url.js is gone: the URL policy has no home');
+  } else {
+    const policy = fs.readFileSync(policyPath, 'utf8');
+    const srcDir = path.join(ROOT, 'server/src');
+    const walk = (d) =>
+      fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+        const p = path.join(d, e.name);
+        return e.isDirectory() ? walk(p) : e.name.endsWith('.js') ? [p] : [];
+      });
+    const files = walk(srcDir).map((p) => ({ rel: path.relative(ROOT, p).replace(/\\/g, '/'), text: fs.readFileSync(p, 'utf8') }));
+    const FETCH_RE = /\bnetFetch\(|[^.\w]fetch\(|page\.goto\(|undiciFetch\(/;
+
+    // (1) the address rules are spelled out once. The patterns are the *rules*, not every mention of an
+    // address: a private/loopback range literal is what a second implementation would contain.
+    // What a second implementation would contain: a comparison of a hostname against a private / link-local /
+    // metadata literal, or against a range *prefix* (`startsWith('192.168.')` is the other way people write it).
+    // A bare `127.0.0.1` is deliberately NOT in this pattern even though it is the most common literal in the
+    // repository: the SOCKS port, the control endpoint and the local-LLM preset all name it for reasons that
+    // are not this rule, so a detector that flagged those would be noise — and a noisy check is one people
+    // learn to skip, which is how a real second copy would ride along unnoticed. `request-guard.js`'s loopback
+    // *allowlist* is the sibling security item and is a different rule about a different direction.
+    const RANGE_RE =
+      /===\s*'(10|192\.168|169\.254|172\.(1[6-9]|2\d|3[01]))|startsWith\(\s*'(10|192\.168|169\.254|172\.)|169\.254\.169\.254|fd00:ec2::|'(fc00|fe80)::/;
+    const secondCopy = files
+      .filter((f) => f.rel !== 'server/src/remote-url.js' && RANGE_RE.test(f.text) && FETCH_RE.test(f.text))
+      .map((f) => f.rel);
+    if (secondCopy.length) {
+      problems.push(
+        `the address rules must live in server/src/remote-url.js alone, but ${secondCopy.join(', ')} both name a refused range and make a network call — ` +
+          'two copies of the rule is how the rule stops being one rule'
+      );
+    } else {
+      process.stdout.write(`   [ok]   no second implementation of the address rules among ${files.length} file(s)\n`);
+    }
+
+    // (2) the inventory: each named caller really reaches the policy, by the route the row claims
+    // Tolerant of line breaks inside a row on purpose: a multi-line entry is how prettier formats a long one,
+    // and a row the parser cannot see is a row the check silently stops covering.
+    // One row per line is required of the inventory, and the reason is stated in remote-url.js: a row the
+    // parser cannot see is a row this check silently stops covering, and a broken parser is worse than a
+    // One row per line is required of the inventory (see the note in remote-url.js): the pattern stops at the
+    // end of the line, so a row the parser cannot see cannot be a row the check silently stops covering.
+    // Measured here: a "tolerant" multiline pattern matched across rows and silently skipped the last two.
+    const rowRe = /\{ *file: '([^']+)',(?=[^\n]*via: '([^']+)')[^\n]*\}/g;
+    const rows = [...policy.matchAll(rowRe)].map((m) => ({ file: m[1], via: m[2] }));
+    if (!/export const URL_POLICY_CALLERS = \[/.test(policy)) {
+      problems.push('URL_POLICY_CALLERS is gone from remote-url.js, so nothing states who goes through the policy');
+    } else if (rows.length < 10) {
+      problems.push(`the caller inventory shrank to ${rows.length} rows: every fetch path has to be named`);
+    } else {
+      const bad = [];
+      for (const row of rows) {
+        const p = path.join(ROOT, row.file);
+        if (!fs.existsSync(p)) {
+          bad.push(`${row.file} (no such file)`);
+          continue;
+        }
+        const text = fs.readFileSync(p, 'utf8');
+        const okByRoute = {
+          direct: text.includes('validateRemoteUrl') || text.includes('remoteUrlShapeProblem'),
+          'net.js': /netFetch\(/.test(text),
+          shared: /checkedChatRequest\(/.test(text) || /providerPolicy\(/.test(text),
+          'policy-shape': /ProviderPolicy\(|sourcePolicy\(|targetPolicy\(|notifyPolicy\(|thumbPolicy\(|providerPolicy\(/.test(text),
+        }[row.via];
+        if (okByRoute !== true) bad.push(`${row.file} (claims via '${row.via}', which is not true of the file)`);
+      }
+      if (bad.length) problems.push(`the URL policy inventory names callers that do not use it: ${bad.join(', ')}`);
+      else process.stdout.write(`   [ok]   all ${rows.length} declared URL-fetching callers reach the policy by the route they declare\n`);
+    }
+
+    // (3) the structural rule: no unnamed module makes a network call
+    const exemptRows = /export const URL_POLICY_EXEMPT = \[([\s\S]*?)\n\];/.exec(policy)?.[1] ?? '';
+    const exempt = new Set([...exemptRows.matchAll(/file:\s*'([^']+)'/g)].map((m) => m[1]));
+    const declared = new Set(rows.map((r) => r.file));
+    const unnamed = files
+      .filter((f) => FETCH_RE.test(f.text))
+      .filter((f) => !declared.has(f.rel) && !exempt.has(f.rel))
+      .map((f) => f.rel);
+    if (unnamed.length) {
+      problems.push(
+        `these modules make a network call and appear in neither URL_POLICY_CALLERS nor URL_POLICY_EXEMPT: ${unnamed.join(', ')} — ` +
+          'a fetch of a user-supplied address that skips the policy is the finding this release closed'
+      );
+    } else {
+      process.stdout.write('   [ok]   every module that fetches is either under the policy or exempt with a reason\n');
+    }
+
+    // The control: the detectors have to fire on the shapes they are looking for. A grep-shaped rule is exactly
+    // the kind that silently stops matching, so both are run against a fixture that must trip them.
+    const rangeFixture = "  if (host === '192.168.1.1') return 'refused';";
+    const rangeAndFetch = RANGE_RE.test(rangeFixture) && FETCH_RE.test('const r = await netFetch(url, {}, { cfg });');
+    if (!rangeAndFetch) problems.push('the "ranges are spelled out once" detector does not fire on a second copy of a private range beside a fetch');
+    else process.stdout.write('   [ok]   (and the control, a second copy of a private range next to a fetch, is caught)\n');
+    if (FETCH_RE.test("response = await fetch('https://example.com/x');") !== true) {
+      problems.push('the "unnamed fetcher" detector does not fire on a bare fetch call');
+    }
+  }
+} catch (e) {
+  problems.push(`could not read the URL policy surface: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── result
 
 process.stdout.write('\n6. result\n');

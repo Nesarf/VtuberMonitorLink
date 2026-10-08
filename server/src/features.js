@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
-import { activeProvider, chatRequest } from './llm.js';
+import { activeProvider, checkedChatRequest } from './llm.js';
 import { netFetch } from './net.js';
 
 const BATCH = 10;
@@ -94,14 +94,16 @@ export async function extractFeatures(cfg, items, log) {
   let extracted = 0;
   for (let i = 0; i < todo.length; i += BATCH) {
     const batch = todo.slice(i, i + BATCH);
-    const req = chatRequest(
+    const req = await checkedChatRequest(
       p,
       [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: buildPrompt(batch, i) },
       ],
-      { max_tokens: 3000, temperature: 0.1 }
+      { max_tokens: 3000, temperature: 0.1 },
+      cfg
     );
+    if (!req.ok) return { cache, extracted, skipped, error: req.error };
     try {
       const res = await netFetch(
         req.url,

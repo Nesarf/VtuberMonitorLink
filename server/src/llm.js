@@ -5,6 +5,7 @@
 // (for example a cheap one for everyday use and an expensive one when writing reports).
 // Depends only on the OpenAI-compatible /chat/completions and /models, with no vendor SDK.
 import { netFetch } from './net.js';
+import { markUrlCleared, validateRemoteUrl } from './remote-url.js';
 
 /** Common provider presets (every baseUrl can be edited, and the model list is fetched live in the UI) */
 export const PRESETS = [
@@ -56,6 +57,15 @@ export const PRESETS = [
     baseUrl: 'http://127.0.0.1:11434/v1',
     models: ['qwen2.5:14b', 'llama3.1:8b', 'gemma2:9b'],
     local: true,
+    // The one shipped preset that carries the loopback allowance, and the decision behind it: a local model
+    // server is on loopback **by design**, and this address is ours rather than something a user typed, so there
+    // is no user intent for the URL policy (server/src/remote-url.js) to second-guess. A preset that is refused
+    // the first time it is used teaches people to turn the rule off wholesale, which is worse than the rule
+    // being one entry less absolute. The flag stays per entry, so this admits the Ollama profile and nothing
+    // else: a profile a user typed pointing at 127.0.0.1 is still refused, and this flag relaxes the loopback
+    // rule only — a private, link-local or metadata address is refused even with it set. Both of those are
+    // pinned by tools/remote-url-test.mjs, the second one as the control.
+    allowLoopback: true,
   },
   {
     id: 'custom',
@@ -83,6 +93,11 @@ export function newProvider(presetId = 'deepseek', overrides = {}) {
     reasoningEffort: '',
     maxTokens: 8192,
     temperature: 0.3,
+    // The allowance is per entry and this object is built field by field, so a preset that sets it would be
+    // silently stripped here — the same trap `local: true` already falls into (it is read by the page, never
+    // copied onto a profile). Copied explicitly rather than by spreading the preset, because everything else a
+    // preset carries is presentation (name, model list) and spreading would put the whole table on the profile.
+    ...(p.allowLoopback === true ? { allowLoopback: true } : {}),
   };
   return { ...base, ...overrides };
 }
@@ -118,6 +133,45 @@ export function activeProvider(cfg) {
   return newProvider('deepseek', { id: '__default__', name: 'DeepSeek' });
 }
 
+
+/**
+ * The policy for one LLM profile: the profile carries its own allowance (the Ollama preset points at
+ * 127.0.0.1 by design, and a profile the user typed is otherwise an address like any other).
+ *
+ * `cfg` is accepted because two routes build a **transient** profile out of the request body plus the saved
+ * one (/api/llm/test and /api/llm/models) and a browser round-trip does not carry the flag back. The stored
+ * profile is the one the user configured, so it is the authority; the passed object is consulted first so a
+ * caller that has a profile in hand does not need the config at all.
+ *
+ * Found by a test rather than by reading: the vision suite built its provider from `cfg.llm.providers[0]` and
+ * every case failed with a refusal — which turned out to be correct behaviour for a provider object that had
+ * been separated from the config it came from, and is worth keeping as one function rather than two policies.
+ */
+export function providerPolicy(provider = {}, cfg = null) {
+  if (provider?.allowLoopback === true) return { allowLoopback: true };
+  const list = Array.isArray(cfg?.llm?.providers) ? cfg.llm.providers : [];
+  const saved = list.find((x) => x?.id && x.id === provider?.id);
+  return { allowLoopback: saved?.allowLoopback === true || cfg?.llm?.allowLoopback === true };
+}
+
+/**
+ * The address of one chat/completions request, checked against the policy — or a refusal, in words.
+ *
+ * Why the check lives here rather than at each fetch site: the LLM endpoint is reached from five places
+ * (analyze's run and its preflight, features' extraction, the vision tagger, the model list, and the
+ * natural-language search route in server.js), all of them through chatRequest(). Putting the check in the
+ * one function that builds the address is what makes "every one of them" true by construction rather than
+ * by remembering, and it is why those callers carry no check of their own.
+ *
+ * @returns {Promise<{ok:true, url:string}|{ok:false, error:string, code:string}>}
+ */
+export async function checkChatEndpoint(p, cfg = null) {
+  const url = endpoint(p?.baseUrl || 'https://api.deepseek.com', '/chat/completions');
+  const policy = providerPolicy(p, cfg);
+  const check = await validateRemoteUrl(url, policy);
+  if (!check.ok) return { ok: false, error: check.message, code: check.code };
+  return { ok: true, url: markUrlCleared(check.url, policy) };
+}
 function endpoint(baseUrl, suffix) {
   return `${String(baseUrl ?? '').trim().replace(/\/+$/, '')}${suffix}`;
 }
@@ -126,14 +180,17 @@ function endpoint(baseUrl, suffix) {
 export async function listModels(cfg, provider) {
   const p = provider ?? activeProvider(cfg);
   if (!p.baseUrl) return { ok: false, error: 'baseUrl is empty', models: [] };
+  const policy = providerPolicy(p, cfg);
+  const target = await validateRemoteUrl(endpoint(p.baseUrl, '/models'), policy);
+  if (!target.ok) return { ok: false, error: target.message, code: target.code, models: [] };
   try {
     const r = await netFetch(
-      endpoint(p.baseUrl, '/models'),
+      markUrlCleared(target.url, policy),
       {
         headers: { authorization: `Bearer ${p.apiKey ?? ''}`, accept: 'application/json' },
         signal: AbortSignal.timeout(20000),
       },
-      { cfg }
+      { cfg, policy }
     );
     const text = await r.text();
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}${text ? ` — ${text.slice(0, 160)}` : ''}`, models: [] };
@@ -146,6 +203,24 @@ export async function listModels(cfg, provider) {
   } catch (err) {
     return { ok: false, error: err.message, models: [] };
   }
+}
+
+/**
+ * The shared request bits of one chat request, with the address already checked.
+ *
+ * This is the function the five callers use; `chatRequest` stays as it was because it is pure assembly and
+ * some callers (and the tests) want the description without deciding whether it may be sent. The refusal is
+ * returned in the shape every caller already handles — `{ok:false, error}` — so a call site needs one line
+ * to be safe rather than a new error path.
+ *
+ * @returns {Promise<{ok:true, url:string, headers:object, body:object}|{ok:false, error:string, code:string}>}
+ */
+export async function checkedChatRequest(p, messages, extra = {}, cfg = null) {
+  const req = chatRequest(p, messages, extra);
+  const policy = providerPolicy(p, cfg);
+  const check = await validateRemoteUrl(req.url, policy);
+  if (!check.ok) return { ok: false, error: check.message, code: check.code };
+  return { ok: true, ...req, url: markUrlCleared(check.url, policy) };
 }
 
 /** Shared request bits for a single chat request */

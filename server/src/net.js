@@ -15,6 +15,14 @@ import crypto from 'node:crypto';
 import { Agent, ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
 import { socksAgent, socksForPlaywright, torPortOpen } from './socks.js';
 import { decision as autoDecision } from './egress.js';
+import { urlClearedFor, validateRemoteUrl } from './remote-url.js';
+
+/**
+ * How many redirect hops netFetch will walk before refusing. Eight is the usual browser limit; the number
+ * matters less than the fact that there *is* one, because "follow until it stops" lets a server hold this
+ * process in a loop of its own making.
+ */
+const MAX_REDIRECT_HOPS = 8;
 
 let appliedUrl = null;
 let appliedMode = null;
@@ -200,17 +208,115 @@ export function dispatcherFor(cfg, mode, subject = null) {
 }
 
 /**
- * A fetch with an explicitly chosen egress.
+ * A fetch with an explicitly chosen egress, where **every redirect hop is checked**.
+ *
+ * Why this is a loop rather than one call. Measured while this was written (a local server answering 302 to
+ * /final, Node 24 / undici 7): `fetch(url)` with no `redirect` option answers `status=200 redirected=true`
+ * and the server log shows *both* requests - undici follows the chain internally, so this process never sees
+ * the intermediate address. That makes the obvious policy ("check the URL") a hole exactly the size of a
+ * redirect: a URL that passes can answer `Location: http://127.0.0.1:43110/api/config`, and the fetch lands
+ * on this app's own config route with no check in between. Measured in the same run: `redirect: 'manual'`
+ * returns the 302 itself (the server log shows one request), which is what makes a per-hop check possible.
+ *
+ * So `redirect` is forced to `'manual'` **here**, for every caller, and the chain is walked by hand:
+ *   1) each hop's URL goes through validateRemoteUrl (server/src/remote-url.js) before a request is made;
+ *   2) the next URL is resolved against the current one (`new URL(location, current)`) so a relative
+ *      `Location: /admin` is checked as the absolute address it actually is;
+ *   3) a 303, or a 301/302 answering a non-GET/HEAD, switches the method to GET and drops the body - the
+ *      fetch spec's rule, and skipping it would send a POST body to a redirect target that was just accepted
+ *      as a *different* address (watch.js POSTs a wiki password; that is the request this protects);
+ *   4) the allowance travels with the chain: the caller's `allowLoopback` rides along, so a loopback fixture
+ *      that redirects within loopback still works, and nothing else gains the allowance by being redirected.
+ *
+ * Two options are deliberately **not** honoured.
+ *   - `redirect: 'follow'` cannot mean what it says: following is implemented here, hop by hop, because a
+ *     fetch that follows a hop without telling us is the hole this code exists to close. Passing undici's
+ *     default is therefore the same as saying nothing.
+ *   - `dispatcher` is overridden, as it always was in this function: the egress is this project's decision
+ *     (net.js / egress.js), not the caller's.
+ *
+ * `sel.redirect: false` (or `opts.redirect: 'manual'`) returns the 3xx to the caller untouched - used by the
+ * test to watch a hop boundary directly, and the honest way to say "do not follow".
+ *
  * @param {string} url
- * @param {object} opts  fetch options (the dispatcher gets overridden)
- * @param {{cfg?:object, subject?:object, mode?:'direct'|'proxy'|'tor'}} sel
+ * @param {object} opts  fetch options (the dispatcher and redirect get overridden)
+ * @param {{cfg?:object, subject?:object, mode?:'direct'|'proxy'|'tor', policy?:object, redirect?:boolean}} sel
  */
 export async function netFetch(url, opts = {}, sel = {}) {
   const mode = isLoopback(url) ? 'direct' : sel.mode ?? resolveProxyMode(sel.cfg, sel.subject);
-  // subject is passed down for exit rotation in observation mode (one source stays on one
-  // circuit, different sources spread across different exits - neither "one exit serves
-  // everything" nor a new connection every time, which would cost reconnects)
-  return undiciFetch(url, { ...opts, dispatcher: dispatcherFor(sel.cfg, mode, sel.subject) });
+  const dispatcher = dispatcherFor(sel.cfg, mode, sel.subject);
+  // On a proxy/Tor egress the *exit* resolves and connects, so asking whether this machine can resolve the
+  // name is a statement about the wrong machine (see the header of remote-url.js). The caller's own policy
+  // wins over this default, so a caller may still force the check.
+  const policy = { skipDns: mode !== 'direct', ...(sel.policy ?? {}) };
+  const follow = opts.redirect !== 'manual' && sel.redirect !== false;
+
+  let current = String(url);
+  let method = String(opts.method ?? 'GET').toUpperCase();
+  let bodyOpt = opts.body;
+  let headers = opts.headers;
+
+  // A URL a caller already judged (llm.js's request builder hands its checked address on) carries that verdict
+  // beside it (see urlClearedFor in remote-url.js). It is honoured **only for the first hop, and only when the
+  // verdict was reached under a policy at least as strict as the one in force here** — a redirect target is
+  // never marked, so every hop after the first is checked in full.
+  const markedFirstHop = hop0 => hop0 === 0 && urlClearedFor(current, policy);
+
+  for (let hop = 0; ; hop++) {
+    const check = markedFirstHop(hop) ? { ok: true, url: current } : await validateRemoteUrl(current, policy);
+    if (!check.ok) {
+      // The refusal is thrown, not returned: every existing caller already catches a failed fetch and turns
+      // it into `{ok:false, error}` (that is what a network error does today), so a refusal surfaces through
+      // the same path with the one thing the caller did not have before - a reason that says *why* the
+      // address was refused rather than a socket error.
+      const err = new Error(`${check.message} [hop ${hop}]`);
+      err.code = check.code;
+      err.urlRefused = true;
+      err.host = check.host;
+      err.hop = hop;
+      throw err;
+    }
+    const res = await undiciFetch(check.url, { ...opts, method, body: bodyOpt, headers, redirect: 'manual', dispatcher });
+    const status = res.status;
+    const location = res.headers.get('location');
+    if (!follow || ![301, 302, 303, 307, 308].includes(status) || !location) return res;
+    const next = (() => {
+      try {
+        return new URL(location, check.url).href;
+      } catch {
+        return null;
+      }
+    })();
+    // Cancel the hop's body before deciding: every path from here either starts a new request or throws, and
+    // a 3xx body that is never read holds a socket open.
+    await res.body?.cancel?.().catch(() => {});
+    if (next === null || next === check.url) {
+      const err = new Error(
+        next === null ? `the redirect target is not a usable URL: ${location}` : `the redirect points back at itself: ${check.url}`
+      );
+      err.code = next === null ? 'redirect-hop' : 'redirect-loop';
+      err.urlRefused = true;
+      err.hop = hop;
+      throw err;
+    }
+    if (hop + 1 >= MAX_REDIRECT_HOPS) {
+      const err = new Error(`too many redirects (${MAX_REDIRECT_HOPS}) starting at ${url}`);
+      err.code = 'too-many-redirects';
+      err.urlRefused = true;
+      err.hop = hop;
+      throw err;
+    }
+    if (status === 303 || ((status === 301 || status === 302) && method !== 'GET' && method !== 'HEAD')) {
+      method = 'GET';
+      bodyOpt = undefined;
+      // Content-length/type belong to the body that was just dropped; keeping them would describe a request
+      // that is no longer being made.
+      if (headers && typeof headers === 'object') {
+        headers = Object.fromEntries(Object.entries(headers).filter(([k]) => !/^content-(length|type)$/i.test(k)));
+      }
+    }
+    current = next;
+  }
 }
 
 /** For callers that need their own Agent (e.g. probing port by port) */

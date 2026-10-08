@@ -27,6 +27,8 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { readTar } from './tar.js';
 import { resolveDir } from './config.js';
+import { netFetch } from './net.js';
+import { validateRemoteUrl } from './remote-url.js';
 
 export const VDB_DEFAULTS = {
   url: 'https://codeload.github.com/dd-center/vdb/tar.gz/refs/heads/master',
@@ -159,10 +161,23 @@ export async function ensureIndex(cfg, { force = false, log = null } = {}) {
   }
   const url = String(opts.url ?? VDB_DEFAULTS.url);
   log?.info?.(`fetching the VDB roster (one request, ~0.5MB): ${url}`);
-  const res = await fetch(url, {
-    headers: { 'user-agent': opts.software ?? VDB_DEFAULTS.software, accept: 'application/gzip,*/*' },
-    signal: AbortSignal.timeout(Number(opts.timeoutMs) || VDB_DEFAULTS.timeoutMs),
-  });
+  // The roster address is a config value (`vdb.url`), and a config value is user input like any other: it
+  // goes through the same policy, and through netFetch so the redirect hops on the way to codeload are
+  // checked too. `vdb.allowLoopback` is the explicit allowance for a mirror on this machine; the default
+  // refuses it. The egress is pinned to 'direct' because this route is a plain config fetch with no
+  // per-source egress of its own (net.js would otherwise fall back to the global setting, which is also
+  // 'direct' by default — pinning it means the DNS half of the policy is never skipped for the wrong reason).
+  const policy = { allowLoopback: cfg?.vdb?.allowLoopback === true };
+  const checked = await validateRemoteUrl(url, policy);
+  if (!checked.ok) throw new Error(checked.message);
+  const res = await netFetch(
+    checked.url,
+    {
+      headers: { 'user-agent': opts.software ?? VDB_DEFAULTS.software, accept: 'application/gzip,*/*' },
+      signal: AbortSignal.timeout(Number(opts.timeoutMs) || VDB_DEFAULTS.timeoutMs),
+    },
+    { cfg, mode: 'direct', policy },
+  );
   if (!res.ok) throw new Error(`VDB 下载失败 HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   const index = buildIndex(buf, { generatedAt: new Date().toISOString() });

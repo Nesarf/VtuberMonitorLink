@@ -173,92 +173,174 @@ function caseCorrupt() {
 //    control: `legacy-write` (the bare writeFileSync: the same interrupted write leaves a truncated
 //             target, i.e. the original bytes are gone - which is the defect, not a detail)
 //
-// Two ways of interrupting are checked, because they fail at different points:
-//   B1. the write cannot complete at all (the target is unwritable). The original must be
-//       byte-identical afterwards, and the test asks what the abandoned temp file *held*, so the new
-//       content is visible as the near miss it was.
+// The property is one property, and it is about the *shape* of the write rather than about the step
+// that refused: **the target is only ever touched by the atomic rename**, so any refusal before it
+// must leave the file byte-identical and the new content in full only in a temp file the config path
+// never names. So the assertions below are shared by two triggers, because no single trigger can be
+// both real and portable:
+//
+//   B1a. `backup-refused` - the platform's own refusal, nothing injected: `config.json.bak` is a
+//        directory, so the `copyFileSync` in the middle of the write path refuses (EPERM on Windows,
+//        EISDIR on POSIX). This replaced an `icacls` deny (a `chmod` on POSIX), and the reason is the
+//        failure this section caused in CI: that fixture asserted a *machine* state. Measured on the
+//        Windows machine this file was written on, `icacls /deny <me>:(W,D)` did not stop
+//        `writeFileSync` at all - an elevated administrator's writes bypass the data-access deny, so
+//        the pre-fix writer really did truncate the target there - while on the CI runner the same
+//        deny did stop it, so the mutant broke two *other* checks and the control reported "the mutant
+//        failed for another reason". A fixture whose premise is a privilege is not a fixture.
+//   B1b. `rename-refused` - the atomic step itself, refused at that one call (`fs.renameSync` throws
+//        for the length of the write; the same interception technique this file already uses to
+//        observe the temp file's removal). A rename-only refusal cannot be produced portably - every
+//        real mechanism that blocks the rename also blocks the copy before it - and the rename is the
+//        step the whole design rests on, so it is exercised rather than assumed.
+//
+// Each trigger ends with its own control: with the trigger removed the same call must succeed, which
+// is what makes "the write failed" a fact about the trigger rather than about a broken writer.
+//
 //   B2. a live process is killed between the temp write and the rename. The target must still be the
 //       old file, and it must still be parseable as config: the point of temp-then-rename is that the
 //       interrupted content never carries the name the app reads.
 // ---------------------------------------------------------------------------------------------------
-function caseInterruptedRename() {
-  cleanup();
-  saveConfig(GOOD());
-  const before = fs.readFileSync(CFG);
-  const beforeBak = fs.existsSync(CFG + '.bak') ? fs.readFileSync(CFG + '.bak') : null;
+function caseInterruptedWrite() {
+  const BAK = CFG + '.bak';
   const replacement = JSON.stringify({ ui: { theme: 'replaced-by-a-write-that-could-not-finish' } }, null, 2);
 
-  // Make the target un-replaceable. On Windows an ACL deny is the mechanism that exists for a path we
-  // own (a read-only *file* is refused by write-open, not by rename); on POSIX the directory bit is
-  // enough. Whichever step fails first, the assertion is about bytes: had the target been opened for
-  // writing, its old content would already be gone by the time the error surfaced.
-  let restored = null;
-  if (process.platform === 'win32') {
-    const who = process.env.USERNAME ?? 'Everyone';
-    const deny = spawnSync('icacls', [CFG, '/deny', `${who}:(W,D)`], { encoding: 'utf8' });
-    if (deny.status !== 0) {
-      t('a write that cannot complete leaves the original byte-identical (skipped: could not make the target unwritable)', () => {
-        process.stdout.write('         (icacls refused: ' + String(deny.stderr ?? '').trim().slice(0, 80) + ')\n');
-      });
-      return;
+  // The fixture of B1a is "the platform refuses this", and that is measured here rather than promised:
+  // if some platform ever copied a file onto a directory without complaining, the fixture would no
+  // longer mean "the write cannot complete" and every assertion below would be about this machine.
+  t("control: this platform refuses a copy onto a directory, so B1a's fixture really blocks the write", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-bak-premise-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'src'), 'x');
+      fs.mkdirSync(path.join(dir, 'dst'));
+      let code = null;
+      try {
+        fs.copyFileSync(path.join(dir, 'src'), path.join(dir, 'dst'));
+      } catch (e) {
+        code = e.code ?? e.name;
+      }
+      assert.ok(code, `this platform copied a file onto a directory without refusing (${process.platform}), so the fixture cannot make the write fail`);
+      process.stdout.write('         (the platform answered ' + code + ')\n');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
-    restored = () => spawnSync('icacls', [CFG, '/remove:d', who], { encoding: 'utf8' });
-  } else {
-    fs.chmodSync(CFG, 0o444);
-    fs.chmodSync(WORK, 0o555);
-    restored = () => {
-      fs.chmodSync(WORK, 0o755);
-      fs.chmodSync(CFG, 0o644);
-    };
-  }
+  });
 
-  // The near miss is what a `finally` destroys: by the time the failure surfaces in this file, the
-  // temp file that held the new content has already been removed (that is the point of the cleanup, and
-  // the kill case below is the one where it cannot run). So the content is captured at the removal
-  // itself, by observing the one call that deletes it - the assertion then says "the new content
-  // existed in full, in a file the config path never names", which is the property being claimed.
-  const realUnlink = fs.unlinkSync;
-  let nearMiss = null;
-  fs.unlinkSync = (target) => {
-    if (String(target).endsWith('.tmp') && fs.existsSync(target)) nearMiss = fs.readFileSync(String(target), 'utf8');
-    return realUnlink(target);
+  let realRename = fs.renameSync;
+  const RENAME_REFUSED = () => {
+    const err = new Error('EPERM: operation not permitted, rename (refused by this fixture)');
+    err.code = 'EPERM';
+    throw err;
   };
-  let threw = null;
-  try {
-    writeConfigText(replacement);
-  } catch (e) {
-    threw = e;
-  } finally {
-    fs.unlinkSync = realUnlink;
-  }
-  restored();
 
-  t('a write that cannot complete reports a failure instead of claiming success', () => {
-    assert.ok(threw, 'the write was expected to fail on an unwritable target');
-    assert.ok(threw.code || threw.name, 'the failure carries no code');
-  });
-  t('a write that cannot complete leaves the original byte-identical', () => {
-    assert.deepEqual(fs.readFileSync(CFG), before, 'the target changed although the write failed');
-    assert.equal(JSON.parse(read()).ui.theme, 'dark', 'the target is no longer the config that was there');
-    if (beforeBak) assert.deepEqual(fs.readFileSync(CFG + '.bak'), beforeBak, 'the backup changed although the write failed');
-  });
-  t('the content that could not be placed existed in full, in a temp file the config path never names', () => {
-    assert.equal(nearMiss, replacement, 'the temp file did not hold the content that failed to land');
-  });
-  t('and a failure that is caught removes its own temp file', () => {
-    const strays = strayFiles();
-    assert.equal(strays.length, 0, `a caught failure left ${JSON.stringify(strays)} behind`);
-  });
-  t('a failed write leaves no *.tmp content at the config path itself', () => {
-    assert.deepEqual(JSON.parse(read()), JSON.parse(before.toString('utf8')));
-  });
-  t('a failed write is recorded, and it never claims success', () => {
-    const h = configHealthSnapshot();
-    assert.ok(h.writeFailures >= 1, 'the failure was not counted');
-    assert.ok(h.lastWriteError, 'the failure was not recorded');
-    assert.equal(h.lastWriteError.code, h.lastWriteError.code); // a code, not a stack
-    assert.equal(h.lastWriteError.path, CFG);
-  });
+  const TRIGGERS = [
+    {
+      label: 'B1a. backup-refused: the platform will not copy onto a directory (nothing is injected)',
+      apply() {
+        fs.rmSync(BAK, { force: true });
+        fs.mkdirSync(BAK);
+      },
+      remove() {
+        fs.rmSync(BAK, { recursive: true, force: true });
+      },
+      // The backup path *is* the fixture here, so "the backup was not disturbed" means the directory
+      // this trigger made is still the directory it made - no file was written in its place and it was
+      // not removed on the way out of a write that failed.
+      assertBackupUntouched() {
+        assert.equal(fs.statSync(BAK).isDirectory(), true, 'the failed write replaced the fixture at the backup path');
+      },
+    },
+    {
+      label: 'B1b. rename-refused: the one atomic step, refused at that call',
+      apply() {
+        realRename = fs.renameSync;
+        fs.renameSync = RENAME_REFUSED;
+      },
+      remove() {
+        fs.renameSync = realRename;
+      },
+      assertBackupUntouched(beforeBak) {
+        if (beforeBak) assert.deepEqual(fs.readFileSync(BAK), beforeBak, 'the backup changed although the write failed');
+      },
+    },
+  ];
+
+  for (const trigger of TRIGGERS) {
+    section(trigger.label);
+    cleanup();
+    saveConfig(GOOD());
+    const before = fs.readFileSync(CFG);
+    const beforeBak = fs.existsSync(BAK) ? fs.readFileSync(BAK) : null;
+
+    trigger.apply();
+
+    // The near miss is what a `finally` destroys: by the time the failure surfaces in this file, the
+    // temp file that held the new content has already been removed (that is the point of the cleanup, and
+    // the kill case below is the one where it cannot run). So the content is captured at the removal
+    // itself, by observing the one call that deletes it - the assertion then says "the new content
+    // existed in full, in a file the config path never names", which is the property being claimed.
+    const realUnlink = fs.unlinkSync;
+    let nearMiss = null;
+    fs.unlinkSync = (target) => {
+      if (String(target).endsWith('.tmp') && fs.existsSync(target)) nearMiss = fs.readFileSync(String(target), 'utf8');
+      return realUnlink(target);
+    };
+    let threw = null;
+    try {
+      writeConfigText(replacement);
+    } catch (e) {
+      threw = e;
+    } finally {
+      fs.unlinkSync = realUnlink;
+    }
+
+    // The trigger stays applied for the assertions - B1a's fixture *is* the backup path, so "the backup
+    // was not disturbed" is only sayable while the fixture is still there - and is taken away for the
+    // control at the end.
+    try {
+      t('a write that cannot complete reports a failure instead of claiming success', () => {
+        assert.ok(threw, 'the write was expected to fail on a target the fixture made impossible to replace');
+        assert.ok(threw.code || threw.name, 'the failure carries no code');
+        process.stdout.write('         (the refusal was ' + (threw.code ?? threw.name) + ')\n');
+      });
+      t('a write that cannot complete leaves the original byte-identical', () => {
+        assert.deepEqual(fs.readFileSync(CFG), before, 'the target changed although the write failed');
+        assert.equal(JSON.parse(read()).ui.theme, 'dark', 'the target is no longer the config that was there');
+        trigger.assertBackupUntouched(beforeBak);
+      });
+      t('the content that could not be placed existed in full, in a temp file the config path never names', () => {
+        assert.equal(nearMiss, replacement, 'the temp file did not hold the content that failed to land');
+      });
+      t('and a failure that is caught removes its own temp file', () => {
+        const strays = strayFiles();
+        assert.equal(strays.length, 0, `a caught failure left ${JSON.stringify(strays)} behind`);
+      });
+      t('a failed write leaves no *.tmp content at the config path itself', () => {
+        assert.deepEqual(JSON.parse(read()), JSON.parse(before.toString('utf8')));
+      });
+      t('a failed write is recorded, and it never claims success', () => {
+        const h = configHealthSnapshot();
+        assert.ok(h.writeFailures >= 1, 'the failure was not counted');
+        assert.ok(h.lastWriteError, 'the failure was not recorded');
+        // A code, not a stack: `codeOf(err)` is what the health answer carries, and a message with a
+        // stack in it would be the same value compared with itself (which is how this assertion used to
+        // be written - a check that could not fail).
+        assert.equal(typeof h.lastWriteError.code, 'string', 'the recorded failure carries no error code: ' + JSON.stringify(h.lastWriteError));
+        assert.ok(h.lastWriteError.code.length > 0 && !/[\r\n]/.test(h.lastWriteError.code), 'the recorded failure carries a stack instead of a code');
+        assert.equal(h.lastWriteError.path, CFG);
+      });
+    } finally {
+      trigger.remove();
+    }
+    // The control for the trigger: take it away and the identical call must land. Without this, "the
+    // write failed" would be consistent with a writer that never writes, and the mutation control in
+    // section H could not tell those apart either.
+    t('control: with the trigger removed the same call succeeds, so the refusal was the trigger', () => {
+      const r = writeConfigText(replacement);
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(JSON.parse(read()), JSON.parse(replacement), 'the write that reported success did not land');
+    });
+  }
 }
 
 /**
@@ -695,7 +777,7 @@ export function writeConfigTextAtomic_UNUSED(text) {
 /** One scenario per control, chosen so that the mutation's damage lands on it. */
 const CONTROL_SCENARIOS = {
   corrupt: caseCorrupt,
-  interrupted: caseInterruptedRename,
+  interrupted: caseInterruptedWrite,
 };
 
 function runControls() {
@@ -772,8 +854,8 @@ if (MODE === 'control') {
 process.stdout.write('\nconfig durability: the file, the write, and the three states\n');
 section('A. a damaged config is preserved, reported, and never overwritten by defaults');
 caseCorrupt();
-section('B1. a write whose rename fails leaves the original intact');
-caseInterruptedRename();
+section('B1. a write that cannot complete leaves the original intact (both triggers)');
+caseInterruptedWrite();
 section('B2. a write killed between temp and rename leaves the original intact');
 await caseKilledWrite();
 section('C. a missing config is a silent first run');

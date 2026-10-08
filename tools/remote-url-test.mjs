@@ -201,12 +201,17 @@ const REFUSED = [
 
 /** The same policy, and the addresses that must come out of it allowed. */
 const ACCEPTED = [
-  ['accept-public-https', 'https://example.com/feed.xml', {}, 'example.com'],
-  ['accept-public-http', 'http://example.com:8080/a?b=c', {}, 'example.com'],
+  // Every row injects its resolver. The first version of this table left `example.com` to the machine's
+  // own resolver, which made three of these checks - and the control below - assertions about whatever
+  // DNS the runner happens to have: measured with a resolver that answers nothing, all four fail with
+  // `dns-unresolved`. The policy's verdict is what is under test here; the real `dns.lookup` path has
+  // its own case further down, where the prerequisite it needs is measured before it is asserted.
+  ['accept-public-https', 'https://example.com/feed.xml', { dnsResolve: resolverFor({ 'example.com': [PUBLIC_V4, PUBLIC_V6] }) }, 'example.com'],
+  ['accept-public-http', 'http://example.com:8080/a?b=c', { dnsResolve: resolverFor({ 'example.com': [PUBLIC_V4] }) }, 'example.com'],
   ['accept-ipv4-literal', 'http://93.184.216.34/', {}, '93.184.216.34'],
   ['accept-ipv6-literal', 'http://[2606:4700:10::6814:179a]/', {}, '2606:4700:10::6814:179a'],
   ['accept-name-resolving-public', 'http://feed.example.test/x', { dnsResolve: resolverFor({ 'feed.example.test': [PUBLIC_V4, PUBLIC_V6] }) }, 'feed.example.test'],
-  ['accept-normalises', 'HTTP://Example.COM:80/a/../b', {}, 'example.com'],
+  ['accept-normalises', 'HTTP://Example.COM:80/a/../b', { dnsResolve: resolverFor({ 'example.com': [PUBLIC_V4] }) }, 'example.com'],
 ];
 
 // ── the servers the end-to-end cases talk to
@@ -267,9 +272,12 @@ for (const [name, url, policy, code] of REFUSED) {
 }
 // The control for the whole table: the same assertions against the *accepting* policy must not hold. If
 // validateRemoteUrl answered "ok:false" for everything, every row above would still pass — this is the case
-// that fails when it does.
+// that fails when it does. Its resolver is injected for the same reason the rows' are: a control that
+// depends on this machine's DNS is a control that reports the machine, not the policy.
 runAsyncCase('control: the refusals are verdicts, not a function that always refuses', async () => {
-  const r = await validateRemoteUrl('https://example.com/feed.xml');
+  const r = await validateRemoteUrl('https://example.com/feed.xml', {
+    dnsResolve: resolverFor({ 'example.com': [PUBLIC_V4, PUBLIC_V6] }),
+  });
   assert.equal(r.ok, true, `a plain public https URL must be accepted: ${JSON.stringify(r)}`);
 });
 runAsyncCase('every reason code in the table is reachable data', () => {
@@ -309,6 +317,75 @@ for (const [name, url, policy, host] of ACCEPTED) {
     assert.ok(r.url.startsWith('http'), 'a normalised URL that is still fetchable: ' + r.url);
   });
 }
+
+// ── the one case whose prerequisite is this machine's resolver
+//
+// Every other name-shaped case injects its resolver, on purpose: the policy's verdicts are the subject,
+// and a verdict that flips with the runner's DNS is not a verdict. The real `dns.lookup` path still has
+// to be exercised once — it is what the product uses on the `direct` egress, and it is the half that a
+// `dns.Resolver` mistake silently broke (see the note beside `resolveAll`) — so it is asserted here with
+// its prerequisite **measured first**: the prerequisite is "this machine resolves the name, and every
+// answer is a public address". When it is absent (no resolver, an offline box, a hosts entry or a
+// transparent proxy in the way) that is an environment statement — the cost the policy's header point
+// (2) accepts — rather than a failing check.
+const dnsPromises = (await import('node:dns/promises')).default;
+// Bounded exactly the way the policy bounds its own lookup (a resolver that hangs must not hang a
+// fetch, and it must not hang this file either): a race against a timer that does not hold the process
+// open. The answer carries *why* it is empty, because that sentence is what the environment statement
+// prints - "could not resolve" and "the resolver never answered" are different facts about a machine.
+const DNS_PROBE_TIMEOUT_MS = 5000;
+const lookupHere = (name) => {
+  const timedOut = { addresses: [], why: `the resolver did not answer for ${name} within ${DNS_PROBE_TIMEOUT_MS} ms` };
+  return Promise.race([
+    dnsPromises
+      .lookup(name, { all: true, verbatim: true })
+      .then((all) => ({
+        addresses: [...new Set(all.map((a) => a?.address).filter((a) => typeof a === 'string' && a.trim()))],
+        why: null,
+      }))
+      .catch((e) => ({ addresses: [], why: `${name} did not resolve here (${e?.code ?? e?.message ?? e})` })),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(timedOut), DNS_PROBE_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]);
+};
+const resolvedHere = await lookupHere('example.com');
+// RFC 6761 reserves `.invalid`, so no conformant resolver answers it - which is what makes it usable as
+// the control below. A wildcard resolver is measured rather than assumed, because that is the one way
+// the control would be reporting the resolver instead of the policy.
+const invalidHere = await lookupHere('nothing-here.invalid');
+runAsyncCase('the platform resolver decides when none is injected (an environment statement when there is none)', async () => {
+  const { addresses, why } = resolvedHere;
+  const allPublic = addresses.length > 0 && addresses.every((a) => classifyAddress(a) === 'public');
+  if (!allPublic) {
+    process.stdout.write(
+      `         this machine ${addresses.length ? 'answers example.com with ' + addresses.join(', ') : why},\n` +
+        '         so the platform-resolver case is a statement about the environment rather than a failure\n' +
+        '         (the injected rows above are what tests the policy itself)\n',
+    );
+    return;
+  }
+  const r = await validateRemoteUrl('https://example.com/feed.xml');
+  assert.equal(r.ok, true, `this machine resolves example.com to ${addresses.join(', ')}, so the policy must accept it: ${JSON.stringify(r)}`);
+  assert.equal(r.host, 'example.com');
+  assert.ok(r.addresses.length >= 1, 'the check must report the addresses it resolved: ' + JSON.stringify(r.addresses));
+  for (const a of r.addresses) assert.ok(addresses.includes(a), `an address the resolver never answered with was checked: ${a}`);
+});
+// ...and its control, which is what makes the case above a verdict rather than a constant: the same
+// call, with no injected resolver, against a name that cannot resolve must be refused as unresolvable.
+runAsyncCase('control: a name that cannot resolve is refused when the platform resolver answers', async () => {
+  if (invalidHere.addresses.length) {
+    process.stdout.write(
+      `         this resolver answers .invalid with ${invalidHere.addresses.join(', ')} (a wildcard resolver), so the\n` +
+        '         control has no unresolvable name to use here and says so instead of reporting the resolver\n',
+    );
+    return;
+  }
+  const r = await validateRemoteUrl('https://nothing-here.invalid/feed.xml');
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.code, 'dns-unresolved', `refused for the wrong reason: ${r.code} (${r.reason})`);
+});
 runAsyncCase('a refusal never throws — the caller gets a value it can report', async () => {
   const r = await validateRemoteUrl('http://169.254.169.254/');
   assert.equal(typeof r.message, 'string');

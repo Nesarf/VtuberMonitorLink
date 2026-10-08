@@ -1,6 +1,6 @@
 {
   "browser": {
-    "mode": "system",
+    "mode": "bundled",
     "executablePath": "",
     "profileDir": "",
     "headless": true,
@@ -8,6 +8,12 @@
     "hardTimeoutMs": 90000
   },
   "llm": {
+    "activeId": "",
+    "providers": [],
+    "budget": {
+      "dailyTokens": 0,
+      "onExceed": "warn"
+    },
     "provider": "deepseek",
     "baseUrl": "https://api.deepseek.com",
     "apiKey": "",
@@ -21,30 +27,190 @@
     "mode": "weekly",
     "dayOfWeek": 2,
     "time": "23:30",
-    "merchEveryDays": 14
+    "merchEveryDays": 14,
+    "tasks": []
   },
   "run": {
     "defaultGapSeconds": 2,
-    "maxParallel": 3
+    "maxParallel": 3,
+    "quarantine": {
+      "failures": 3,
+      "hours": 6
+    },
+    "watchWithRun": true,
+    "autoFailover": true,
+    "diagnoseFailed": true,
+    "extractFeatures": true,
+    "featureLimit": 40
   },
   "proxy": {
     "enabled": false,
-    "url": ""
+    "url": "",
+    "mode": "http",
+    "torSocks": "socks5://127.0.0.1:9150",
+    "torExe": "",
+    "controlUrl": "",
+    "controlSecret": ""
   },
-  "paths": {
-    "reportsDir": "reports",
-    "feedsDir": "feeds",
-    "logsDir": "logs"
+  "report": {
+    "dormant": {
+      "enabled": true,
+      "months": 6,
+      "maxPeople": 12,
+      "maxItems": 2,
+      "comebackDays": 3
+    }
   },
-  "sources": {},
+  "silence": {
+    "enabled": true,
+    "sampleDays": 20,
+    "minDays": 3,
+    "maxDays": 90,
+    "factor": 2.5,
+    "groupQuietDays": 5,
+    "minMembers": 3,
+    "basisDays": 60
+  },
+  "observation": {
+    "enabled": false,
+    "sampleRatio": 0.5,
+    "minSources": 2,
+    "minWatch": 1,
+    "jitterSeconds": [
+      3,
+      12
+    ],
+    "torForAgency": true,
+    "skipLoginSources": true,
+    "rotateExit": true
+  },
+  "people": [],
+  "peopleOptions": {
+    "onlyFollowed": false,
+    "notifyOnMatch": true,
+    "reportMatches": true
+  },
+  "share": {
+    "defaultFormat": "html",
+    "verifiedTargets": {},
+    "accounts": {},
+    "images": {
+      "mode": "none",
+      "maxPerBundle": 4,
+      "maxPerPost": 1,
+      "inlineMaxBytes": 204800
+    },
+    "sites": []
+  },
+  "vision": {
+    "enabled": false,
+    "providerId": "",
+    "runLimit": 40,
+    "concurrency": 2,
+    "maxTokens": 300,
+    "timeoutMs": 60000,
+    "prompt": "",
+    "requireVisionModel": true
+  },
+  "cluster": {
+    "enabled": true,
+    "threshold": 0.52,
+    "windowHours": 72
+  },
+  "sourceWeights": {},
+  "notify": {
+    "desktop": true,
+    "dedupeMinutes": 0,
+    "quietHours": {
+      "enabled": false,
+      "start": "23:00",
+      "end": "08:00",
+      "days": "all",
+      "timeZone": "",
+      "bypassLevels": [
+        "urgent"
+      ]
+    },
+    "targets": []
+  },
+  "watch": {
+    "enabled": true,
+    "targets": [],
+    "rules": {
+      "largeEditBytes": 5000,
+      "largeDeleteBytes": 2000,
+      "newPage": true,
+      "anonymousEdit": true,
+      "unpatrolled": true,
+      "logTypes": [
+        "delete",
+        "move",
+        "protect",
+        "block",
+        "rights",
+        "abusefilter",
+        "upload",
+        "import"
+      ],
+      "keywords": [
+        "毕业",
+        "卒業",
+        "解约",
+        "引退",
+        "炎上",
+        "休止",
+        "终止",
+        "解散",
+        "独立",
+        "移籍",
+        "道歉",
+        "声明"
+      ],
+      "maxEvents": 40
+    }
+  },
   "ui": {
     "theme": "dark",
     "notify": true,
+    "intelPerSource": 24,
+    "probeSamples": 3,
+    "probeTtlMinutes": 30,
     "layout": {
       "mode": "cards",
       "columns": "auto",
       "density": "comfortable",
-      "fontScale": 1
+      "fontScale": 1,
+      "showThumbs": true,
+      "showStats": true,
+      "showTime": true,
+      "showSource": true,
+      "accent": ""
     }
-  }
+  },
+  "privacy": {
+    "anonymousMode": false
+  },
+  "calendar": {
+    "timeZone": "",
+    "remindDaysBefore": 3,
+    "reportDays": 30,
+    "entries": []
+  },
+  "paths": {
+    "reportsDir": "reports",
+    "feedsDir": "feeds",
+    "logsDir": "logs",
+    "watchDir": "watch",
+    "tempDir": "",
+    "browsersDir": ""
+  },
+  "reports": {
+    "format": "html",
+    "keepJsonSource": true
+  },
+  "sources": {},
+  "open": {
+    "editor": ""
+  },
+  "customSources": []
 }

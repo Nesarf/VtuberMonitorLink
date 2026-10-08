@@ -11,6 +11,7 @@
 // The criterion looks at **facts** only (how long since the last activity); it does not guess "did they graduate":
 // graduation, hiatus and platform switches all look like the same thing in the data -- "no new items for a long time".
 import { baselineOf } from './silence.js';
+import { asDay, dayOfInstant, daysBetweenDays, effectiveTimeZone } from './day.js';
 
 export const DORMANT_DEFAULTS = {
   enabled: true,
@@ -20,23 +21,28 @@ export const DORMANT_DEFAULTS = {
   comebackDays: 3, // "comeback" criterion: after being dormant this long, there is activity again in the last few days
 };
 
-const DAY_MS = 86400000;
-const dayOf = (v) => new Date(v).toISOString().slice(0, 10);
 
-/** Days since today (day granularity) */
-export function daysSince(day, now = new Date()) {
-  if (!day) return null;
-  const d = Date.parse(String(day).slice(0, 10) + 'T00:00:00Z');
-  if (!Number.isFinite(d)) return null;
-  return Math.max(0, Math.round((Date.parse(dayOf(now)) - d) / DAY_MS));
+/**
+ * Days since today (day granularity).
+ *
+ * Both ends are calendar days in the configured zone and the difference is whole days (day.js) — the
+ * version of this that subtracted `Date.parse(utcDay(now))` from `Date.parse(day)` was the UTC rule
+ * applied to a local-day input, which is how a "6 months" threshold ends up firing a day off. The
+ * `timeZone` argument is new and optional; callers that pass nothing get the configured zone.
+ */
+export function daysSince(day, now = new Date(), timeZone = undefined) {
+  const d = asDay(String(day ?? '').slice(0, 10));
+  if (!d) return null;
+  const diff = daysBetweenDays(d, dayOfInstant(now, timeZone));
+  return diff === null ? null : Math.max(0, diff);
 }
 
 /**
  * Does this person count as "no longer active".
  * months uses 30.44 days/month (not 30: half a year differs by more than a day, which would put the boundary in different places).
  */
-export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS.months } = {}) {
-  const days = daysSince(lastDay, now);
+export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS.months, timeZone = undefined } = {}) {
+  const days = daysSince(lastDay, now, timeZone);
   if (days === null) return { dormant: false, days: null };
   const threshold = Math.round(Number(months) * 30.44);
   return { dormant: days >= threshold, days, thresholdDays: threshold };
@@ -53,8 +59,9 @@ export function isDormant({ lastDay, now = new Date(), months = DORMANT_DEFAULTS
  * @param {object} o.rules
  * @returns {{dormant:Array, returnees:Array, markdown:string, skipped:number}}
  */
-export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayPeople = [], rules = {}, now = new Date() } = {}) {
+export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayPeople = [], rules = {}, now = new Date(), timeZone = undefined, cfg = null } = {}) {
   const r = { ...DORMANT_DEFAULTS, ...rules };
+  const tz = effectiveTimeZone(cfg, timeZone);
   const out = { dormant: [], returnees: [], markdown: '', skipped: 0 };
   if (!r.enabled || !people.length) return out;
 
@@ -63,7 +70,7 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
 
   for (const p of people) {
     const days = byDay[String(p.id)] ?? {};
-    const baseline = baselineOf(days, { now });
+    const baseline = baselineOf(days, { now, timeZone: tz });
     if (baseline.lastDay === null) {
       // Never seen at all: this is not "stopped being active", it is "nothing new yet" -- do not list them (listing is noise)
       out.skipped++;
@@ -75,13 +82,13 @@ export function dormantBlock({ people = [], byDay = {}, latestItems = {}, todayP
     // A comeback has to be read like this: there is activity in the last few days, and **before that** the person had
     // already been silent for at least a full threshold --
     // looking only at the "last active day" misses it (a returning person's last active day is today, so they look healthy).
-    const recentActive = daysSince(activeDays.at(-1), now) <= (Number(r.comebackDays) || DORMANT_DEFAULTS.comebackDays);
+    const recentActive = daysSince(activeDays.at(-1), now, tz) <= (Number(r.comebackDays) || DORMANT_DEFAULTS.comebackDays);
     const prevDay = activeDays.length >= 2 ? activeDays.at(-2) : null;
-    const gapBeforeRecent = prevDay ? daysSince(prevDay, now) : null;
+    const gapBeforeRecent = prevDay ? daysSince(prevDay, now, tz) : null;
     const thresholdDays = Math.round(Number(r.months ?? DORMANT_DEFAULTS.months) * 30.44);
     const comeback = recentActive && gapBeforeRecent !== null && gapBeforeRecent >= thresholdDays;
 
-    const st = isDormant({ lastDay: baseline.lastDay, now, months: r.months });
+    const st = isDormant({ lastDay: baseline.lastDay, now, months: r.months, timeZone: tz });
     if (!st.dormant && !comeback) continue;
     const items = (latestItems[String(p.id)] ?? []).slice(0, Math.max(1, Number(r.maxItems) || 1));
     const quietDays = st.dormant ? st.days : gapBeforeRecent;

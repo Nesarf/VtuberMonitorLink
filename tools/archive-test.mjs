@@ -226,8 +226,12 @@ t('1000 writes + queries stay within a reasonable duration', () => {
     title: 'bulk item ' + i,
     publishedAt: new Date(Date.UTC(2026, 8, 10, i % 24)).toISOString(),
   }));
-  ingestItems(db, big, { day: '2026-09-10' });
-  const s = series(db, { days: 30, endDay: '2026-09-10', groupBy: 'source' });
+  // The zone is pinned rather than left to the machine: under the default (local) rule a batch spanning
+  // a whole UTC day crosses local midnight, so the day range this test reads depends on where it runs.
+  // A test that asserts the machine it runs on is the failure mode the durability fixtures already had
+  // to be fixed for once.
+  ingestItems(db, big, { day: '2026-09-10', timeZone: 'UTC' });
+  const s = series(db, { days: 30, endDay: '2026-09-10', groupBy: 'source', timeZone: 'UTC' });
   const ms = Date.now() - t0;
   assert.ok(ms < 5000, `took ${ms}ms`);
   assert.equal(s.totals.reduce((n, x) => n + x.items, 0) >= 1000, true, 'the totals should include those 1000 items');

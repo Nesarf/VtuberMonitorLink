@@ -23,6 +23,7 @@ import { tagItems, visionReady } from './vision.js';
 import { diagnoseSource } from './diagnose.js';
 import { recordOutcome } from './egress.js';
 import { upcoming } from './calendar.js';
+import { todayIn } from './day.js';
 import { loadObservationState, observationPlan, recordPicked, saveObservationState } from './observe.js';
 
 /** The anniversary section of the daily report (when there is none the whole block is dropped, rather than leaving an empty heading) */
@@ -137,8 +138,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     // Budget gate: warn by default (this is a tool the user runs themselves, and blocking it without
     // a word would be overreach); setting llm.budget.onExceed to 'stop' is what really blocks it.
     try {
-      const budget = budgetStatus(cfg, summarizeUsage(loadUsage(cfg).rows));
-      runState.cost = { ...summarizeUsage(loadUsage(cfg).rows, { days: 14 }), budget };
+      const budget = budgetStatus(cfg, summarizeUsage(loadUsage(cfg).rows, { cfg }));
+      runState.cost = { ...summarizeUsage(loadUsage(cfg).rows, { days: 14, cfg }), budget };
       if (budget.exceeded && budget.action === 'stop') {
         runState.lastError = `今日 LLM 用量已超过预算（${budget.used}/${budget.limit} tokens）`;
         log.error(runState.lastError);
@@ -212,7 +213,11 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
 
     // 4) Intel items (used by both the web card stream and the report)
     runState.step = 'saving-feeds';
-    const date = new Date().toISOString().slice(0, 10);
+    // One date for the whole run, and it is the **local** day (the configured zone, day.js) — the same
+    // rule the archive and the Calendar tab use. This value names the feed directory, the report file and
+    // the archive's run day at once, so taking it from UTC while the archive buckets by local days would
+    // put a run and its own items in two different places during the first hours of a local day.
+    const date = todayIn(cfg);
     let items = collectItems(results, cfg?.ui?.intelPerSource ?? 24);
     const keywords = cfg?.watch?.rules?.keywords ?? [];
     for (const it of items) {
@@ -333,8 +338,8 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     try {
       if (cfg?.silence?.enabled !== false && (cfg.people ?? []).length) {
         const db = openArchive(cfg);
-        const series = peopleSeries(db, { days: Number(cfg?.silence?.basisDays ?? 60) });
-        const sil = detectSilence({ byDay: series.byDay, people: cfg.people, rules: cfg.silence ?? {}, now: new Date() });
+        const series = peopleSeries(db, { days: Number(cfg?.silence?.basisDays ?? 60), cfg });
+        const sil = detectSilence({ byDay: series.byDay, people: cfg.people, rules: cfg.silence ?? {}, now: new Date(), cfg });
         runState.silence = sil;
         if (sil.person.length || sil.group.length) {
           const lines = [];
@@ -366,12 +371,12 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
         const db2 = openArchive(cfg);
         // It has to cover >= 6 months of history, so the window is derived from months (rather than taking only 30 days)
         const lookback = Math.max(120, Math.ceil((Number(drows.months) || 6) * 30.44) + 45);
-        const dSeries = peopleSeries(db2, { days: lookback });
+        const dSeries = peopleSeries(db2, { days: lookback, cfg });
         // Two passes: first work out who is dormant (this pass needs no content), then fetch the latest content only for those people
-        const draft = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: {}, todayPeople, rules: drows });
+        const draft = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: {}, todayPeople, rules: drows, cfg });
         const ids = draft.dormant.map((d) => d.id);
-        const items2 = ids.length ? latestItemsByPerson(db2, { personIds: ids, limit: drows.maxItems ?? 2 }) : {};
-        const block2 = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: items2, todayPeople, rules: drows });
+        const items2 = ids.length ? latestItemsByPerson(db2, { personIds: ids, limit: drows.maxItems ?? 2, cfg }) : {};
+        const block2 = dormantBlock({ people: cfg.people, byDay: dSeries.byDay, latestItems: items2, todayPeople, rules: drows, cfg });
         runState.dormant = { dormant: block2.dormant.length, returnees: block2.returnees.length, skipped: block2.skipped };
         if (block2.markdown) {
           markdown = `${markdown}\n\n${block2.markdown}`;

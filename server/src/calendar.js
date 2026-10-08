@@ -17,26 +17,18 @@
 // So this module does exactly two things: reduce any moment to a calendar-day string in the target time
 // zone, and do integer arithmetic on calendar days.
 
-/** take the "calendar day" of a moment in the given time zone as YYYY-MM-DD (en-CA happens to use exactly that format) */
-export function dayInTz(date, timeZone) {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(date);
-}
+// The day rule itself is **not** defined here any more. It lives in day.js, because the archive needed
+// the same rule and a second copy is how the two halves of the product drifted apart in the first place
+// (that is the v1.0.5 defect this module is the reference implementation of). `dayInTz` is re-exported
+// under its original name so every existing caller and test keeps working, while there is exactly one
+// implementation behind it.
+import { dayInTz, dayStamp, daysBetweenDays, effectiveTimeZone } from './day.js';
 
-/** 'YYYY-MM-DD' → a UTC timestamp for integer-day arithmetic */
-function dayStamp(dayStr) {
-  const [y, m, d] = String(dayStr).split('-').map(Number);
-  return Date.UTC(y, m - 1, d);
-}
+export { dayInTz };
 
 /** how many days apart two calendar days are (an integer, unaffected by daylight saving) */
 export function daysBetween(fromDay, toDay) {
-  return Math.round((dayStamp(toDay) - dayStamp(fromDay)) / 86400000);
+  return daysBetweenDays(fromDay, toDay);
 }
 
 export function isLeapYear(y) {
@@ -110,10 +102,12 @@ export function upcoming(cfg, opts = {}) {
   // Note the || rather than ??: timeZone defaults to the **empty string** in the config,
   // and ?? only recognizes null/undefined, so the empty string travels all the way down and the time zone
   // shown in the UI ends up blank (we hit this one).
-  const tz = opts.timeZone || cfg?.calendar?.timeZone || undefined;
+  //
+  // The resolution itself now comes from day.js (the same one the archive uses), so "empty means the
+  // system zone" is stated once rather than here as well.
+  const tz = effectiveTimeZone(cfg, opts.timeZone || undefined);
   const now = opts.now ?? new Date();
-  // with no time zone passed, use the system one: Intl allows timeZone to be undefined
-  const today = tz ? dayInTz(now, tz) : localDay(now);
+  const today = dayInTz(now, tz);
   const entries = cfg?.calendar?.entries ?? [];
   const rows = [];
 
@@ -144,19 +138,12 @@ export function upcoming(cfg, opts = {}) {
   const within = Number(opts.days ?? 60);
   return {
     today,
-    timeZone: tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone: tz,
     days: within,
     all: rows,
     due: rows.filter((r) => r.days >= 0 && r.days <= within),
     reminders: rows.filter((r) => r.days >= 0 && r.days <= r.remindDaysBefore),
   };
-}
-
-function localDay(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }
 
 // ─────────────────────────────────────────────

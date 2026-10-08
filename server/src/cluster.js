@@ -37,6 +37,7 @@ const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
+import { asDay, dayOfInstant, dayStamp, effectiveTimeZone } from './day.js';
 
 /**
  * Split text into the tokens used for comparison.
@@ -234,6 +235,10 @@ export function cluster(items, opts = {}) {
   const windowMs = Number(opts.windowHours ?? DEFAULT_WINDOW_HOURS) * 3600_000;
   const weigh = opts.weight ?? (() => 1);
   const max = Number(opts.max ?? 4000);
+  // The day bucket below is a pre-filter, but it has to be built and queried in one calendar (day.js):
+  // `dayOfInstant` here and the neighbouring days it is compared against must agree, or an item at local
+  // midnight is compared against the wrong pair of buckets and a genuine duplicate is never a candidate.
+  const tz = effectiveTimeZone(opts.cfg ?? null, opts.timeZone);
 
   // WARNING: normalize the ordering first. Greedy/single-link both depend on the processing order, and
   // taking the input order as-is makes the same batch produce different results when reordered (the
@@ -265,7 +270,7 @@ export function cluster(items, opts = {}) {
 
   // bucket by calendar day first and compare only within the same and neighbouring buckets - no O(n^2)
   const buckets = new Map();
-  const dayOf = (p) => (p.ts === null ? 'unknown' : new Date(p.ts).toISOString().slice(0, 10));
+  const dayOf = (p) => (p.ts === null ? 'unknown' : dayOfInstant(p.ts, tz));
   prepared.forEach((p, i) => {
     const d = dayOf(p);
     if (!buckets.has(d)) buckets.set(d, []);
@@ -354,9 +359,12 @@ export function cluster(items, opts = {}) {
 }
 
 function neighbourDays(day) {
-  const base = Date.parse(day + 'T00:00:00Z');
-  if (!Number.isFinite(base)) return [day];
-  return [0, -1, 1].map((d) => new Date(base + d * 86400000).toISOString().slice(0, 10));
+  // The three buckets a candidate can hide in, from the one rule (day.js) rather than from a UTC
+  // subtraction: a calendar day is not always 86400000 ms long, and the neighbours have to be the same
+  // kind of day as the bucket key they are looked up by (a day string, indexed as itself).
+  if (!asDay(day)) return [day];
+  const middle = dayStamp(day);
+  return [middle - 86400000, middle, middle + 86400000].map((ms) => dayOfInstant(ms, 'UTC'));
 }
 
 function buildCluster(seed, members, weigh, meta = {}) {

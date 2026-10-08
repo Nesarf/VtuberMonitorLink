@@ -21,6 +21,9 @@ const t = (name, fn) => {
 };
 
 const NOW = new Date('2026-09-30T12:00:00Z');
+// The fixture's days are UTC days; the rule is pinned to UTC so this test asserts the code, not the
+// machine's zone.
+const TZ = 'UTC';
 const people = [
   { id: 'grad', name: '已毕业', agency: 'BOX' },
   { id: 'idle', name: '长期休止', agency: 'BOX' },
@@ -34,25 +37,25 @@ process.stdout.write('\ndormant: threshold\n');
 t('either side of half a year (6 months by default): landing exactly on the threshold counts, one day short does not', () => {
   const th = Math.round(6 * 30.44); // 183 days (a year counted as 365.28 days, a month as 30.44)
   const at = (days) => new Date(Date.parse('2026-09-30T00:00:00Z') - days * 86400000).toISOString().slice(0, 10);
-  assert.equal(isDormant({ lastDay: at(th), now: NOW }).dormant, true, `${th} days ago must count as dormant`);
-  assert.equal(isDormant({ lastDay: at(th - 1), now: NOW }).dormant, false, `${th - 1} days ago must not count yet`);
-  assert.equal(isDormant({ lastDay: at(th), now: NOW }).thresholdDays, th);
+  assert.equal(isDormant({ lastDay: at(th), now: NOW, timeZone: TZ }).dormant, true, `${th} days ago must count as dormant`);
+  assert.equal(isDormant({ lastDay: at(th - 1), now: NOW, timeZone: TZ }).dormant, false, `${th - 1} days ago must not count yet`);
+  assert.equal(isDormant({ lastDay: at(th), now: NOW, timeZone: TZ }).thresholdDays, th);
   // Pin one date down as cross-validation: 2026-04-02 to 2026-09-30 is 181 days -> below 183
-  assert.equal(daysSince('2026-04-02', NOW), 181);
-  assert.equal(isDormant({ lastDay: '2026-04-02', now: NOW }).dormant, false);
-  assert.equal(isDormant({ lastDay: '2026-03-20', now: NOW }).dormant, true, '194 days ago is plainly dormant');
+  assert.equal(daysSince('2026-04-02', NOW, TZ), 181);
+  assert.equal(isDormant({ lastDay: '2026-04-02', now: NOW, timeZone: TZ }).dormant, false);
+  assert.equal(isDormant({ lastDay: '2026-03-20', now: NOW, timeZone: TZ }).dormant, true, '194 days ago is plainly dormant');
 });
 
 t('the months threshold is adjustable: at 3 months, 100 days ago already counts', () => {
-  assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 3 }).dormant, true);
-  assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 6 }).dormant, false);
+  assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 3, timeZone: TZ }).dormant, true);
+  assert.equal(isDormant({ lastDay: '2026-06-22', now: NOW, months: 6, timeZone: TZ }).dormant, false);
 });
 
 t('no date -> no judgement (not treated as "dormant")', () => {
-  assert.deepEqual(isDormant({ lastDay: null, now: NOW }), { dormant: false, days: null });
-  assert.equal(daysSince(null, NOW), null);
-  assert.equal(daysSince('2026-09-30', NOW), 0);
-  assert.equal(daysSince('2026-09-01', NOW), 29);
+  assert.deepEqual(isDormant({ lastDay: null, now: NOW, timeZone: TZ }), { dormant: false, days: null });
+  assert.equal(daysSince(null, NOW, TZ), null);
+  assert.equal(daysSince('2026-09-30', NOW, TZ), 0);
+  assert.equal(daysSince('2026-09-01', NOW, TZ), 29);
 });
 
 process.stdout.write('\ndormant: block\n');
@@ -70,7 +73,7 @@ const latest = {
 };
 
 t('dormant people are listed; active people are not; people never recorded are not', () => {
-  const block = dormantBlock({ people, byDay, latestItems: latest, todayPeople: [], now: NOW });
+  const block = dormantBlock({ people, byDay, latestItems: latest, todayPeople: [], now: NOW, timeZone: TZ });
   const names = block.dormant.map((d) => d.name);
   assert.ok(names.includes('已毕业'), names.join(','));
   assert.ok(names.includes('长期休止'));
@@ -80,7 +83,7 @@ t('dormant people are listed; active people are not; people never recorded are n
 });
 
 t('returned people rank first and are flagged separately (that is the item most worth seeing)', () => {
-  const block = dormantBlock({ people, byDay, latestItems: latest, todayPeople: ['back'], now: NOW });
+  const block = dormantBlock({ people, byDay, latestItems: latest, todayPeople: ['back'], now: NOW, timeZone: TZ });
   assert.equal(block.dormant[0].name, '回来了', 'the returned one must rank first: ' + block.dormant.map((d) => d.name).join(','));
   assert.equal(block.returnees.length, 1);
   assert.match(block.markdown, /可能有动静了/);
@@ -88,7 +91,7 @@ t('returned people rank first and are flagged separately (that is the item most 
 });
 
 t('markdown shape: heading, months, and each person\'s latest content with its link', () => {
-  const block = dormantBlock({ people, byDay, latestItems: latest, now: NOW });
+  const block = dormantBlock({ people, byDay, latestItems: latest, now: NOW, timeZone: TZ });
   assert.match(block.markdown, /^## 🌙 停止活动/);
   const grad = block.dormant.find((d) => d.name === '已毕业');
   assert.equal(grad.months, 6.7, 'about 6.7 months, actually ' + grad.months);
@@ -100,7 +103,7 @@ t('markdown shape: heading, months, and each person\'s latest content with its l
 t('the people and item caps take effect, and the overflow says how many more there are', () => {
   const many = Array.from({ length: 20 }, (_, i) => ({ id: 'p' + i, name: '人' + i, agency: 'B' }));
   const manyByDay = Object.fromEntries(many.map((p) => [p.id, { '2026-01-01': 1 }]));
-  const block = dormantBlock({ people: many, byDay: manyByDay, latestItems: {}, rules: { maxPeople: 5 }, now: NOW });
+  const block = dormantBlock({ people: many, byDay: manyByDay, latestItems: {}, rules: { maxPeople: 5 }, now: NOW, timeZone: TZ });
   assert.equal(block.dormant.length, 5);
   assert.equal(block.hidden, 15);
   assert.match(block.markdown, /另有 15 位/);
@@ -116,12 +119,12 @@ t('the people and item caps take effect, and the overflow says how many more the
 });
 
 t('switching it off produces nothing at all', () => {
-  const block = dormantBlock({ people, byDay, latestItems: latest, rules: { enabled: false }, now: NOW });
+  const block = dormantBlock({ people, byDay, latestItems: latest, rules: { enabled: false }, now: NOW, timeZone: TZ });
   assert.deepEqual(block, { dormant: [], returnees: [], markdown: '', skipped: 0 });
 });
 
 t('an empty roster does not blow up', () => {
-  const block = dormantBlock({ people: [], byDay: {}, now: NOW });
+  const block = dormantBlock({ people: [], byDay: {}, now: NOW, timeZone: TZ });
   assert.equal(block.markdown, '');
   assert.deepEqual(block.dormant, []);
 });

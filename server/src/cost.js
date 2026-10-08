@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
+import { dayAxisOf, dayOfInstant, effectiveTimeZone } from './day.js';
 
 const FILE = 'cost.jsonl';
 const KEEP_LINES = 5000; // Beyond this only the most recent lines are kept (one line per run; a few thousand covers a year)
@@ -82,21 +83,37 @@ export function loadUsage(cfg) {
   return { rows, badLines };
 }
 
-const dayOf = (v) => new Date(v).toISOString().slice(0, 10);
+/**
+ * The day a usage record belongs to.
+ *
+ * The record's `at` is an ISO instant, so it is reduced to a day with the same rule the rest of the
+ * product uses (day.js) — the cost ledger's "today" has to be the same today the report and the archive
+ * mean, or a spend made late in the local evening is billed to the wrong day. A record without a
+ * readable timestamp is 'unknown', which is reported as such rather than folded into a day.
+ */
+function dayOfRow(v, timeZone) {
+  const day = dayOfInstant(v, timeZone);
+  if (day) return day;
+  // An unreadable `at` is not a day. Falling back to the raw first ten characters would print a date
+  // that was never derived from anything (it is only kept for records the log itself wrote, which are
+  // always full ISO instants, so this path is a corrupt line, not a shape we support).
+  return 'unknown';
+}
 
 /**
  * Summary: today / per day / per model.
  * Note that rows with known=false are counted separately — "usage unavailable" and "usage was 0"
  * are two different things.
  */
-export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
-  const today = dayOf(now);
+export function summarizeUsage(rows, { days = 14, now = new Date(), timeZone = undefined, cfg = null } = {}) {
+  const tz = effectiveTimeZone(cfg, timeZone);
+  const today = dayOfInstant(now, tz);
   const byDay = new Map();
   const byModel = new Map();
-  const out = { today: { tokens: 0, calls: 0 }, total: { tokens: 0, calls: 0 }, unknown: 0, days: [], models: [] };
+  const out = { today: { tokens: 0, calls: 0 }, total: { tokens: 0, calls: 0 }, unknown: 0, days: [], models: [], timeZone: tz };
 
   for (const row of rows ?? []) {
-    const day = String(row.at ?? '').slice(0, 10) || 'unknown';
+    const day = row?.at ? dayOfRow(row.at, tz) : 'unknown';
     const tokens = Number(row.totalTokens ?? 0) || 0;
     const calls = Number(row.calls ?? 1) || 1;
     out.total.tokens += tokens;
@@ -118,7 +135,12 @@ export function summarizeUsage(rows, { days = 14, now = new Date() } = {}) {
     m.calls += calls;
   }
 
-  const cutoff = dayOf(new Date(Date.parse(today + 'T00:00:00Z') - (days - 1) * 86400000));
+  // The window is a list of calendar days ending today (day.js), not a millisecond subtraction: a DST
+  // day is 23 or 25 hours long and `today - (days-1) * 86400000` lands on the wrong day twice a year.
+  // The answer stays **sparse** — only days that actually have usage — because a cost ledger with 14
+  // zero rows in it reads like 14 days of recorded zero spend.
+  const window = dayAxisOf(days, { endDay: today, timeZone: tz });
+  const cutoff = window[0];
   out.days = [...byDay.values()].filter((d) => d.day >= cutoff).sort((a, b) => a.day.localeCompare(b.day));
   out.models = [...byModel.values()].sort((a, b) => b.tokens - a.tokens);
   return out;

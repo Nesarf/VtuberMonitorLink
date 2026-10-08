@@ -26,6 +26,8 @@ const t = (name, fn) => {
 };
 
 const NOW = new Date('2026-03-30T12:00:00Z');
+// The fixture's day keys are UTC days; pinning the rule to UTC keeps this test off the machine's zone.
+const TZ = 'UTC';
 /** Build a timeline "one item every gap days starting at startDay" */
 function daily({ from = '2026-03-01', until = '2026-03-30', gap = 1, count = 1 } = {}) {
   const out = {};
@@ -41,7 +43,7 @@ function daily({ from = '2026-03-01', until = '2026-03-30', gap = 1, count = 1 }
 process.stdout.write('\nsilence: baseline\n');
 
 t('daily poster: gap 1 day, last active is today', () => {
-  const b = baselineOf(daily(), { now: NOW });
+  const b = baselineOf(daily(), { now: NOW, timeZone: TZ });
   assert.equal(b.gapDays, 1);
   assert.equal(b.lastDay, '2026-03-30');
   assert.equal(b.quietDays, 0);
@@ -50,27 +52,27 @@ t('daily poster: gap 1 day, last active is today', () => {
 
 t('monthly poster: a gap of about 30 days widens the tolerance to their own rhythm (the maxDays cap must not override it)', () => {
   const sparse = { '2026-01-05': 1, '2026-02-04': 1, '2026-03-06': 1 };
-  const b = baselineOf(sparse, { now: NOW });
+  const b = baselineOf(sparse, { now: NOW, timeZone: TZ });
   assert.ok(b.gapDays >= 29 && b.gapDays <= 31, 'the gap should be about 30 days, actual ' + b.gapDays);
   const tol = toleranceDays(b, SILENCE_DEFAULTS);
   assert.equal(tol, 75, '30 days x 2.5 = 75 days (maxDays=90 is only a fallback and must not clamp a monthly poster down to 21 days); actual ' + tol);
 });
 
 t('a single day of records -> the rhythm cannot be estimated -> stay silent (better no report than a false alarm)', () => {
-  const b = baselineOf({ '2026-03-29': 2 }, { now: NOW });
+  const b = baselineOf({ '2026-03-29': 2 }, { now: NOW, timeZone: TZ });
   assert.equal(b.gapDays, null);
   assert.equal(toleranceDays(b, SILENCE_DEFAULTS), null);
   assert.equal(b.lastDay, '2026-03-29');
 });
 
 t('no history -> no baseline, hence no tolerance range', () => {
-  const b = baselineOf({}, { now: NOW });
+  const b = baselineOf({}, { now: NOW, timeZone: TZ });
   assert.equal(b.lastDay, null);
   assert.equal(toleranceDays(b, SILENCE_DEFAULTS), null);
 });
 
 t('the tolerance range is clamped by the floor: a daily poster is not reported for a 1-day gap', () => {
-  const b = baselineOf(daily({ until: '2026-03-29' }), { now: NOW });
+  const b = baselineOf(daily({ until: '2026-03-29' }), { now: NOW, timeZone: TZ });
   const tol = toleranceDays(b, SILENCE_DEFAULTS);
   assert.equal(tol, SILENCE_DEFAULTS.minDays, 'should be clamped by minDays, actual ' + tol);
 });
@@ -93,6 +95,7 @@ t('daily poster stopped for 4 days -> warn; stopped for 6 days (>= 2x tolerance)
     },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(res.person.length, 1, JSON.stringify(res.person));
   assert.equal(res.person[0].personId, 'p1');
@@ -101,23 +104,23 @@ t('daily poster stopped for 4 days -> warn; stopped for 6 days (>= 2x tolerance)
   assert.match(res.person[0].reason, /已 4 天没有新条目/);
   assert.equal(res.checked, 2);
 
-  const worse = detectSilence({ byDay: { p1: daily({ until: '2026-03-24' }) }, people, now: NOW });
+  const worse = detectSilence({ byDay: { p1: daily({ until: '2026-03-24' }) }, people, now: NOW, timeZone: TZ });
   assert.equal(worse.person[0].quietDays, 6);
   assert.equal(worse.person[0].level, 'high', 'silence >= 2x the tolerance range counts as high');
 });
 
 t('the longer the stop the higher the level (>= 2x the tolerance range counts as high)', () => {
-  const res = detectSilence({ byDay: { p1: daily({ until: '2026-03-20' }) }, people, now: NOW });
+  const res = detectSilence({ byDay: { p1: daily({ until: '2026-03-20' }) }, people, now: NOW, timeZone: TZ });
   assert.equal(res.person[0].quietDays, 10);
   assert.equal(res.person[0].level, 'high');
 });
 
 t('someone with only one day of records is not reported, but is counted as "no baseline" (so you know it was not judged rather than found fine)', () => {
-  const res = detectSilence({ byDay: { solo: { '2026-03-29': 1 } }, people, now: NOW });
+  const res = detectSilence({ byDay: { solo: { '2026-03-29': 1 } }, people, now: NOW, timeZone: TZ });
   assert.equal(res.person.length, 0);
   assert.equal(res.checked, 0, 'if the rhythm cannot be estimated it must not count towards "checked"');
   assert.equal(res.skippedNoBaseline, 1);
-  const none = detectSilence({ byDay: {}, people, now: NOW });
+  const none = detectSilence({ byDay: {}, people, now: NOW, timeZone: TZ });
   assert.equal(none.skippedNoBaseline, 0);
   // summary() is a diagnostic/log line (nothing in the UI renders it), so it is English
   assert.match(silenceSummary(none), /no baseline available/);
@@ -125,15 +128,15 @@ t('someone with only one day of records is not reported, but is counted as "no b
 
 t('a monthly poster quiet for 24 days must not be reported, 87 days must be (the threshold follows their own rhythm)', () => {
   const sparse = { '2026-01-05': 1, '2026-02-04': 1, '2026-03-06': 1 };
-  const early = detectSilence({ byDay: { p1: sparse }, people, now: NOW });
+  const early = detectSilence({ byDay: { p1: sparse }, people, now: NOW, timeZone: TZ });
   assert.equal(early.person.length, 0, 'quiet for 24 days (tolerance 75 days) must not be reported, actual ' + JSON.stringify(early.person));
-  const late = detectSilence({ byDay: { p1: sparse }, people, now: new Date('2026-06-01T00:00:00Z') });
+  const late = detectSilence({ byDay: { p1: sparse }, people, now: new Date('2026-06-01T00:00:00Z'), timeZone: TZ });
   assert.equal(late.person.length, 1, 'quiet for 87 days is when it should be reported');
   assert.ok(late.person[0].quietDays > 75);
 });
 
 t('turning the switch off disables detection entirely', () => {
-  const res = detectSilence({ byDay: { p1: daily({ until: '2026-03-01' }) }, people, now: NOW, rules: { enabled: false } });
+  const res = detectSilence({ byDay: { p1: daily({ until: '2026-03-01' }) }, people, now: NOW, timeZone: TZ, rules: { enabled: false } });
   assert.deepEqual(res, { person: [], group: [], checked: 0, skippedNoBaseline: 0 });
 });
 
@@ -149,6 +152,7 @@ t('3 of 4 members of one agency quiet for >= 5 days at the same time -> an agenc
     },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(res.group.length, 1, JSON.stringify(res.group));
   assert.equal(res.group[0].agency, 'Box-A');
@@ -163,12 +167,14 @@ t('everyone quiet -> high; only one or two quiet -> not an agency-level signal',
     byDay: { p1: daily({ until: '2026-03-24' }), p2: daily({ until: '2026-03-24' }), p3: daily({ until: '2026-03-24' }) },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(all.group[0].level, 'high');
   const few = detectSilence({
     byDay: { p1: daily({ until: '2026-03-24' }), p2: daily(), p3: daily(), p4: daily() },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(few.group.length, 0, 'one person being quiet is normal and must not be reported as agency level');
 });
@@ -178,6 +184,7 @@ t('an "agency" with too few members does not take part in agency-level judgement
     byDay: { p1: daily({ until: '2026-03-20' }), p2: daily({ until: '2026-03-20' }) },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(res.group.length, 0);
   assert.equal(res.person.length, 2, 'personal silence is still reported');
@@ -188,6 +195,7 @@ t('people with no agency filled in do not take part in agency-level judgement (b
     byDay: { solo: daily({ from: '2026-02-01', until: '2026-03-01' }) },
     people,
     now: NOW,
+    timeZone: TZ,
   });
   assert.equal(res.group.length, 0);
   assert.equal(res.person.length, 1);

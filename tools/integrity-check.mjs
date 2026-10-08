@@ -1209,6 +1209,160 @@ try {
   problems.push(`could not read the URL policy surface: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5m. one definition of "the day for this timestamp"
+//
+// The finding this section answers (v1.0.5): the archive derived an item's day with a **UTC** calendar
+// day while the Calendar feature worked in the user's **configured** zone, so the same event belonged to
+// two different days depending on which part of the product you asked. Measured on the owner's archive:
+// 62 of the 126 items that carry their own timestamp fall on a different day under Asia/Shanghai.
+//
+// tools/archive-day-test.mjs proves the behaviour (and proves each assertion can fail, through mutation
+// controls — including the control that the old UTC rule gives a different day for the 23:30 case).
+// What a test cannot prove is that the rule stays **single**: the way this defect comes back is a new
+// module writing `toISOString().slice(0, 10)` again, or an old one quietly keeping a copy. So this
+// section checks structure:
+//   1) **one implementation.** The day rule lives in server/src/day.js and nowhere else. Detected by the
+//      two shapes a second copy actually takes — `new Date(x).toISOString().slice(0,10)` and
+//      `...toISOString().slice(0,16)` — plus `getUTCDate()`. Comment lines are stripped first, because
+//      the modules that explain this defect necessarily quote the shape they removed, and a detector that
+//      fires on the explanation is a detector people learn to ignore.
+//   2) **every caller named.** DAY_KEY_CALLERS in day.js lists each module that derives a day, and each
+//      row's `via` has to be true of the file it names (day.js API imported, or a day treated as an
+//      opaque string). Same shape as the URL-policy inventory in §5l and the browser-profile section 5g.
+//   3) **no unnamed deriver.** Every file under server/src that derives a day key appears in the caller
+//      list, in the exempt list, or is day.js itself.
+//   4) the controls: both detectors have to fire on the shapes they are looking for, and the day rule has
+//      to be reachable from the modules that claim to use it.
+try {
+  const dayPath = path.join(ROOT, 'server/src/day.js');
+  if (!fs.existsSync(dayPath)) {
+    problems.push('server/src/day.js is gone: the day rule has no home');
+  } else {
+    const daySrc = fs.readFileSync(dayPath, 'utf8');
+    const srcDir = path.join(ROOT, 'server/src');
+    const walk = (d) =>
+      fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+        const p = path.join(d, e.name);
+        return e.isDirectory() ? walk(p) : e.name.endsWith('.js') ? [p] : [];
+      });
+    const files = walk(srcDir).map((p) => ({
+      rel: path.relative(ROOT, p).replace(/\\/g, '/'),
+      text: fs.readFileSync(p, 'utf8'),
+    }));
+
+    // The detector, and the stripper that keeps it off the prose about the defect. A trailing `// ...`
+    // comment is removed too; a line that is *only* a comment loses its whole content.
+    const stripComments = (t) =>
+      t
+        .split(/\r?\n/)
+        .map((l) => {
+          const s = l.trim();
+          if (s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) return '';
+          return l.replace(/\/\/.*$/, '');
+        })
+        .join('\n');
+    const DAY_DERIVE_RE = /toISOString\(\)\.slice\(0,\s*1[06]\)|getUTCDate\(\)/;
+    const deriveLines = (t) =>
+      stripComments(t)
+        .split(/\r?\n/)
+        .filter((l) => DAY_DERIVE_RE.test(l));
+
+    const rows = [...daySrc.matchAll(/\{ *file: '([^']+)', *via: '([^']+)'/g)].map((m) => ({ file: m[1], via: m[2] }));
+    const declared = new Set(rows.map((r) => r.file));
+    const exemptBlock = /export const DAY_KEY_EXEMPT = \[([\s\S]*?)\n\];/.exec(daySrc)?.[1] ?? '';
+    const exempt = new Set([...exemptBlock.matchAll(/file: '([^']+)'/g)].map((m) => m[1]));
+
+    // (1) + (3): nothing outside day.js derives a day, unless it is named
+    const stray = files
+      .filter((f) => f.rel !== 'server/src/day.js')
+      .filter((f) => deriveLines(f.text).length > 0)
+      .filter((f) => !declared.has(f.rel) && !exempt.has(f.rel))
+      .map((f) => `${f.rel} (${deriveLines(f.text)[0].trim().slice(0, 70)})`);
+    if (stray.length) {
+      problems.push(
+        `these modules derive a calendar day without naming day.js: ${stray.join(', ')} — ` +
+          'the day rule lives in server/src/day.js alone, and a second derivation is how the archive and the calendar drifted apart'
+      );
+    } else {
+      process.stdout.write(`   [ok]   no day derivation outside day.js among ${files.length} file(s)\n`);
+    }
+
+    // (2): every declared caller really reaches the rule by the route it claims
+    if (!/export const DAY_KEY_CALLERS = \[/.test(daySrc)) {
+      problems.push('DAY_KEY_CALLERS is gone from day.js, so nothing states who derives a day');
+    } else if (rows.length < 8) {
+      problems.push(`the day-key caller inventory shrank to ${rows.length} rows: every day derivation has to be named`);
+    } else {
+      const bad = [];
+      for (const row of rows) {
+        const p = path.join(ROOT, row.file);
+        if (!fs.existsSync(p)) {
+          bad.push(`${row.file} (no such file)`);
+          continue;
+        }
+        const text = fs.readFileSync(p, 'utf8');
+        // day.js names itself (the rule is derived there, by definition); every other row has to show the
+        // import and a use, because that is the difference between "uses the rule" and "mentions it".
+        // A `strings` / `sub-day` row is a claim that the file does NOT derive a day, so it is checked
+        // against that claim rather than waved through. Without this the `strings` label would be a way
+        // to keep a real second derivation out of the detector's sight: adding one to a file already
+        // listed as `strings` used to leave the check green.
+        const derives = deriveLines(text).length > 0;
+        const ok =
+          row.file === 'server/src/day.js'
+            ? /export function dayOfInstant\(/.test(text)
+            : row.via === 'day.js'
+              ? /from '\.\/day\.js'/.test(text) &&
+                /dayOfInstant|dayAxisOf|daysBetweenDays|todayIn|dayInTz|asDay|dayStamp|effectiveTimeZone|ruleFor|bucketRule/.test(text)
+              : row.via === 'strings' || row.via === 'sub-day'
+                ? !derives
+                : false;
+        if (!ok) bad.push(`${row.file} (claims via '${row.via}', which is not true of the file)`);
+      }
+      // (2b) the other direction, and the one that actually bit while this was being written: a module
+      // that derives days *through day.js* leaves no `toISOString().slice` behind, so the detector above
+      // cannot see it. Any file importing the rule is therefore required to be in the inventory too —
+      // otherwise "delete the row" would be a silent way to make a consumer invisible.
+      const importsRule = files.filter((f) => f.rel !== 'server/src/day.js' && /from '\.\/day\.js'/.test(f.text)).map((f) => f.rel);
+      const undeclared = importsRule.filter((f) => !declared.has(f));
+      if (undeclared.length) {
+        problems.push(
+          `these modules import the day rule but are not in DAY_KEY_CALLERS: ${undeclared.join(', ')} — ` +
+            'a caller that is not named is a caller the inventory stops covering'
+        );
+      } else if (!bad.length) {
+        process.stdout.write(`   [ok]   all ${importsRule.length} module(s) importing the rule are named in the inventory
+`);
+      }
+      if (bad.length) problems.push(`the day-key inventory names callers that do not use it: ${bad.join(', ')}`);
+      else process.stdout.write(`   [ok]   all ${rows.length} declared day-deriving modules reach the rule by the route they declare\n`);
+    }
+
+    // (4) the controls: both detectors must fire on the shapes they look for
+    const fixtureDerive = "const day = new Date(t).toISOString().slice(0, 10);";
+    if (!DAY_DERIVE_RE.test(stripComments(fixtureDerive))) {
+      problems.push('the "a day is derived outside day.js" detector does not fire on a UTC slice');
+    } else if (deriveLines(fixtureDerive).length === 0) {
+      problems.push('the day-derivation detector fires but the line collector drops the hit, so nothing would be reported');
+    } else {
+      process.stdout.write('   [ok]   (and the control, a UTC day slice outside day.js, is caught)\n');
+    }
+    const commentOnly = "// the old rule was new Date(t).toISOString().slice(0, 10)";
+    if (deriveLines(commentOnly).length !== 0) {
+      problems.push('the day-derivation detector fires on a comment, so the modules that explain the defect would be reported as violations');
+    } else {
+      process.stdout.write('   [ok]   (and the control, the same slice quoted in a comment, is not)\n');
+    }
+    // The rule itself has to exist and be the one the callers import: a rename that leaves the callers
+    // importing a name nobody exports is caught by section 1, but a *stub* would not be.
+    if (!/export function dayOfInstant\(value, timeZone\)/.test(daySrc) || !/Intl\.DateTimeFormat\('en-CA'/.test(daySrc)) {
+      problems.push('dayOfInstant is not the zone-aware implementation day.js documents (is it a stub?)');
+    }
+  }
+} catch (e) {
+  problems.push(`could not read the day-rule surface: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── result
 
 process.stdout.write('\n6. result\n');

@@ -17,6 +17,7 @@
 // The result is an "alert", not a "conclusion": this module only puts the suspicious absences on the
 // table, the judgement is left to a human (it may be a planned holiday, or it may be real trouble).
 import { AGENCY_HOSTS, urlHost } from './observe.js';
+import { dayOfInstant, daysBetweenDays, effectiveTimeZone } from './day.js';
 
 /** How many days of silence are tolerated before alerting when a person had not a single item that day (by default inferred from their own rhythm; these are the fallback floor/ceiling) */
 export const SILENCE_DEFAULTS = {
@@ -29,8 +30,10 @@ export const SILENCE_DEFAULTS = {
   minMembers: 3, // an "agency" with fewer members than this does not take part in agency-level judgement
 };
 
-const DAY_MS = 86400000;
-const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
+// The day rule comes from day.js — the same one the archive and the calendar use. This module compares
+// day keys against "today", so it has to read both ends of that comparison in one calendar: a UTC
+// "today" against local day keys (or the reverse) is off by one for part of every day, which is enough
+// to report a person as quiet a day early or a day late.
 
 /**
  * From "person -> { day: item count }" compute their **rhythm** and last active time.
@@ -44,20 +47,24 @@ const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
  *
  * @returns {{mean:number|null, gapDays:number|null, lastDay:string|null, quietDays:number|null, activeDays:number, items:number}}
  */
-export function baselineOf(byDayForPerson, { now = new Date(), sampleDays = SILENCE_DEFAULTS.sampleDays } = {}) {
+export function baselineOf(byDayForPerson, { now = new Date(), sampleDays = SILENCE_DEFAULTS.sampleDays, timeZone = undefined } = {}) {
   const entries = Object.entries(byDayForPerson ?? {}).filter(([, n]) => Number(n) > 0);
   const items = entries.reduce((a, [, n]) => a + Number(n), 0);
   if (!entries.length) return { mean: null, gapDays: null, lastDay: null, quietDays: null, activeDays: 0, items: 0 };
 
   const days = entries.map(([d]) => d).sort();
   const lastDay = days.at(-1);
-  const quietDays = Math.max(0, Math.round((Date.parse(dayOf(now)) - Date.parse(lastDay)) / DAY_MS));
+  // Calendar-day arithmetic (day.js), never a duration: a DST day is 23 or 25 hours long, and dividing a
+  // millisecond difference by 86400000 rounds "yesterday" into "today" twice a year.
+  const quietDays = Math.max(0, daysBetweenDays(lastDay, dayOfInstant(now, timeZone)) ?? 0);
   const recent = days.slice(-Math.max(2, Number(sampleDays) || SILENCE_DEFAULTS.sampleDays));
 
   let gapDays = null;
   if (recent.length >= 2) {
-    const span = (Date.parse(recent.at(-1)) - Date.parse(recent[0])) / DAY_MS;
-    gapDays = Number((span / (recent.length - 1)).toFixed(2));
+    // The span between the first and last active day, in whole calendar days (day.js) — the same
+    // reasoning as quietDays above: this number is the person's rhythm, and a DST week must not bend it.
+    const span = daysBetweenDays(recent[0], recent.at(-1));
+    if (span !== null) gapDays = Number((span / (recent.length - 1)).toFixed(2));
   }
 
   return {
@@ -86,10 +93,12 @@ export function toleranceDays(baseline, rules = SILENCE_DEFAULTS) {
  * @param {Array}  o.people    config.people (used to get names and agency)
  * @param {object} o.rules     config.silence
  * @param {Date}   o.now
+ * @param {string} [o.timeZone] the configured zone (day.js resolves it when omitted)
  * @returns {{person:Array, group:Array, checked:number, skippedNoBaseline:number}}
  */
-export function detectSilence({ byDay = {}, people = [], rules = {}, now = new Date() } = {}) {
+export function detectSilence({ byDay = {}, people = [], rules = {}, now = new Date(), timeZone = undefined, cfg = null } = {}) {
   const r = { ...SILENCE_DEFAULTS, ...rules };
+  const tz = effectiveTimeZone(cfg, timeZone);
   const out = { person: [], group: [], checked: 0, skippedNoBaseline: 0 };
   if (!r.enabled) return out;
 
@@ -97,7 +106,7 @@ export function detectSilence({ byDay = {}, people = [], rules = {}, now = new D
   const rows = [];
 
   for (const [personId, days] of Object.entries(byDay)) {
-    const baseline = baselineOf(days, { now, sampleDays: r.sampleDays });
+    const baseline = baselineOf(days, { now, sampleDays: r.sampleDays, timeZone: tz });
     const tol = toleranceDays(baseline, r);
     if (!baseline.lastDay) continue;
     const person = byId.get(String(personId));

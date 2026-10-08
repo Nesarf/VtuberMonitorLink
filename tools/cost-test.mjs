@@ -71,6 +71,9 @@ t('returns empty when there is no file, does not throw', () => {
 process.stdout.write('\ncost: summary\n');
 
 const NOW = new Date('2026-03-30T12:00:00Z');
+// The fixture's instants are UTC; the rule is pinned to UTC so the buckets do not depend on the machine
+// this test runs on (00:00Z is already the next day east of UTC).
+const TZ = 'UTC';
 const rows = [
   { at: '2026-03-30T01:00:00Z', provider: 'deepseek', model: 'chat', totalTokens: 1000, known: true, calls: 1 },
   { at: '2026-03-30T05:00:00Z', provider: 'deepseek', model: 'chat', totalTokens: 500, known: true, calls: 1 },
@@ -80,7 +83,7 @@ const rows = [
 ];
 
 t('today / per-day / per-model: every bucket adds up correctly', () => {
-  const s = summarizeUsage(rows, { days: 7, now: NOW });
+  const s = summarizeUsage(rows, { days: 7, now: NOW, timeZone: TZ });
   assert.equal(s.today.tokens, 1500, 'today should only hold the two known usage entries from 3-30');
   assert.equal(s.today.calls, 3, 'calls is "how many times we actually called", including the one whose usage was unavailable (it was still a call)');
   assert.equal(s.total.tokens, 1500 + 2000 + 9999);
@@ -95,7 +98,7 @@ t('today / per-day / per-model: every bucket adds up correctly', () => {
 });
 
 t('outside the window stays out of days, but still counts towards the total (the total is "how much was spent overall")', () => {
-  const s = summarizeUsage(rows, { days: 2, now: NOW });
+  const s = summarizeUsage(rows, { days: 2, now: NOW, timeZone: TZ });
   assert.ok(!s.days.some((d) => d.day === '2026-02-01'));
   assert.equal(s.total.tokens, 13499);
 });
@@ -103,7 +106,7 @@ t('outside the window stays out of days, but still counts towards the total (the
 process.stdout.write('\ncost: budget\n');
 
 t('no budget set: no blocking, no over-limit report, and it says "not set"', () => {
-  const s = summarizeUsage(rows, { now: NOW });
+  const s = summarizeUsage(rows, { now: NOW, timeZone: TZ });
   const b = budgetStatus({ llm: {} }, s, { now: NOW });
   assert.equal(b.limit, 0);
   assert.equal(b.exceeded, false);
@@ -112,7 +115,7 @@ t('no budget set: no blocking, no over-limit report, and it says "not set"', () 
 });
 
 t('budget set: used, remaining and exceeded all come out right; it only warns by default', () => {
-  const s = summarizeUsage(rows, { now: NOW });
+  const s = summarizeUsage(rows, { now: NOW, timeZone: TZ });
   const b = budgetStatus({ llm: { budget: { dailyTokens: 2000 } } }, s, { now: NOW });
   assert.equal(b.used, 1500);
   assert.equal(b.remaining, 500);
@@ -138,7 +141,7 @@ t('over the limit does not turn the remaining amount negative (showing -500 make
 });
 
 t('costSummary renders a readable line (today, budget, unknown usage)', () => {
-  const s = summarizeUsage(rows, { now: NOW });
+  const s = summarizeUsage(rows, { now: NOW, timeZone: TZ });
   const b = budgetStatus({ llm: { budget: { dailyTokens: 2000 } } }, s, { now: NOW });
   const line = costSummary(s, b);
   assert.match(line, /今日 1500 tokens/);

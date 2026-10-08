@@ -10,16 +10,17 @@
 // This module only aggregates, it does not judge: it turns those four things into structured data for a human to read.
 // Pure functions (input byDay + people + a date axis), so the self-test can pin the shape down.
 import { baselineOf, toleranceDays, SILENCE_DEFAULTS } from './silence.js';
+import { dayAxisOf, effectiveTimeZone } from './day.js';
 
-const DAY_MS = 86400000;
-const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
-
-/** Build a date axis (including today), ascending */
-export function dayAxis(days, endDay = null) {
-  const end = endDay ?? dayOf(new Date());
-  const out = [];
-  for (let i = days - 1; i >= 0; i--) out.push(dayOf(Date.parse(end + 'T00:00:00Z') - i * DAY_MS));
-  return out;
+/**
+ * Build a date axis (including today), ascending.
+ *
+ * The axis labels are the same day rule as the buckets they are matched against (day.js), resolved from
+ * the configured zone: an axis ending on the UTC "today" while the archive's keys are local days shows
+ * every member as silent for the first hours of a local day, and the heat map's last column as empty.
+ */
+export function dayAxis(days, endDay = null, { timeZone = undefined, now = new Date() } = {}) {
+  return dayAxisOf(days, { endDay, timeZone, now });
 }
 
 /**
@@ -32,11 +33,11 @@ export function dayAxis(days, endDay = null) {
  * @param {object} o.rules     config.silence (reuses the same rhythm criteria)
  * @param {Date}   o.now
  */
-export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules = {}, now = new Date() } = {}) {
+export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules = {}, now = new Date(), timeZone = undefined } = {}) {
   const r = { ...SILENCE_DEFAULTS, ...rules };
   const rows = members.map((p) => {
     const days = byDay[String(p.id)] ?? {};
-    const baseline = baselineOf(days, { now, sampleDays: r.sampleDays });
+    const baseline = baselineOf(days, { now, sampleDays: r.sampleDays, timeZone });
     const tol = toleranceDays(baseline, r);
     const counts = axis.map((d) => Number(days[d] ?? 0));
     const active = counts.filter((n) => n > 0).length;
@@ -111,8 +112,9 @@ export function agencyBlock({ agency, members = [], byDay = {}, axis = [], rules
  * Aggregate all followed people by agency.
  * People with no agency go into an explicit "ungrouped" block (never silently dropped).
  */
-export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now = new Date(), endDay = null } = {}) {
-  const axis = dayAxis(days, endDay);
+export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now = new Date(), endDay = null, timeZone = undefined, cfg = null } = {}) {
+  const tz = effectiveTimeZone(cfg, timeZone);
+  const axis = dayAxis(days, endDay, { timeZone: tz, now });
   const byAgency = new Map();
   const ungrouped = [];
   for (const p of people ?? []) {
@@ -125,7 +127,7 @@ export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now 
     byAgency.get(a).push(p);
   }
   const groups = [...byAgency.entries()]
-    .map(([agency, members]) => agencyBlock({ agency, members, byDay, axis, rules, now }))
+    .map(([agency, members]) => agencyBlock({ agency, members, byDay, axis, rules, now, timeZone: tz }))
     .sort((a, b) => b.totals.items - a.totals.items || String(a.agency).localeCompare(String(b.agency)));
 
   return {
@@ -135,7 +137,7 @@ export function groupView({ byDay = {}, people = [], days = 30, rules = {}, now 
     axis,
     groups,
     ungrouped: ungrouped.length
-      ? agencyBlock({ agency: null, members: ungrouped, byDay, axis, rules, now })
+      ? agencyBlock({ agency: null, members: ungrouped, byDay, axis, rules, now, timeZone: tz })
       : null,
     people: (people ?? []).length,
   };

@@ -38,6 +38,7 @@ import { TARGET_KINDS, DEFAULT_RULES, allBaselines, baselineHealthSnapshot, chec
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
+import { todayIn } from './day.js';
 import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
 import { checkedChatRequest } from './llm.js';
@@ -69,6 +70,8 @@ import {
   openArchive,
   peopleSeries,
   queryItems,
+  rebuildAggregates,
+  rebuildPlan,
   recentSeries,
   series,
   stats as archiveStats,
@@ -1079,7 +1082,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       null,
       2
     );
-    res.setHeader('content-disposition', `attachment; filename="vml-config-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.setHeader('content-disposition', `attachment; filename="vml-config-${todayIn(cfg)}.json"`);
     res.type('application/json; charset=utf-8').send(body);
   });
 
@@ -1212,7 +1215,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const format = ['xlsx', 'docx', 'md', 'html'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
     const data = latestIntel(cfg, Number(req.query.limit ?? 500));
     const items = applyFeatures(data.items ?? [], loadFeatureCache(cfg));
-    const stamp = new Date().toISOString().slice(0, 10);
+    const stamp = todayIn(cfg);
     if (format === 'html') {
       res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.html"`);
       return res.type('text/html; charset=utf-8').send(htmlShell(`情报集 ${stamp}`, itemsToMarkdown(items, { title: '情报集' })));
@@ -1535,7 +1538,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         items: picked,
         title: `${person?.name ?? scope.id} 的情报`,
         subtitle: person?.agency ?? '',
-        contentDate: new Date().toISOString().slice(0, 10),
+        contentDate: todayIn(cfg),
       };
     }
     if (kind === 'day') {
@@ -1810,7 +1813,39 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     let db = null;
     try {
       db = openArchive(cfg);
-      res.json({ ok: true, ...archiveStats(db), file: path.basename(archivePath(cfg)) });
+      // `cfg` decides the rule the counts are reported under, and the answer carries the rule it read
+      // (`rule`/`storedRules`/`itemRules`): an archive whose days are still the old UTC ones says so
+      // here instead of looking like an archive whose numbers are simply small.
+      res.json({ ok: true, ...archiveStats(db, { cfg }), file: path.basename(archivePath(cfg)) });
+    } catch (e) {
+      res.json({ ok: false, error: e.message });
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  // Recompute the derived aggregates under the configured day rule. `?plan=1` reports what would change
+  // without changing anything, which is the form a UI (or a nervous owner) should call first.
+  //
+  // A run does this on its own (see archiveRun), so this route exists for the two cases a run cannot
+  // cover: an upgrade where the owner wants the history brought forward now rather than at the next
+  // scheduled run, and a look at what a rebuild would do before letting it.
+  app.post('/api/archive/rebuild', (req, res) => {
+    const cfg = getConfig();
+    const dryRun = String(req.query.plan ?? req.body?.plan ?? '') === '1';
+    let db = null;
+    try {
+      db = openArchive(cfg);
+      if (dryRun) {
+        res.json({ ok: true, plan: rebuildPlan(db, { cfg }), file: path.basename(archivePath(cfg)) });
+        return;
+      }
+      const rebuilt = rebuildAggregates(db, { cfg });
+      res.json({ ok: true, ...rebuilt, file: path.basename(archivePath(cfg)) });
     } catch (e) {
       res.json({ ok: false, error: e.message });
     } finally {
@@ -1958,7 +1993,7 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const days = Math.max(1, Math.min(90, Number(req.query.days ?? 14)));
     try {
       const { rows, badLines } = loadUsage(cfg);
-      const summary = summarizeUsage(rows, { days });
+      const summary = summarizeUsage(rows, { days, cfg });
       const budget = budgetStatus(cfg, summary);
       res.json({ ok: true, ...summary, budget, badLines, summary: costSummary(summary, budget) });
     } catch (e) {
@@ -1976,13 +2011,14 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     let db = null;
     try {
       db = openArchive(cfg);
-      const series = peopleSeries(db, { days });
+      const series = peopleSeries(db, { days, cfg });
       const view = groupView({
         byDay: series.byDay,
         people: cfg.people ?? [],
         days,
         rules: cfg.silence ?? {},
         now: new Date(),
+        cfg,
       });
       res.json({ ok: true, ...view, hasAgency: view.groups.length > 0 });
     } catch (e) {
@@ -2005,12 +2041,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     let db = null;
     try {
       db = openArchive(cfg);
-      const series = peopleSeries(db, { days });
+      const series = peopleSeries(db, { days, cfg });
       const result = detectSilence({
         byDay: series.byDay,
         people: cfg.people ?? [],
         rules: cfg.silence ?? {},
         now: new Date(),
+        cfg,
       });
       res.json({
         ok: true,
@@ -2078,11 +2115,11 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         ok: true,
         range: range || `${days}d`,
         bucket: { minutes: 1440 },
-        daily: series(db, { days }),
-        bySource: series(db, { days, groupBy: 'source' }),
-        people: peopleSeries(db, { days }),
-        keywords: keywordSeries(db, { days, limit: Number(req.query.keywords ?? 12) }),
-        health: healthSeries(db, { days }),
+        daily: series(db, { days, cfg }),
+        bySource: series(db, { days, groupBy: 'source', cfg }),
+        people: peopleSeries(db, { days, cfg }),
+        keywords: keywordSeries(db, { days, limit: Number(req.query.keywords ?? 12), cfg }),
+        health: healthSeries(db, { days, cfg }),
       });
     } catch (e) {
       res.json({ ok: false, error: e.message });
@@ -2125,7 +2162,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const limit = Number(req.body?.limit ?? 500);
     const data = latestIntel(cfg, limit);
-    const r = archiveRun(cfg, { date: data.date ?? new Date().toISOString().slice(0, 10), items: data.items ?? [] });
+    // The fallback is the **local** day, for the same reason the run's own date is (see runner.js): this
+    // day becomes the bucket for every item in the batch that carries no timestamp of its own.
+    const fallbackDay = todayIn(cfg) ?? String(data.date ?? '').slice(0, 10);
+    const r = archiveRun(cfg, { date: data.date ?? fallbackDay, items: data.items ?? [] });
     res.json({ ok: r.ok, ...r });
   });
 

@@ -19,6 +19,9 @@ const t = (name, fn) => {
 };
 
 const NOW = new Date('2026-03-30T23:00:00Z');
+// The fixture's days are UTC days, so the rule that reads them is pinned to UTC: this test must assert
+// the code, not the machine's zone (23:00Z is already the 31st in Asia/Shanghai).
+const TZ = 'UTC';
 const span = (from, until, gap = 1) => {
   const out = {};
   for (let ts = Date.parse(from + 'T00:00:00Z'); ts <= Date.parse(until + 'T00:00:00Z'); ts += gap * 86400000) {
@@ -39,9 +42,9 @@ const people = [
 process.stdout.write('\ngroups: day axis\n');
 
 t('day axis is ascending, includes today, and has the correct length', () => {
-  const axis = dayAxis(5, '2026-03-30');
+  const axis = dayAxis(5, '2026-03-30', { timeZone: TZ });
   assert.deepEqual(axis, ['2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29', '2026-03-30']);
-  assert.equal(dayAxis(1, '2026-03-30').length, 1);
+  assert.equal(dayAxis(1, '2026-03-30', { timeZone: TZ }).length, 1);
 });
 
 process.stdout.write('\ngroups: a single agency\n');
@@ -56,7 +59,7 @@ const byDay = {
 };
 
 t('each member daily count corresponds one-to-one with the day axis (one slot off and the whole heatmap is wrong)', () => {
-  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(10, '2026-03-30'), now: NOW });
+  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(10, '2026-03-30', { timeZone: TZ }), now: NOW, timeZone: TZ });
   const a1 = block.members.find((m) => m.id === 'a1');
   assert.equal(a1.counts.length, 10, 'counts length must equal the axis length');
   assert.deepEqual(a1.counts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 'a daily poster should be 1 on each of the last 10 days');
@@ -66,7 +69,7 @@ t('each member daily count corresponds one-to-one with the day axis (one slot of
 });
 
 t("levels follow each person's own cadence: a daily poster quiet for 4 days is warn; someone with only one day of records is unknown", () => {
-  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
+  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30', { timeZone: TZ }), now: NOW, timeZone: TZ });
   assert.equal(block.members.find((m) => m.id === 'a2').level, 'warn');
   assert.equal(block.members.find((m) => m.id === 'a1').level, 'ok');
   const a4 = block.members.find((m) => m.id === 'a4');
@@ -75,14 +78,14 @@ t("levels follow each person's own cadence: a daily poster quiet for 4 days is w
 });
 
 t('a weekly poster quiet for 7 days is not anomalous (their own cadence is 7 days)', () => {
-  const block = agencyBlock({ agency: 'BOX', members: [people[2]], byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
+  const block = agencyBlock({ agency: 'BOX', members: [people[2]], byDay, axis: dayAxis(30, '2026-03-30', { timeZone: TZ }), now: NOW, timeZone: TZ });
   const a3 = block.members[0];
   assert.ok(a3.gapDays >= 6.5 && a3.gapDays <= 7.5, 'the cadence should be about 7 days, actual ' + a3.gapDays);
   assert.equal(a3.level, 'ok', 'a weekly poster quiet for 7 days should not raise an alarm');
 });
 
 t('co-active days: only days with >= 2 active people count, and each one names who was active', () => {
-  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30'), now: NOW });
+  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 4), byDay, axis: dayAxis(30, '2026-03-30', { timeZone: TZ }), now: NOW, timeZone: TZ });
   assert.ok(block.coActiveDays > 0);
   for (const c of block.coActive) {
     assert.ok(c.count >= 2, JSON.stringify(c));
@@ -100,7 +103,7 @@ t('whole agency quiet: the number of consecutive dead days at the tail of the ax
     a2: span('2026-03-01', '2026-03-18'),
     a3: span('2026-03-01', '2026-03-19'),
   };
-  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 3), byDay: onlyOld, axis: dayAxis(30, '2026-03-30'), now: NOW });
+  const block = agencyBlock({ agency: 'BOX', members: people.slice(0, 3), byDay: onlyOld, axis: dayAxis(30, '2026-03-30', { timeZone: TZ }), now: NOW, timeZone: TZ });
   assert.equal(block.quietStreak, 10, '3-21 through 3-30 is 10 days with nobody moving');
   assert.equal(block.groupSignal.kind, 'all-quiet');
   assert.equal(block.groupSignal.level, 'high');
@@ -112,7 +115,7 @@ t('most people quiet (but not everyone) -> a warn-level agency signal; only one 
     agency: 'BOX',
     members: people.slice(0, 4),
     byDay: { a1: span('2026-03-01', '2026-03-20'), a2: span('2026-03-01', '2026-03-19'), a3: span('2026-03-01', '2026-03-21'), a4: span('2026-03-28', '2026-03-30') },
-    axis: dayAxis(30, '2026-03-30'),
+    axis: dayAxis(30, '2026-03-30', { timeZone: TZ }),
     now: NOW,
   });
   assert.equal(most.silent.length, 3);
@@ -124,7 +127,7 @@ t('most people quiet (but not everyone) -> a warn-level agency signal; only one 
     agency: 'BOX',
     members: people.slice(0, 4),
     byDay: { a1: span('2026-03-01', '2026-03-20'), a2: span('2026-03-28', '2026-03-30'), a3: span('2026-03-28', '2026-03-30'), a4: span('2026-03-28', '2026-03-30') },
-    axis: dayAxis(30, '2026-03-30'),
+    axis: dayAxis(30, '2026-03-30', { timeZone: TZ }),
     now: NOW,
   });
   assert.equal(few.groupSignal, null, 'one person being quiet is normal; no agency signal should appear');
@@ -135,7 +138,7 @@ t('too few members (<minMembers) -> no agency signal', () => {
     agency: 'BOX',
     members: people.slice(0, 2),
     byDay: { a1: span('2026-03-01', '2026-03-20'), a2: span('2026-03-01', '2026-03-19') },
-    axis: dayAxis(30, '2026-03-30'),
+    axis: dayAxis(30, '2026-03-30', { timeZone: TZ }),
     now: NOW,
   });
   assert.equal(block.groupSignal, null);
@@ -145,7 +148,7 @@ t('too few members (<minMembers) -> no agency signal', () => {
 process.stdout.write('\ngroups: multiple agencies\n');
 
 t('split into one block per agency, sorted by item count; people with no agency land in "ungrouped" instead of disappearing', () => {
-  const view = groupView({ byDay, people, days: 30, now: NOW, endDay: '2026-03-30' });
+  const view = groupView({ byDay, people, days: 30, now: NOW, endDay: '2026-03-30', timeZone: TZ });
   assert.deepEqual(view.groups.map((g) => g.agency), ['BOX', 'Other']);
   assert.ok(view.groups[0].totals.items >= view.groups[1].totals.items, 'sorted by item count descending');
   assert.ok(view.ungrouped, 'the ungrouped block must exist');
@@ -156,7 +159,7 @@ t('split into one block per agency, sorted by item count; people with no agency 
 });
 
 t('an empty config does not blow up: 0 watch targets -> an empty view', () => {
-  const view = groupView({ byDay: {}, people: [], days: 7, now: NOW, endDay: '2026-03-30' });
+  const view = groupView({ byDay: {}, people: [], days: 7, now: NOW, endDay: '2026-03-30', timeZone: TZ });
   assert.deepEqual(view.groups, []);
   assert.equal(view.ungrouped, null);
   assert.equal(view.axis.length, 7);

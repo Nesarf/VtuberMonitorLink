@@ -4,8 +4,12 @@ import path from 'node:path';
 import { resolveDir } from './config.js';
 import { diffLines, diffStats, diffHunks } from './diff.js';
 import { buildDocx } from './office.js';
+import { todayIn } from './day.js';
 
-const DATE = () => new Date().toISOString().slice(0, 10);
+// The day a report is filed under is the **local/configured** day (day.js) — the same rule as the
+// archive and the Calendar tab, so a report named 2026-09-16 and the day its items were bucketed into
+// are the same day. `STAMP` stays an absolute UTC instant: it is a uniqueness suffix, not a day.
+const DATE = (cfg) => todayIn(cfg);
 const STAMP = () => new Date().toISOString().replace(/[:.]/g, '-');
 
 export function ensureDirs(cfg) {
@@ -118,7 +122,7 @@ function renderPrimary(cfg, source) {
   return htmlShell(title, md, `由 Vtuber's Monitor Link 生成 · ${source.generatedAt} · ${source.runs.length} 次运行`);
 }
 
-export function saveReport(cfg, { markdown, mode = 'daily', date = DATE() }) {
+export function saveReport(cfg, { markdown, mode = 'daily', date = DATE(cfg) }) {
   const dir = resolveDir(cfg, 'reportsDir');
   fs.mkdirSync(dir, { recursive: true });
   const srcFile = path.join(dir, sourceName(mode, date));

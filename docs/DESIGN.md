@@ -13,6 +13,8 @@
       ├─ Web UI (React + Vite)      configure / run / reports
       └─ Backend (Node)
            ├─ config.js    config read/write (every path and secret lives here)
+           ├─ request-guard.js  the loopback Host/Origin check every API request passes (§15.4)
+           ├─ remote-url.js  the one policy for every address the app fetches (§16)
            ├─ net.js       network layer: proxy (Node fetch does not read the system proxy by default) + resolveBrowserEgress()
            ├─ sources.js   source adapter catalogue (declarative)
            ├─ fetchers/    rss / mediawiki-api / browser (Playwright Firefox) / search-only
@@ -119,6 +121,9 @@ navigation timeout — its control pins that.
 meant a screenshot taken while Tor mode was on went out **direct** — a privacy setting that quietly took a picture
 from this machine's own address.
 
+Where a request goes out (§3 and §6) and whether its address may be fetched at all (§16) are two separate
+decisions; this section is the first, and every path here is subject to the second before a socket is opened.
+
 The UI can probe the common local proxy ports: it tries them one by one and fills in a working address (nothing is hard-coded to a single value).
 
 ## 4. Reports and cadence
@@ -195,6 +200,10 @@ So `net.js` offers three egress settings, and sources and watch targets can each
 
 Plus one hard rule: **loopback addresses always connect directly**. Local Ollama (`127.0.0.1:11434`) and the
 mock LLM used by traversal both live on this machine, so handing them to a proxy only fails.
+
+That rule is about the *route*; whether a loopback address may be fetched at all is a separate decision with its
+own per-entry allowance, and it is off by default — see §16, and §16.2 point (3) for why the Ollama preset carries
+the flag.
 
 ## 7. Watch system / watch
 
@@ -464,3 +473,195 @@ rather than a data defect, so the UI does not treat "no circle" as an anomaly.
 Details (data shape, licence boundary, API, self-check, what was left undone) are in `docs/VDB.md`; the
 pure logic is in `server/src/vdb.js` and `server/src/tar.js` (zero-dependency tar reading), with the
 self-check in `tools/vdb-test.mjs`, 25 checks.
+
+## 15. The config file: four states, an atomic write, and one secret rule with two sides
+
+`config.json` is the only file that holds anything secret in this product, and it is also the file every settings
+page round-trips. Two v1.0.5 findings met there: the config was **silently replaced** when it was damaged, and it
+**left the process unmasked** on five routes. Sections 15.1-15.3 are the design of the repairs; §15.4 is the third
+finding, which is about who may call the API at all.
+
+### 15.1 Four load states, and no fifth "unknown, carry on"
+
+`loadConfig()` used to return the defaults both when the file was missing and when `JSON.parse` threw, with
+`console.error` as the only difference. A file damaged by a half-finished write, a killed editor or a stray byte
+therefore looked exactly like a fresh install — a state the user is *told* to expect — and the **next save then
+persisted the defaults over it**. That second step is the sharp one: the user does not experience "my settings look
+reset", they experience "the file that could have been repaired is gone".
+
+| State | Meaning | Behaviour |
+| --- | --- | --- |
+| `fresh` | the file does not exist | defaults; **nothing written**; recorded as a first run, not a fault |
+| `ok` | it parsed | normal operation |
+| `corrupt` | `JSON.parse` threw | copied to `config.json.broken-<stamp>` and then removed; defaults; visibly reported |
+| `unreadable` | `EACCES` / `EPERM` / `EROFS` / `EISDIR` | defaults, and the file is **left exactly as found** — a folder we may not read is a folder we must not write |
+
+The move-aside is **copy, then delete**, not `rename`: a file that cannot be deleted (Windows marks it read-only
+while an editor has it open, a folder ACL may forbid the delete) still has its bytes preserved by the copy, and the
+copy is what the recovery depends on. A failed delete is reported as `stillInPlace` rather than treated as success.
+
+Running on defaults in the two fault states is a **decision**, not a fallback that happens to look like one: a
+local tool that refuses to start over one byte is worse than one that starts degraded and says why. What makes the
+difference visible is the record, not the behaviour, and it is reported three ways: one startup line naming the
+state, the preserved filename and whether a `.bak` exists (`server/src/index.js`); `GET /api/config/health`, which
+answers from the running process rather than from the file (a damaged file is exactly the case where `getConfig()`
+is an in-memory default that says nothing about the disk); and a warning on every later write. The route is a route
+of the app rather than a marker file on disk because the damage is a property of the *process*, and the user who
+needs it most is the one who never opens the app folder. A successful write deliberately does **not** clear the
+load state — `health.state` and `health.lastWrite` are separate fields — so "there was a problem" and "it is fixed
+now" cannot be confused, and a failed write cannot look like a successful one.
+
+`POST /api/config/recover` is the deliberate half: it restores `config.json.bak`, refuses to touch a config.json
+that already exists (including its own backup), refuses in the `unreadable` state, and re-runs the loader so the
+state only becomes `ok` if the restored file really parses. It is **not** automatic at startup, because restoring a
+backup behind the user's back is the same silent substitution in a new costume.
+
+### 15.2 A write cannot leave a truncated config
+
+`writeConfigText()` is the one way config text reaches the disk, in this order and for these reasons:
+
+1. a temp file **in the target's own directory** — a rename is atomic only within one filesystem, and a temp in the
+   system temp directory can silently degrade to copy+unlink, which is the truncation window this closes (the name
+   carries the pid, so two processes rewriting the config cannot share one temp file);
+2. `write`, then `fsync` the **file**, so the bytes are on the medium before anything points at them;
+3. copy the current file to `config.json.bak` — the one step back, taken while the target is still good;
+4. one `rename` over the target — the only atomic step, and the only one the outside world can observe;
+5. `fsync` the **directory**, so the rename itself survives a power loss. Not on Windows: opening a directory as a
+   file and flushing it is refused (`EPERM`/`EISDIR`), and the refusal is **recorded rather than thrown**, because a
+   rename that already happened must not be reported as a failed write.
+
+Any failure before the rename leaves the previous file byte-identical, and the temp file is removed in a `finally`
+(the file descriptor first — an unflushed handle on a file we are about to delete is how a temp file survives on
+Windows). The first save of a fresh install seeds the backup from the file it just wrote, so "always one step back"
+holds on the day a config is damaged by something else entirely. The self-check is
+`tools/config-durability-test.mjs`, including a live process killed between the temp write and the rename.
+
+### 15.3 Secrets: one rule, applied on the way out and on the way in
+
+The rule is declared **once**, by field name, in `server/src/config.js`, and applied by walking the real config —
+never by a second, hand-maintained copy of the config shape, because a copy goes stale the moment a section is
+added and the stale copy is the one that leaks. The five leaking routes were each a different subset of that copy:
+`/api/config` returned the config verbatim, `/api/llm/presets` masked only the active profile, `/api/watch` was a
+second copy of the first leak, the redacted export still carried `proxy.controlSecret`, and the import response
+answered with plaintext. (`/api/config` also handed the raw key into the LLM page's password input, and the wiki
+login check would then authenticate with the literal `***` and report a false "credential broken".)
+
+- **Read side — `publicConfig(cfg)`.** Every leaf whose **name** matches the secret pattern is replaced with `***`
+  at any depth, in objects and in arrays, and gains a `hasXxx` boolean computed from the *real* value (the mask
+  alone cannot distinguish "set" from "cleared"). Adding a field called e.g. `rtmpKey` to a new section therefore
+  needs no code. The few names that look secret but must stay readable are declared in `PUBLIC_FIELDS` by full path
+  (`[]` marking an array element) — an explicit list, so a name is never accidentally exempt for being nested
+  somewhere unusual; today's three entries are byte counts, and the test records that they would not be masked
+  today, which is exactly why the exception is a decision written down rather than an accident of naming. A webhook
+  URL is a *partially* readable secret: the origin survives, everything that authenticates is erased.
+- **Write side — `preserveSecretStrings(incoming, stored)`.** A masked or blank secret arriving in a request body
+  means **unchanged**, never "store this"; without that half, masking would wipe the user's key the first time the
+  settings page saved itself back. Which stored value is "the same field" is decided by `id` for an element that
+  carries one (an LLM profile, a watch target, a notify destination), falling back to the array position only when
+  there is no id — matching by position alone made a newly added profile inherit a deleted neighbour's key. The
+  derived `hasXxx` is dropped here, so the stored config does not grow redaction metadata on every save.
+- **Both sides are entered in one place.** Every config write goes through `persist()` in `server/src/server.js`
+  (`setConfig(preserveSecretStrings(next, getConfig()))`), and a request body is restored by `preserveSecretsIn()`
+  **before** the handler touches it, because restoring after the write would store the mask first and restoring
+  after a sanitiser would find the mask where the real value used to be. The route handlers keep their own
+  semantics: a narrow PUT stays a narrow PUT.
+- The detector is deliberately **independent** of the serialiser (`stringLeaves` + the known plaintext), because a
+  checker that reused the serialiser's own rules could only ever confirm that it agrees with itself.
+
+### 15.4 Who may call the API
+
+The service binds `127.0.0.1`, and that used to be the whole argument. `server/src/request-guard.js` runs before
+the body parser and requires a `Host` naming loopback (`127.0.0.1`, another `127.x`, `localhost`, `[::1]`, with or
+without a port) and an `Origin` that is absent or loopback; anything else is `403` with a JSON body and
+`Vary: Origin`. What this closes is **DNS rebinding**: a page points a name it controls at 127.0.0.1, the browser
+sends the request to our port with `Host: <that name>`, and from inside the server it is indistinguishable from a
+normal visit — while the response is readable by that page, because the browser considers the request same-origin
+with the attacker's name. The `Host` header cannot be forged for a cross-origin navigation, so checking it is what
+makes the bind address mean what it was always assumed to mean. The port is deliberately not compared against the
+configured one (the traversals override `PORT`, and a check against "the port we think we are on" would refuse the
+very client that just connected).
+
+## 16. The remote-URL policy: one rule for everything the app fetches
+
+Fetching addresses the user supplied *is* this product, and since v1.0.4 it also **renders** them in a real browser.
+Before `server/src/remote-url.js`, the address was cleaned for *shape* (`sanitizeCustomSource` keeps a field
+whitelist and scrubs the id/name/region) and never for **reach**: nothing looked at the scheme, the host, or where
+the host resolves. A source could therefore point at this app's own API on loopback, at a router on the LAN, or at a
+cloud metadata address, and the request would be made. The trust boundary crossed is not "the user attacked
+themselves" — it is that **whatever can write a source or a watch target can make this process talk to anything it
+can reach**, and on a home machine that includes the app itself.
+
+### 16.1 One decision, one implementation, and an inventory the build reads
+
+`validateRemoteUrl(url, policy)` returns either `{ok:true, url, host, addresses}` or a refusal with a `code` from
+`URL_POLICY_CODES`, a technical `reason` and a bilingual `message`. The refused classes are in `URL_POLICY_TABLE` as
+**data**, so the rule can be reported to a user instead of living only as an `if` in the middle of the check:
+non-http(s) schemes; loopback (`127.0.0.0/8`, `::1`, IPv4-mapped and IPv4-compatible forms, NAT64, and the names
+`localhost` / `*.localhost`); the private ranges (`10/8`, `172.16/12`, `192.168/16`, CGNAT `100.64/10`,
+unique-local `fc00::/7`); link-local (`169.254/16`, `fe80::/10`) and the metadata addresses inside it; unspecified
+(`0.0.0.0`, `::`, an empty host); IPv6 zone ids; and userinfo in the URL (this project logs the addresses it
+fetches, which is why the wiki password travels in a header instead).
+
+`URL_POLICY_CALLERS` and `URL_POLICY_EXEMPT` at the bottom of the file are an **inventory, not documentation**:
+`tools/integrity-check.mjs` asserts that each named module really references `validateRemoteUrl`, that no module
+under `server/src` performs a network call while appearing in neither list, and that a second place has not started
+spelling out the ranges for itself. A caller that quietly goes back to fetching on its own is the defect this exists
+to catch.
+
+### 16.2 Three decisions rather than discoveries
+
+1. **A hostname is not an address.** The name is resolved and the *answers* are checked, because the most ordinary
+   thing DNS does defeats a name-only check. A mixed answer (one public address, one loopback address) is refused
+   as a whole: a resolver that returns both is either a rebinding service mid-switch or a round-robin that would
+   reach the private address on some fraction of requests, and "which one did we get this time" is not a security
+   property. Writing that assertion found two real bypasses: `::ffff:127.0.0.1` classified as public through a
+   greedy IPv4-tail split, and `::1` read as `0.0.0.0` plus `1` and refused under the wrong rule.
+2. **A name that does not resolve is refused** (`dns-unresolved`), and an empty answer (`dns-empty`) with it: we
+   cannot check where a name points without resolving it, so accepting an unresolved name means accepting an
+   address we never inspected. The cost is concrete — a machine behind a proxy whose *exit* resolves, or one that
+   is simply offline, can no longer reach a host its local resolver cannot answer for — which is why `skipDns` is
+   set automatically when a proxy or a Tor exit is the one resolving: asking whether *this* machine can resolve is
+   then a statement about the wrong machine.
+3. **`allowLoopback` is the only allowance, it is per entry, and it is off by default.** A per-entry flag can only
+   ever admit the entry that carries it, where an environment variable or a config-wide switch would be one
+   keystroke away from turning the rule off for everything. It relaxes **the loopback rule only** — a private,
+   link-local or metadata address stays refused with it set — and the test pins that in both directions. The
+   shipped **Ollama preset** carries it, because a local model server is loopback by design; `newProvider()` builds
+   a profile field by field, so the preset's flag is copied explicitly (a field the builder does not name is
+   silently dropped), and `providerPolicy()` reads the flag from the profile — falling back to the stored profile
+   with the same `id` when a transient profile was assembled from a request body, and to a section-level
+   `llm.allowLoopback` for a profile that carries none.
+
+### 16.3 Redirects are walked, not followed
+
+Measured while this was written: `fetch(url)` with no `redirect` option answers 200 with `redirected=true` and the
+server log shows *both* requests — undici follows the chain internally, so this process never sees the intermediate
+address. That makes "check the URL" a hole exactly the size of a redirect: a URL that passes can answer
+`Location: http://127.0.0.1:<port>/api/config`, and the fetch lands on this app's own config route with no check in
+between. So `netFetch` forces `redirect: 'manual'` for every caller and walks the chain by hand — each hop through
+the same policy, the next URL resolved against the current one so a relative `Location` is checked as the absolute
+address it is, method switching to GET (and dropping the body, with its content headers) where the fetch spec says
+so, a cap of eight hops, and a refusal for a redirect that points back at itself. The allowance rides with the
+chain, so a loopback fixture that redirects within loopback still works and nothing else gains the allowance by
+being redirected. A URL a caller already judged carries that verdict beside it in a module-private map
+(`markUrlCleared` / `urlClearedFor`), and a mark made *without* the allowance never satisfies a policy *with* it,
+so one caller cannot borrow another's clearance; the map is bounded because it is keyed by an address a server
+could vary forever.
+
+### 16.4 The browser is a request-judging seam, not just an egress
+
+`resolveBrowserEgress()` decides *where* the browser goes out (§3, §6). The addresses it may *reach* are decided by
+Playwright's `page.route`, which offers every request the page is about to make — each redirect hop and each
+subresource — to the same policy before a socket is opened; a refused request is aborted and makes the render
+report a failure, because the content that did come back was fetched *around* the refusal and reporting it as a
+successful render would describe a page that never fully loaded. This is the same hole `net.js` closes for HTTP
+fetches, one layer down, and it is the seam that makes those addresses judgable at all: the page chooses them, not
+the config.
+
+Two drift fixes came with the policy: `fetchers/rss.js` and `fetchers/mediawiki.js` used a bare `fetch`, which meant
+they ignored the configured egress entirely and followed redirects where no hop could be inspected — both now go
+through `netFetch`. And the write-time half (`remoteUrlShapeProblem`) applies the same rules synchronously to a
+value being **stored**, so an address that could never be fetched is dropped at the door with a reason rather than
+sitting in the config looking like a setting that does something. It deliberately does **not** resolve names: a form
+submission must not depend on the resolver being up, and the answer at write time is not the answer at fetch time —
+that is the whole point of rebinding, so the authoritative check stays where the connection is made.

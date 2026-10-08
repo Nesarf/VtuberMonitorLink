@@ -1,6 +1,10 @@
 # Privacy & Publishing Notes / 隐私与发布须知
 
 > This file states Vtuber's Monitor Link's privacy boundaries, and the cleanup that must be done before publishing (committing to a public repository / distributing the .exe).
+>
+> `SECURITY.md` in the project repository is the companion document: the threat model, where the secrets live, which
+> component may read a browser profile, the URL policy and how to report a vulnerability. This file is the shorter
+> privacy-facing view of the same facts, plus the publish checklist.
 
 ## Our commitments
 
@@ -8,11 +12,60 @@
    Sites that require login (for example a Twitch follow list, or any source you declare yourself) are always logged into by the user **in their own browser**;
    this tool only "borrows" that browser's profile to render pages, and what is stored in the configuration is the **browser path + profile directory**, not the credentials themselves.
 
-2. **Nothing is ever sent back.**
-   The tool only listens on `127.0.0.1`, and reports and scraping results only land on the local disk.
+2. **Nothing is sent back to this project — and what does leave the machine is listed, not implied.**
+   There is no upload, no analytics, no crash report and no update check: reports, feeds and scraping results land
+   only on the local disk, and the API listens on `127.0.0.1` only (and now enforces that — see "The API is
+   loopback-only" below). The old wording stopped there, which was too easy to read as "nothing ever leaves".
+   What leaves is what **you** configure: the sites being scraped, the LLM endpoint you chose, the notification
+   targets you set up. Each row is enumerated in "What is sent where" below.
 
 3. **Runtime data does not enter the repository.**
    `config.json` (which contains the LLM Key, proxy address and browser path), `reports/`, `feeds/` and `logs/` are all excluded in `.gitignore`.
+
+## What is sent where
+
+Feature by feature, this is everything that leaves the machine. Nothing else does — there is no telemetry channel
+to enumerate.
+
+| Feature | Destination | What is sent | Credential that rides along |
+| --- | --- | --- | --- |
+| Source fetch (RSS/Atom, MediaWiki API) | the source's own host, via the egress set for it | the request for that feed/page (address, path, query, a generic `User-Agent`) | none |
+| Browser-rendered source | the source's host **plus everything the page itself requests** | ordinary browser requests; with `browser.profileDir` set, that profile's cookies, which *is* the login | the login already in the profile you pointed at |
+| Watch target | the wiki's `api.php` host | read-only `meta=userinfo` requests and the reads that produce the diff | the wiki BotPassword, in an `Authorization` header (never in the URL) |
+| LLM analysis / feature extraction / search assistant | the LLM base URL of the active profile | the condensed digest of the fetched items (titles, links, summaries) and the prompt; your search query | that profile's API key |
+| Vision tagging (**off by default**) | the profile named by `vision.providerId` | the image URL of the item plus a short context line | that profile's API key |
+| Notifications | the target you configured (Bark, ServerChan, Telegram, DingTalk, WeCom, ntfy, Gotify, PushPlus, Slack, Discord, Feishu, custom webhook) | the notification title and body | that target's own token / webhook URL |
+| Desktop notification | this machine | nothing | — |
+| Egress probe | the address being probed | a TCP connect and/or one small HTTP request per egress tier | none |
+| Roster download (VDB) | `vdb.url` (upstream `dd-center/vdb` by default) | one request of about half a megabyte | none |
+| Thumbnails / screenshots | the page's own host | icon / `og:image` / page requests, on the source's egress | none |
+
+Three fixed addresses are contacted as constants rather than as user input, and are named here so they are not a
+surprise: `cloudflare.com/cdn-cgi/trace` (which country an exit appears to be in), `check.torproject.org/api/ip`
+(the Tor reachability check) and `api.ipify.org` (used once to recognise a local proxy).
+
+**Publishing is not in the table** because this build has no code that posts to a site: every entry in
+`SHARE_SITES` declares `implemented: false`, `/api/share/post` refuses for that reason behind its
+explicit-confirm gate, and the hand-off it offers opens the site's own compose page **in your browser** — anything
+published there is sent by your browser and your account, not by this app.
+
+One honest note about a setting you can see in the UI: `privacy.anonymousMode` is enforced centrally (see the
+cookie section below), but **`privacy.sendReferer` is not read by anything in this tree** — grep finds the config
+default, the switch on the settings page, and no consumer. No fetcher in this build sets a `Referer` or `Origin`
+header at all, so there is nothing for that switch to turn on or off today; it is recorded here so it is not
+mistaken for a control that is protecting anything.
+
+## The API is loopback-only, and now enforces it
+
+The service binds `127.0.0.1` (`server/src/index.js`), and since v1.0.5 every request is also *checked*: a
+`Host` header naming loopback and an absent-or-loopback `Origin` are required, and anything else gets `403` with a
+JSON body (`server/src/request-guard.js`). This is what closes **DNS rebinding** — a page can point a name it owns
+at `127.0.0.1`, and without the `Host` check the request looks like a normal visit *and* its response is readable
+by that page. The practical consequence for a user: a request to your local API from any other name, including a
+name that resolves to loopback, is refused, and the refusal says which header was wrong.
+
+Because the API is reachable by any process running as your user, it is not a second factor, and the config it
+serves is masked for the same reason (see the credential table below).
 
 ## Pre-publish checklist / 发布前必做
 
@@ -67,19 +120,35 @@ that reached a public clone must be treated as known. Rotating first, rewriting 
 - **Portable package**: `VtuberMonitorLink.exe` (a single-file launcher) + `app/`, unzip and run;
   the package **contains no** user data, account, cookie or Key.
 - `app/config.json` is generated on first run, and the user fills in the LLM Key, browser path and proxy themselves.
-- The packaging script refuses to copy `config.json`, `reports/`, `feeds/`, `logs/` and `watch/` into the artefact;
-  before publishing, run `npm run verify` for an independent second pass (which includes the item "has a Key been filled in").
+- The packaging script builds `app/` from `server/`, `web/dist/` and `docs/` (plus the two Readmes and `LICENSE`),
+  and additionally refuses `config.json`, `reports/`, `feeds/` and `logs/` by name, so a release artefact cannot
+  contain them; while rebuilding over an existing `app/` it deliberately **keeps** that folder's runtime state, so
+  a rebuild does not delete the config it is supposed to sit beside.
+- Before publishing, run `npm run verify` for an independent second pass (which includes the item "has a Key been filled in").
 
 ## Where local credentials live
 
-This tool uses two kinds of credential, and **both are written only to the local `app/config.json`**:
+Every credential this tool stores is written **only to the local `app/config.json`** (or, in a source checkout, the
+`config.json` at the repository root):
 
 | Credential | Purpose | Notes |
 | --- | --- | --- |
-| LLM API Key | Calls your own model endpoint | The endpoint only returns it masked as `***`; to edit it, click "Show" in the web UI (UI string: `显示`) |
+| LLM API Key | Calls your own model endpoint | The API answers with the mask `***`, plus a `hasApiKey` boolean for the page. Typing a new value replaces the stored one; the "Show" toggle only switches that input between password and plain text — it does **not** fetch the stored key back |
 | Moegirl BotPassword | Reads your own watchlist | An optional feature. **Do not use the main password**; a BotPassword with read-only rights is recommended |
+| Notification tokens / webhook URLs | Push alerts to the targets you set up | Held per target in `notify.targets` |
+| Local proxy control secret | Talks to a mihomo/Clash external-controller | `proxy.controlSecret`; empty unless you configured the node API |
 
-Neither of them enters the version repository (`config.json` is in `.gitignore`), nor the release package.
+**The file is plaintext.** There is no keychain and no vault: file permissions are the only protection it has, and
+in the portable build the file sits inside the unzipped folder, so copying that folder (a USB stick, a shared
+drive, a synced directory, a backup) hands over every key it holds. Treat the packed `app/` folder as the secret.
+
+Masking is by **field name at any depth** (`publicConfig()` in `server/src/config.js`), so a new secret field is
+covered automatically and the same rule applies inside arrays; a masked or blank value arriving in a request body
+means "unchanged" rather than "store this", which is what stops a settings-page save from wiping a key. The
+redacted config export blanks the same fields; `GET /api/config/export?secrets=1` is the deliberate variant that
+writes plaintext into the file you download.
+
+None of these enters the version repository (`config.json` is in `.gitignore`), nor the release package.
 The same applies to the list of private names in `.sanitize-names`.
 
 ## Browser login state (`server/src/cookies.js`)
@@ -88,17 +157,29 @@ Some sources have to be logged in to scrape (the Twitch following list, a wiki w
 declare yourself). This tool offers two routes, and **by default neither writes cookies to any persistent
 location**:
 
+### Who is allowed to read a profile
+
+One module resolves the profile — `server/src/browser-target.js` (`resolveProfileDir` / `resolveProfileTarget`) —
+and `privacy.anonymousMode` is enforced **inside it**, so the switch holds for every feature at once rather than
+for whichever ones remembered. `server/src/browser-consumers.js` is the declared list of consumers (what each one
+needs and whether it is satisfied), and a structural check fails the build if a consumer reads `browser.profileDir`
+on its own. `server/src/cookies.js` is the **only** module that opens a cookie store. With `browser.profileDir`
+empty there is nothing to read and nothing is read, and browser-rendered sources still work on a clean temporary
+profile.
+
 ### Route A: read-only extraction (recommended; the browser can stay open)
 
-Firefox's cookie store (`cookies.sqlite`) is **copied** to a temporary directory and then read: the temporary copy
-is deleted once used, and the original profile is neither locked nor modified.
+Firefox's cookie store (`cookies.sqlite`) is **copied** — together with its `-wal`/`-shm` companions — into a fresh
+directory under `paths.tempDir` (the system temp directory by default), opened with a read-only SQLite connection,
+and the whole temporary directory is deleted in a `finally` block. The original profile is never locked, written or
+modified, so this works while Firefox is open.
 
 - The mechanism is **generic**: it reads the host the caller names (the Browser page's field starts at
   `reddit.com`, and any host can be typed in), and it carries no per-site list of what a login looks like -
   the one thing it recognises is the *shape* of a session-cookie name;
 - Only the host you specify is read; all other domains are left untouched;
-- The values are assembled into a single Cookie header **in this process's memory only**, and are
-  never written to disk. Nothing in this build sends that header: the login surfaces report cookie **names**
+- The values are assembled into a single Cookie header **in this process's memory only**; that header is never
+  written to disk, and nothing in this build sends it: the login surfaces report cookie **names**
   and counts, which is all the check needs. The header assembly stays because it is what a site-specific
   caller would use - the mechanism was kept, the per-site callers went with their platforms;
 - **No log, no report, nothing into `feeds/`**; `POST /api/cookies/check` returns only
@@ -118,8 +199,8 @@ along with the platform gate: reading a SQLite file is not a Windows-only operat
 ### Route B: Playwright reusing a profile
 
 Point `profileDir` at a Firefox profile that is logged in and Playwright starts with a persistent context.
-**That Firefox must be fully closed** (otherwise the profile is locked); the cost is higher, but this route is
-what carries a login the read-only probe cannot see.
+**Any other Firefox using that profile must be fully closed** (otherwise the profile is locked); the cost is higher,
+but this route is what carries a login the read-only probe cannot see.
 
 > If you do not want any tool reading your cookies, do not configure `profileDir`:
 > when it is not configured, no extraction is performed, and sources that need login fail honestly with a hint.
@@ -142,6 +223,31 @@ every other fetch uses, so a source pinned to Tor renders through Tor rather tha
   `socks_password` prefs change nothing). Browser traffic through Tor therefore rides the **default circuit**.
   The per-subject `IsolateSOCKSAuth` rotation still applies to every non-browser fetch, and no username is put on
   the browser's proxy at all - putting one there would only have looked like isolation while the wire carried none.
+- **The browser is also judged request by request, not just at launch.** The egress decides *where* the browser
+  goes out; a separate rule decides *which addresses it may reach*. Playwright's `page.route` hands every request
+  the page is about to make - each redirect hop, each subresource - to the same policy the server-side fetches use
+  (`server/src/remote-url.js`), and a refused request is aborted before a socket is opened and makes the render
+  report a failure instead of describing a page that never fully loaded.
+
+### The URL policy: what this app will not fetch
+
+One implementation holds the rules for every address the app fetches on behalf of a user or the config
+(`server/src/remote-url.js`, reached through `net.js` for HTTP fetches and through `page.route` for the browser).
+It refuses, with a reason code: any scheme other than http/https; loopback (`127.0.0.0/8`, `::1`, IPv4-mapped
+forms, `localhost` and `*.localhost`); the private ranges including CGNAT `100.64/10` and unique-local IPv6;
+link-local and the cloud metadata addresses inside it; `0.0.0.0` / `::` / an empty host; userinfo in the URL
+(because this project logs the addresses it fetches); and a name that does not resolve or resolves to nothing.
+Names are resolved and the *answers* are checked, and a mixed answer containing one refused address is refused as a
+whole. Redirects are walked hop by hop (eight hops at most, method switching per the fetch spec, a self-loop
+refused), because the network library would otherwise follow a chain internally where no hop can be inspected.
+
+**Loopback is refused by default, and the allowance is per entry.** A source, a watch target, a notification
+webhook, an LLM profile or a roster address that points at this machine needs `"allowLoopback": true` on that one
+entry in `config.json`; the flag relaxes the loopback rule **only** (a private, link-local or metadata address
+stays refused), and there is deliberately no UI switch for it. The shipped **Ollama preset carries the flag**,
+because a local model server is loopback by design — but a profile you typed pointing at `127.0.0.1` does not, and a
+config that pointed at loopback before this release will now be refused until you add it. `SECURITY.md` has the
+table of where the flag goes.
 
 ## Confirm before going live
 

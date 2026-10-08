@@ -164,8 +164,8 @@ code, the flags, the hard-coded user agent and the packaged payload. What that m
 - Nine built-in presets: DeepSeek / OpenAI / Moonshot·Kimi / Zhipu GLM / Alibaba Qwen / SiliconFlow / OpenRouter / **local Ollama** / custom.
 - **Keep several profiles and switch between them** — add, edit and delete them in the UI.
 - "Fetch models" hits `/models`; "Test connection" pings `/chat/completions`.
-- The key lives only in the local `app/config.json`; the API returns a masked `***` and only reveals it in the input when you ask.
-- **Loopback addresses are always direct**, so a local Ollama never gets swallowed by the proxy.
+- The key lives only in the local `app/config.json`; the API answers with the mask `***` (plus a `hasApiKey` flag for the page), and typing a new value replaces the stored one — the "Show" toggle only unmasks the input, it does not fetch the key back.
+- **Loopback addresses are always direct**, so a local Ollama never gets swallowed by the proxy. Whether a loopback address may be fetched *at all* is a separate rule with a per-entry flag — see "Security & your config" below.
 
 ## Locales & the translation pipeline
 
@@ -218,6 +218,30 @@ npm run mock-llm         # listens on 127.0.0.1:43197
 ```
 
 Add a custom profile in Settings → LLM with base URL `http://127.0.0.1:43197`, any key, model `mock-model`, and the whole pipeline (scrape → watch → intel → analyse → report) runs end to end at no cost.
+
+## Security & your config
+
+Four user-visible consequences of the v1.0.5 security round; `SECURITY.md` in the project repository is the full
+document.
+
+- **A damaged `config.json` is preserved, not silently replaced.** A file that does not parse is copied aside to
+  `config.json.broken-<stamp>` and never written over, a previous good copy lives at `config.json.bak`, and the app
+  runs on defaults **visibly** — one line at startup, the state on `GET /api/config/health`, and a warning on every
+  later write.
+  `POST /api/config/recover` puts the backup back, and only when you ask. Saves are atomic (temp file in the same
+  directory, flush, rename), so an interrupted write cannot truncate the config it was replacing.
+- **A deliberate local endpoint needs `"allowLoopback": true` on that one entry** in `config.json` — a custom
+  source, a watch target, a notification webhook, an LLM profile, or `vdb.allowLoopback`. The URL rule refuses
+  loopback by default, the flag relaxes **loopback only** (not "anything local"), and there is no UI switch for it
+  by design. The shipped **Ollama preset already carries it**; a profile you typed pointing at `127.0.0.1` does
+  not. A config that already pointed at loopback from before this release is now refused until you add the flag —
+  that is the intended default, not a regression.
+- **The API refuses non-loopback hosts.** It has always listened on `127.0.0.1`; it now also requires a loopback
+  `Host` (and an absent-or-loopback `Origin`) on every request and answers `403` otherwise. That is what stops a
+  web page from reaching your config through DNS rebinding.
+- **Secrets stay in the process.** The config routes answer with `***` plus a `hasXxx` boolean instead of the stored
+  value, a masked value sent back means "unchanged" rather than "store this", and the redacted export stays
+  redacted unless you ask for `?secrets=1`.
 
 ## Privacy
 

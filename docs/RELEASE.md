@@ -1,5 +1,113 @@
 # Release notes
 
+## v1.0.5
+
+**A security round, not a feature round.** Three problems with the same shape - the app trusted something it
+should have checked - and each was measured before a line was changed. An external review named the first and
+part of the second; the third and several findings inside all three came out of that measuring.
+
+### 1. Secrets no longer leave the process
+
+`GET /api/config` returned the **whole configuration** to any caller, including `llm.providers[].apiKey` and the
+watch targets' `botPassword`. Four more leaks sat beside it: the redacted export also carried
+`proxy.controlSecret` (the Clash/mihomo control credential) because its hand-kept list named only the fields
+someone remembered, `/api/watch` was a second copy of the same spread, `/api/config/import` answered with
+plaintext, and `/api/config` handed the raw key into the LLM page's password input.
+
+One serializer now stands between the config and every reader, and **a field does not have to be declared to be
+masked** - a new name that fits the secret-name pattern is covered automatically, in objects and arrays, at any
+depth, with `hasXxx` booleans computed from the real values. The few look-alikes that must stay readable are
+declared explicitly. The write side is its twin: a masked or blank secret means "unchanged", array entries are
+matched by `id` rather than position, and the derived `hasXxx` is dropped so it is never persisted. A real defect
+came out of that work - the wiki login check would authenticate with the literal string `***` and report a false
+"credential broken".
+
+**DNS rebinding is closed.** The server had no CORS headers and no Host or Origin check, so a random page could
+not read a cross-origin response (the browser blocks that) but a rebound request is same-origin and *is*
+readable, and any local process could read it with no trick at all. Every API request now needs a loopback `Host`
+and an absent-or-loopback `Origin`, refused with 403 and JSON.
+
+### 2. A damaged config is never silently replaced
+
+The old loader returned defaults both when the file was missing and when it failed to parse, and wrote with a
+bare `writeFileSync`. The consequence that matters is not that settings look reset: after one silent fallback the
+next save persisted the **defaults** over the damaged file, so the file that could have been repaired was gone.
+
+Four states now, and they do not collapse: `fresh` (missing - defaults, silent, nothing written), `ok`, `corrupt`
+(the damaged file is copied to `config.json.broken-<stamp>` and then removed, never written over) and
+`unreadable` (permissions - left exactly as found). The app does run on defaults in the two fault states, because
+refusing to start over one byte is worse for a local tool than starting degraded, but the condition is
+persistent and visible from the first line of the log and from `GET /api/config/health`. Writes go through a temp
+file in the target's own directory, `fsync`, a previous-good `config.json.bak`, `rename`, and a directory
+`fsync` that Windows refuses (recorded rather than thrown, since a rename that already happened must not be
+reported as a failed write). `POST /api/config/recover` restores the backup and refuses to overwrite an existing
+file - restoring behind your back would be the same silent substitution in a new costume.
+
+### 3. One remote-URL policy
+
+There was **no scheme check and no host check anywhere**. For this product that is the sharpest of the three,
+because fetching URLs you supply is the entire point and since 1.0.4 it also renders them: a source could point
+at this app's own API on loopback, at a router on the LAN, or at a cloud metadata address, and the request would
+be made.
+
+One implementation now holds the rules: http/https only; loopback (literal, by name, and mapped IPv6); the
+private ranges including CGNAT and unique-local IPv6; link-local; cloud metadata addresses; `0.0.0.0`, `::` and
+an empty host; userinfo in the URL. Names are resolved and the **resolved addresses** are checked, and an
+unresolved or empty answer is refused by decision - with name resolution skipped automatically when a proxy or
+Tor exit is the one resolving, because this machine's resolver is the wrong machine to ask. Writing those
+assertions found two real bypasses: `::ffff:127.0.0.1` classified as **public** through a greedy IPv4-tail
+split, and `::1` read as `0.0.0.0` plus 1 and refused under the wrong rule.
+
+Every fetching caller goes through it, and **redirects are re-checked at every hop** - `undici` follows chains
+internally, so the fetcher now walks them itself with spec-correct method switching, an 8-hop cap and self-loop
+refusal. Two fetchers that used a bare `fetch` (RSS and MediaWiki) also went through the shared path, which
+fixes a real drift: they ignored the configured egress entirely and followed redirects invisibly. The allowance
+for a deliberate local endpoint is one per-entry field, `allowLoopback`, off by default and loopback only; the
+shipped Ollama preset carries it, because a local model server is loopback by design and a preset refused on
+first use teaches people to disable the rule wholesale.
+
+**Behaviour change to know about:** a pre-existing config that points a source, watch target, webhook or LLM
+profile at a loopback address **without** that flag will now be refused. That is the intended default; add the
+field to that entry to allow it. `SECURITY.md` (new) explains the whole boundary, and `docs/DESIGN.md` sections
+15 and 16 document the two mechanisms.
+
+### Also in this release
+
+The end-to-end chain that 1.0.4 left unverified has now been **observed**: the same Playwright Firefox engine
+rendering `https://check.torproject.org/api/ip` with only the egress changed - direct answered
+`{"IsTor":false,"IP":"216.195.201.133"}` and Tor answered `{"IsTor":true,"IP":"192.42.116.102"}`, with the app's
+own `egress` field matching the route each time. Tor Browser was running locally for that measurement
+(SOCKS on 9150); the real-Tor check inside the suite goes green in the same conditions.
+
+### Verification evidence
+
+| Check | Result |
+| --- | --- |
+| `npm run verify:fast` | exit 0, including config-secrets 39, config-durability 53, remote-url 74, browser-engine 27 |
+| `npm run traverse` / `traverse-flows` / `traverse:ui` | 86/86, 40/40, 242/242 |
+| Mutation harnesses | remote-url 15 mutations to 108/108; config-durability against copies of the pre-fix loader and writer |
+| `sanitize-check`, `sanitize:history`, `english-logic` | clean |
+
+### Known gaps, stated rather than implied
+
+- **No page consumes `GET /api/config/health` yet.** The route exists, is tested, and the docs describe it as
+  something a page *can* poll - but today the fault is reported in the log only. A UI banner is the natural next
+  step; an earlier commit message of mine claimed the poll already existed, and this note is the correction.
+- `privacy.sendReferer` is rendered on the settings page and stored, but nothing reads it. It is documented as
+  not-a-control rather than left to look like one, and the choice is to wire it or remove it.
+- `SECURITY.md` is in the repository but **not inside the packaged app** (the packaging script copies `server/`,
+  `web/dist/`, `docs/`, the Readmes and the licence), so a packaged user can read `docs/PRIVACY.md` but not the
+  policy document it points at.
+- `config.json.broken-<stamp>` files are never deleted - they are the evidence - and no retention cap exists yet.
+
+### Not yet verified
+
+The same two as every release so far: posting from a real account and vision tagging with a real key need the
+owner's own credentials, so the self-checks use local fakes. And no site in this build can post anywhere: the
+four remaining targets declare no publish code, which is stated rather than implied.
+
+---
+
 ## v1.0.4
 
 **The bundled browser is now Firefox, and it goes out through Tor.** Chromium is gone from the product and from the

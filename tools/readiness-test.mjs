@@ -156,10 +156,14 @@ if (!enginePresent) {
   await ta('control: a server that answers but never reaches the app does not satisfy the wait', async () => {
     const page = await browser.newPage();
     try {
-      await page.goto('http://127.0.0.1:' + stray.port + '/', { waitUntil: 'load', timeout: 15000 });
+      // The navigation must not be the thing under test: this control is about the *readiness wait*, so
+      // it is completed with `domcontentloaded` (which the stray server satisfies immediately) and given
+      // the same 30 s the real direction gets. `load` with 15 s made the first cold navigation of a
+      // slow machine the failure instead, which is how this file went red while the product was fine.
+      await page.goto('http://127.0.0.1:' + stray.port + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       // The old wait resolves here — that is the whole point of the control, and it is asserted rather
       // than assumed so this file would go red if `networkidle` ever came back as the gate's wait.
-      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      await page.waitForLoadState('networkidle', { timeout: 30000 });
       await assert.rejects(
         () => waitForAppReady(page, 2500),
         (e) => /READY_FAILED/.test(e.message) && e.message.includes('data-vml-ready'),

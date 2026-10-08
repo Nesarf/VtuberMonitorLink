@@ -24,7 +24,9 @@
 // Every family comes with a control on a deliberately wrong input (`vacuously`): a check that still passes on
 // the wrong input is not checking anything.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -199,8 +201,12 @@ t('a Playwright Firefox build is recognised by the marker beside its executable'
 });
 
 t('the discovery lists Playwright builds from the roots it is given, and never a stock install', () => {
-  // The check is about the fixture root, so the machine's own configured root is taken out of the picture
-  // for the length of it — otherwise the answer would depend on where this computer keeps its engines.
+  // The check is about the fixture root. The machine's configured switch is taken out of the picture for
+  // its length, but the answer is no longer asserted to be "exactly one engine": this project resolves the
+  // repository's own `pw-browsers/` as well (that is the layout the disk discipline produces, and it is in
+  // firefoxBuildRoots for that reason), so a checkout that carries an engine legitimately answers with two.
+  // Pinning "one" would make this check depend on the machine it runs on - which is the failure mode this
+  // whole section is being fixed for. What is asserted is the fact the check is about.
   const saved = process.env.PLAYWRIGHT_BROWSERS_PATH;
   delete process.env.PLAYWRIGHT_BROWSERS_PATH;
   let found;
@@ -209,9 +215,9 @@ t('the discovery lists Playwright builds from the roots it is given, and never a
   } finally {
     if (saved !== undefined) process.env.PLAYWRIGHT_BROWSERS_PATH = saved;
   }
-  assert.equal(found.length, 1, `expected one engine, got ${JSON.stringify(found)}`);
-  assert.equal(found[0].executablePath, tree.pwExe);
-  assert.equal(found[0].playwright, true);
+  const fromFixture = found.find((f) => f.executablePath === tree.pwExe);
+  assert.ok(fromFixture, `the fixture's own engine was not listed: ${JSON.stringify(found)}`);
+  assert.equal(fromFixture.playwright, true);
   assert.ok(!found.some((f) => f.executablePath === tree.stockExe), 'a stock Firefox must not be offered as an engine');
 });
 
@@ -226,11 +232,18 @@ vacuously(
 
 t('the roots Playwright resolves are the ones this project configures, in order', () => {
   const roots = engine.firefoxBuildRoots();
-  assert.ok(roots.length >= 1, 'there must be at least one root to look in');
+  assert.ok(roots.length >= 2, 'there must be at least the repository root and a platform default to look in');
   const saved = process.env.PLAYWRIGHT_BROWSERS_PATH;
   try {
     process.env.PLAYWRIGHT_BROWSERS_PATH = 'E:' + path.sep + 'somewhere' + path.sep + 'pw-browsers';
-    assert.equal(engine.firefoxBuildRoots()[0], 'E:' + path.sep + 'somewhere' + path.sep + 'pw-browsers', 'the configured root wins: it is the switch the launcher writes');
+    const withSwitch = engine.firefoxBuildRoots();
+    assert.equal(withSwitch[0], 'E:' + path.sep + 'somewhere' + path.sep + 'pw-browsers', 'the configured root wins: it is the switch the launcher writes');
+    delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    const without = engine.firefoxBuildRoots();
+    // The repository's own directory, derived from the project root rather than named: the layout
+    // `build:portable` produces and the one this machine's disk discipline creates are the same one.
+    assert.equal(without[0], path.join(ROOT, 'pw-browsers'), 'the repository root must be resolved from the project root, not from the environment');
+    assert.ok(without.length >= 2, 'the platform default must still be listed after it');
   } finally {
     if (saved === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
     else process.env.PLAYWRIGHT_BROWSERS_PATH = saved;
@@ -258,7 +271,7 @@ t('a stock Firefox is refused with the reason and the fix, not with "Failed to l
   assert.throws(() => engine.resolveLaunch({ mode: 'custom', executablePath: path.join(tree.root, 'gone.exe') }), /不存在|not found/);
 });
 
-// ───────────────────────────────────────────── 3. the egress: Tor down is a reason, never a crash
+// ───────────────────────────────────────────── 3. the egress: a dead Tor is a reason, never a crash
 
 process.stdout.write('\nthe bundled browser: its egress\n');
 
@@ -270,6 +283,55 @@ t('a dead Tor is reported as the SOCKS port refusing', () => {
   assert.match(msg, /SOCKS 端口拒绝连接|SOCKS port refused/);
   assert.match(msg, /9150/, 'the sentence has to carry the address that refused');
 });
+
+/**
+ * The child that answers two questions in one run, in its own process because both are about the
+ * environment rather than about this file: **can an engine be discovered at all**, and, if the product was
+ * reached, **what does it say when the engine is missing**. The engine is resolved the way the application
+ * resolves it - `detectBrowsers()` with no extra roots, i.e. the environment variable, then the
+ * repository's own `pw-browsers/`, then the platform defaults - so a checkout that carries an engine is
+ * really exercised, and a project that has none produces a statement instead of a launch failure.
+ *
+ * It is a `-e` body whose imports are dynamic for a reason: mixing `require` with a top-level await makes
+ * node refuse the script outright ("Cannot determine intended module format"), and a child that dies on
+ * that reads as an empty answer rather than as a broken probe. Arguments: <refused socks url> <module url>.
+ * The project root is not an argument: it is the child's working directory, and `APP_ROOT` follows from it.
+ */
+const ENGINE_PROBE = `
+const out = { engine: null, noEngine: false, refused: null, notes: null };
+const refusedUrl = process.argv[1];
+try {
+  const engine = await import(process.argv[2]);
+  // The discovery is the source of truth for "is there an engine here", and it answers from the filesystem:
+  // PLAYWRIGHT_BROWSERS_PATH, then this repository's own pw-browsers/, then the platform defaults. Reading
+  // it rather than parsing Playwright's launch error is deliberate - the error text differs by Playwright
+  // version and by platform, and a check built on it would start lying the first time either changed.
+  const found = engine.detectBrowsers();
+  out.roots = engine.firefoxBuildRoots();
+  if (found.length) out.engine = found[0].executablePath;
+  else out.noEngine = true; // the discovery is the statement; nothing below it is parsed for it
+  const r = await engine.renderUrl('http://example.com/', { browser: { headless: true }, proxy: { mode: 'tor', torSocks: refusedUrl } }, {});
+  out.refused = { ok: r.ok, egress: r.egress, error: String(r.error ?? '') };
+} catch (e) {
+  out.notes = String(e && e.message ? e.message : e);
+}
+process.stdout.write(JSON.stringify(out));
+`;
+
+/**
+ * The child of the render check: import the product, render a data URL, report what came back. It exists
+ * because of the module-load ordering described at its call site, and it renders a data URL so that the
+ * check needs no network and no site.
+ */
+const RENDER_PROBE = `
+try {
+  const engine = await import(process.argv[1]);
+  const r = await engine.renderUrl('data:text/html,<body>vml-engine-probe</body>', { browser: { headless: true } }, {});
+  process.stdout.write(JSON.stringify({ ok: r.ok, error: String(r.error ?? ''), content: String(r.content ?? '') }));
+} catch (e) {
+  process.stdout.write(JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }));
+}
+`;
 
 /** Does this sentence blame the SOCKS port? The predicate the control below runs on both inputs. */
 const blamesSocks = (msg) => /SOCKS 端口拒绝连接|SOCKS port refused/.test(String(msg));
@@ -321,13 +383,183 @@ await ta('an unreachable Tor egress answers with a reason and does not throw', a
   assert.ok(!open.proxy.server.includes('@'), 'a credential in the URL is silently dropped by this engine; it must not be put there');
 });
 
-await ta('a browser render with Tor down returns the reason instead of launching a browser', async () => {
-  // End to end through the real entry point, and cheap: the port probe fails before any browser starts.
-  const r = await engine.renderUrl('http://example.com/', { browser: { headless: true }, proxy: { mode: 'tor', torSocks: 'socks5://127.0.0.1:9150' } }, {});
+/** The URL the project builds for a Tor egress (same shape as fixtures elsewhere in this repo). */
+const socksUrlFor = (port) => 'socks5://127.0.0.1:' + port;
+
+/**
+ * End to end through the real entry point, with an egress that is **ours**.
+ *
+ * The first version of this check used the default 9150 and asserted that Tor was down. That made the
+ * check a statement about this machine: the day somebody started Tor Browser the port was open, the render
+ * went through, and a check named "with Tor down" quietly became an assertion about the weather. So the
+ * port is taken from the OS instead - bind an ephemeral port, read its number, close it - which is a port
+ * this test owned a moment ago and which therefore refuses for the length of the run.
+ *
+ * The engine is resolved the way the application resolves it (`PLAYWRIGHT_BROWSERS_PATH`, then the
+ * repository's own `pw-browsers/`, then the platform defaults), and when nothing is discoverable the check
+ * reports **that** as its own statement rather than letting Playwright's "Executable doesn't exist at
+ * <machine path>" stand in for it: a missing engine is a fact about the environment, and a check that
+ * calls it a product failure teaches people to ignore the colour.
+ */
+const sock = net.createServer();
+const refusedPort = await new Promise((resolve, reject) => {
+  sock.once('error', reject);
+  sock.listen(0, '127.0.0.1', () => {
+    const port = sock.address().port;
+    sock.close((err) => (err ? reject(err) : resolve(port)));
+  });
+});
+const refusedUrl = socksUrlFor(refusedPort);
+
+await ta('an unreachable Tor egress is a reason, not a crash (the port is one this test owns)', async () => {
+  const r = await engine.renderUrl('http://example.com/', { browser: { headless: true }, proxy: { mode: 'tor', torSocks: refusedUrl } }, {});
   assert.equal(r.ok, false);
   assert.equal(r.egress, 'tor');
   assert.match(r.error, /SOCKS 端口拒绝连接|SOCKS port refuses/);
+  assert.ok(r.error.includes(String(refusedPort)), 'the sentence has to name the port that refused, not a default');
   assert.equal(r.url, 'http://example.com/');
+});
+
+const BROWSER_MODULE_URL = new URL('file:///' + path.join(ROOT, 'server/src/fetchers/browser.js').split(path.sep).join('/')).href;
+
+/**
+ * Run the engine probe in its own process.
+ *
+ * `engineRoot` is the ordinary switch (`PLAYWRIGHT_BROWSERS_PATH`) - the input the launcher writes - and
+ * `projectRoot` is the directory the child runs in, which is what decides the *other* two roots, because
+ * `APP_ROOT` is derived from the module's own location. That second parameter is how "a machine with no
+ * engine at all" is expressed honestly: a directory that is not this project, holding a copy of the server
+ * sources, so nothing on the resolved list contains an engine. (An empty `PLAYWRIGHT_BROWSERS_PATH` alone
+ * does **not** express it - the first version of this check was written that way, failed, and the failure
+ * was correct: the fallback to the repository's own `pw-browsers/` still found the engine, which is the
+ * resolution order working as designed.)
+ */
+const probe = ({ projectRoot = ROOT, engineRoot = path.join(projectRoot, 'pw-browsers') } = {}) => {
+  // The module URL follows the project root: `APP_ROOT` is derived from the module's own location, so a copy
+  // of the sources in a directory with no engine is what "this machine has no engine" actually means. Passing
+  // an empty root while still loading the real module would discover the real project's engine - which is
+  // what the first version of this control did, and it failed, correctly.
+  const moduleUrl = new URL('file:///' + path.join(projectRoot, 'server/src/fetchers/browser.js').split(path.sep).join('/')).href;
+  const r = spawnSync(process.execPath, ['-e', ENGINE_PROBE, refusedUrl, moduleUrl], {
+    encoding: 'utf8',
+    timeout: 120000,
+    cwd: projectRoot,
+    env: { ...process.env, ...(engineRoot === null ? {} : { PLAYWRIGHT_BROWSERS_PATH: engineRoot }) },
+  });
+  let report = null;
+  try {
+    report = JSON.parse(String(r.stdout ?? '').trim());
+  } catch {
+    report = null;
+  }
+  const fallback = { engine: null, noEngine: false, refused: null, notes: `the probe did not answer (exit ${r.status}): ${String(r.stderr).slice(-300)}` };
+  return { report: report ?? fallback, status: r.status };
+};
+
+/** Reads a probe answer as the one sentence it is, so the checks below cannot disagree about it. */
+const probeSentence = (p) => {
+  const r = p?.report;
+  if (!r) return 'no answer';
+  if (r.engine) {
+    const refused = r.refused ?? {};
+    if (refused.ok !== false) return `an engine was found (${r.engine}) but a refusing egress did not stop the render`;
+    if (!/SOCKS 端口拒绝连接|SOCKS port refuses/.test(String(refused.error))) return `the render failed for another reason: ${refused.error}`;
+    if (!String(refused.error).includes(String(refusedPort))) return `the sentence does not name the port that refused (${refusedPort}): ${refused.error}`;
+    return 'the render was refused with a sentence naming the port';
+  }
+  if (r.noEngine) return 'there is no browser engine to render with here';
+  return `the answer was neither of the two: ${JSON.stringify(r)}`;
+};
+
+/**
+ * A throwaway copy of this project's server sources, sitting inside the repository but with no engine in
+ * it - the "machine with no engine at all" the environment branch needs. Inside the repository for one
+ * practical reason: node resolves `playwright` by walking up from the importing file, so a copy in the OS
+ * temp directory cannot load the module at all (measured: "Cannot find package 'playwright'"). The name
+ * starts with a dot and the caller removes it in a `finally`.
+ */
+let noEngineProject = null;
+function projectWithoutEngines() {
+  noEngineProject = fs.mkdtempSync(path.join(ROOT, '.vml-no-engine-'));
+  fs.cpSync(path.join(ROOT, 'server', 'src'), path.join(noEngineProject, 'server', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(noEngineProject, 'pw-browsers'), { recursive: true }); // present, and empty
+  return noEngineProject;
+}
+function removeNoEngineProject() {
+  if (!noEngineProject) return;
+  try {
+    fs.rmSync(noEngineProject, { recursive: true, force: true });
+  } catch {
+    /* a leftover scratch directory is untidy; failing the run over it would be worse */
+  }
+  noEngineProject = null;
+}
+
+const withEngine = probe();
+const withoutEngine = probe({ projectRoot: projectWithoutEngines() });
+
+t('the probe tells an engine failure apart from a missing engine (the control both branches need)', () => {
+  // The predicate the two checks below rest on, run against answers that are deliberately wrong: one that
+  // found an engine but let the render through, and one that reports an environment with no engine. If it
+  // answered the same thing for both, neither check below would be checking anything.
+  const wrongEngine = { report: { engine: 'X:/engine/firefox.exe', noEngine: false, refused: { ok: true, egress: 'tor', error: '' } } };
+  const wrongNoEngine = { report: { engine: null, noEngine: true, refused: { ok: false, egress: 'tor', error: 'Executable does not exist' } } };
+  assert.match(probeSentence(wrongEngine), /did not stop the render/, `the control did not fire: ${probeSentence(wrongEngine)}`);
+  assert.equal(probeSentence(wrongNoEngine), 'there is no browser engine to render with here');
+  assert.equal(probeSentence(null), 'no answer');
+});
+
+if (withEngine.report?.engine) {
+  t('the engine is found through the project’s own resolution order', () => {
+    assert.match(probeSentence(withEngine), /naming the port/, `the engine answered: ${probeSentence(withEngine)}`);
+  });
+
+  t('a browser really renders, through that engine', () => {
+    // In a child, because Playwright reads its browser path **once, at module load**: setting the switch in
+    // this process after the import would have no effect, and the render would look for the engine in the
+    // platform default location (measured - that is exactly how the first version of this check failed).
+    const child = spawnSync(process.execPath, ['-e', RENDER_PROBE, BROWSER_MODULE_URL], {
+      encoding: 'utf8',
+      timeout: 180000,
+      cwd: ROOT,
+      env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: path.join(ROOT, 'pw-browsers') },
+    });
+    let out = null;
+    try {
+      out = JSON.parse(String(child.stdout ?? '').trim().split('\n').pop());
+    } catch {
+      out = null;
+    }
+    assert.ok(out, `the render probe did not answer (exit ${child.status}): ${String(child.stdout).slice(-300)}${String(child.stderr).slice(-300)}`);
+    assert.equal(out.ok, true, `the render failed: ${out.error}`);
+    assert.match(String(out.content), /vml-engine-probe/, 'the engine ran but the page did not come back');
+  });
+} else {
+  t('the engine is found through the project’s own resolution order (environment statement, not a failure)', () => {
+    // Not a pass hidden in a condition and not a failure: this checkout has no engine and neither does the
+    // platform default location, which is a fact about the machine and is said in one line.
+    process.stdout.write('         no engine in this checkout or on the platform default list: ' + probeSentence(withEngine) + '\n');
+  });
+}
+
+t('with no discoverable engine the probe states the environment - and does not call it a failure', () => {
+  try {
+  // The point of the rewrite: an environment without an engine is its own answer, and the check for it is
+  // **the discovery**, which reads the filesystem rather than parsing Playwright's error text (that text
+  // differs by version and by platform, and a check built on it starts lying the first time either moves).
+  // The render result is recorded, not asserted on: with no engine there is nothing to render with, and
+  // Playwright's raw "Executable doesn't exist at <machine path>" is exactly what must not become the
+  // product's answer.
+  assert.equal(probeSentence(withoutEngine), 'there is no browser engine to render with here', JSON.stringify(withoutEngine.report));
+  assert.equal(withoutEngine.report?.noEngine, true);
+  assert.equal(withoutEngine.report?.engine, null);
+  assert.ok(withoutEngine.report?.refused, 'the probe records what the product answered with no engine, even when it is a refusal');
+  const banner = /playwright install|Pull request|╔/i;
+  assert.ok(!banner.test(String(withoutEngine.report?.notes)), 'the environment statement must not be Playwright’s install banner');
+  assert.ok(!/Executable doesn't exist/i.test(String(withoutEngine.report?.notes)), 'the environment statement must not be Playwright’s raw path error');
+  } finally {
+    removeNoEngineProject();
+  }
 });
 
 t('a source pinned to Tor is rendered through Tor even when the global mode is direct', async () => {

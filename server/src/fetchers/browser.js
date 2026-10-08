@@ -33,6 +33,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { firefox } from 'playwright';
+import { APP_ROOT } from '../config.js';
 import { resolveBrowserEgress, torSocksUrl } from '../net.js';
 import { resolveProfileDir } from '../browser-target.js';
 
@@ -55,9 +56,18 @@ const PLAYWRIGHT_FIREFOX_MARKER = 'playwright.cfg';
  * Where Playwright keeps the engines it installed, in the order it resolves them.
  *
  * `PLAYWRIGHT_BROWSERS_PATH` wins because that is the switch this project already uses (launcher/launch.cjs
- * points it at the package's own `pw-browsers/`, and `config.paths.browsersDir` writes it at startup), and
- * the rest are the platform defaults Playwright falls back to — including the C: drive one this project's
- * "never write to C:" rule exists to avoid, which is exactly why it is listed rather than assumed absent.
+ * points it at the package's own `pw-browsers/`, and `config.paths.browsersDir` writes it at startup).
+ *
+ * Then the **repository's own `pw-browsers/`**, and this root has a reason of its own: the project's disk
+ * discipline keeps multi-hundred-megabyte engines off the system drive, so in a source checkout the engine
+ * lives inside the repository and no environment variable says so. Without this root a development run -
+ * and every tool that resolves the engine the way the app does - would look only in the platform default
+ * location and conclude that a machine with an engine has none. It sits **after** the configured switch,
+ * so an explicit choice always wins, and **before** the platform defaults, so a checkout that carries its
+ * own engine is not second-guessed by a stale install somewhere else.
+ *
+ * The platform defaults stay listed rather than assumed absent - including the C: drive one this project's
+ * "never write to C:" rule exists to avoid, which is exactly why it is named rather than skipped.
  */
 export function firefoxBuildRoots() {
   const home = os.homedir();
@@ -65,6 +75,7 @@ export function firefoxBuildRoots() {
   const out = [];
   const configured = String(process.env.PLAYWRIGHT_BROWSERS_PATH ?? '').trim();
   if (configured) out.push(configured);
+  out.push(path.join(APP_ROOT, 'pw-browsers'));
   if (process.platform === 'win32') out.push(path.join(local, 'ms-playwright'));
   else if (process.platform === 'darwin') out.push(path.join(home, 'Library', 'Caches', 'ms-playwright'));
   else out.push(path.join(home, '.cache', 'ms-playwright'));

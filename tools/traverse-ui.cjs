@@ -26,6 +26,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const path = require('node:path');
 const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
 
@@ -1687,17 +1688,33 @@ async function main() {
     );
     check('extracted features become searchable tags', (featRun.stats?.names ?? []).some((n) => n.value === 'Mock Chan'), JSON.stringify((featRun.stats?.names ?? []).slice(0, 3)));
 
-    // Tor: not necessarily running on this machine, so verify only the contract and "reports an
-    // honest error when unavailable"
+    // Tor: never the state of a port this walk does not own. 9150 is the default Tor Browser listens on, and
+    // a walk that asks about it is asserting about the machine: while Tor Browser was running on this one,
+    // the "being down" arm below simply did not register -- a check count of 241 where the pinned number is
+    // 242, with no failure anywhere to explain it. So the check owns its port: bind an ephemeral port, read
+    // the number, close it, and the port is guaranteed refusing for the length of the walk.
+    const torProbe = net.createServer();
+    torProbe.listen(0, '127.0.0.1');
+    await new Promise((resolve) => torProbe.once('listening', resolve));
+    const deadSocksPort = torProbe.address().port;
+    await new Promise((resolve) => torProbe.close(resolve));
+    const deadSocks = 'socks5://127.0.0.1:' + deadSocksPort;
     const tor = await (
       await fetch(base + '/api/proxy/tor', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ socks: 'socks5://127.0.0.1:9150' }),
+        body: JSON.stringify({ socks: deadSocks }),
       })
     ).json();
     check('POST /api/proxy/tor answers a contract', typeof tor.ok === 'boolean' && !!tor.socks, tor.ok ? `isTor=${tor.isTor} ip=${tor.ip}` : String(tor.error).slice(0, 60));
-    if (!tor.ok) check('Tor being down is reported clearly, not as a crash', /没在跑|不可用/.test(tor.error ?? ''), String(tor.error).slice(0, 70));
+    // The arm is now unconditional: with a port nobody can be listening on, "not ok" is the only answer the
+    // contract allows, and the sentence has to name the port that refused and read as a reason, not a crash.
+    // (Also a check that used to fire on some machines and not others has become one that always runs.)
+    check(
+      'an unreachable Tor is reported clearly, not as a crash',
+      tor.ok === false && /没在跑|不可用/.test(String(tor.error ?? '')) && String(tor.error).includes(String(deadSocksPort)),
+      `ok=${tor.ok} error=${String(tor.error).slice(0, 70)}`
+    );
     const torStart = await (
       await fetch(base + '/api/proxy/tor/start', {
         method: 'POST',

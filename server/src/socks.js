@@ -258,7 +258,11 @@ export async function probeTor(cfg, socksUrl, { timeout = 12000 } = {}) {
     s.once('error', (e) => done(false, e.code ?? e.message));
   });
   if (!reachable.ok) {
-    return { ok: false, socks: `${p.host}:${p.port}`, error: `SOCKS 端口不可用（${reachable.err}）—— Tor 没在跑？` };
+    // The address is in the sentence because it is the one thing the user has to act on: "the port refused"
+    // without saying *which* port sends them to check the default while the config points somewhere else. The
+    // browser-egress path (server/src/net.js) names it too, and two sentences about one failure should not
+    // differ in whether they name the address.
+    return { ok: false, socks: `${p.host}:${p.port}`, error: `SOCKS 端口不可用（${reachable.err}）—— Tor 没在跑？（${p.host}:${p.port}）` };
   }
   try {
     const res = await fetch('https://check.torproject.org/api/ip', {

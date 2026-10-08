@@ -281,8 +281,18 @@ export const DEFAULT_CONFIG = {
     // Anonymous mode: never use a login session at all (no reads of browser cookies, no reuse of a profile);
     // turning it on is the easiest route for the pre-publish self-check and for "anonymizing" scenarios.
     anonymousMode: false,
-    // Whether to send request headers that may carry a site identity, such as Referer / Origin
-    sendReferer: true,
+    // `sendReferer` used to sit here and was **removed** in v1.0.5, because it was a control that did
+    // nothing: no fetcher in this tree sets a `Referer` or an `Origin`, so the switch could not turn
+    // anything on or off, and a toggle with no effect is worse than no toggle — it is a claim about what
+    // leaves the machine that nothing enforces. The two ways out were to wire it or to delete it, and the
+    // decision was delete. Wiring it would have meant *fabricating* those headers, and every address this
+    // app fetches belongs to a third party the user configured: the value we could send is this app's own
+    // `http://127.0.0.1:<port>/`, so "on" would announce a local address to every site in the source list
+    // — a leak, not a feature — while "off" would suppress headers nobody was sending. It also cuts
+    // against the posture the rest of this file takes (userinfo is refused in a URL precisely because
+    // this project logs the addresses it fetches). A config that still carries the key is unaffected:
+    // `mergeDefaults` keeps unknown keys, and nothing reads this one either way. See SECURITY.md and
+    // docs/PRIVACY.md § "what leaves the machine", which already states that no fetcher sends them.
   },
   // Anniversary / birthday / 3D debut / debut anniversary countdown
   calendar: {
@@ -364,7 +374,9 @@ export function mergeDefaults(user, defaults = DEFAULT_CONFIG) {
 //   R1. **A damaged config is never silently replaced.** Missing is a normal first run and stays
 //       silent; corrupt and unreadable are conditions. The damaged file is moved aside as
 //       `config.json.broken-<stamp>`, the condition is recorded here, reported on `/api/config/health`
-//       and logged until it is resolved.
+//       and logged until it is resolved. Those copies are kept up to `BROKEN_CONFIG_KEEP` (3): the
+//       newest is never removed, nothing is removed unless the cap is exceeded, and each removal is
+//       logged by name because the bytes are the thing being given up (see `planBrokenRetention`).
 //   R2. **A write can never leave a truncated config.** Everything goes to a temp file in the same
 //       directory, is flushed with `fsync`, and only then replaces the target with one `rename`; the
 //       previous good file is copied to `config.json.bak` first.
@@ -382,6 +394,96 @@ export const CONFIG_STATES = ['fresh', 'ok', 'corrupt', 'unreadable'];
 /** Where the previous good copy lives, and how a moved-aside damaged file is named. */
 export const BAK_PATH = CONFIG_PATH + '.bak';
 export const brokenPathFor = (stamp = new Date().toISOString()) => `${CONFIG_PATH}.broken-${stamp.replace(/[:.]/g, '-')}`;
+
+/**
+ * How many moved-aside damaged files are kept. Every one of them is evidence, so the number is not a
+ * cache size — it is the point past which "keep it" stops being true.
+ *
+ * The retention exists because each damage event adds one file and nothing ever removed them, and the
+ * cost of that is not disk (a config is a few kB): it is that a directory filling up with
+ * `config.json.broken-…` is where the *newest*, meaningful one stops being findable by the person who
+ * needs it. Three keeps the diagnosing copy plus the two before it — enough to see "this happened
+ * before and with different bytes", which one copy cannot show.
+ *
+ * The cap is a trade and is stated as one rather than presented as free: a removed file's bytes are
+ * gone, and the only record left is the log line naming it (see `pruneBrokenConfigs`). It is bounded
+ * on the side that matters — **the newest file is never a candidate** — so the copy a user would
+ * actually be pointed at (the health route and the log both name it) always survives, and a file is
+ * only ever removed to make room for a newer one that is itself intact.
+ */
+export const BROKEN_CONFIG_KEEP = 3;
+
+/**
+ * Which moved-aside damaged files are past the cap, oldest first. Pure: the caller does the deleting,
+ * and the test can state the policy without touching a filesystem.
+ *
+ * Sorting is by name, and the names sort as dates because `brokenPathFor` writes an ISO/UTC stamp —
+ * `toISOString()` is fixed-width and zero-padded, so lexicographic order *is* chronological order.
+ * Reading the stamps back into `Date` objects would be the more obvious implementation and the worse
+ * one: it has to cope with everything that is not one of our stamps, and a name this function cannot
+ * parse would then have to be given a position by a fallback rule nobody could defend.
+ *
+ * @param {string[]} names entries of the config's directory that belong to this file's broken family
+ * @param {{keep?:number}} [opts]
+ * @returns {string[]} the names to remove; empty whenever the cap is not exceeded
+ */
+export function planBrokenRetention(names, { keep = BROKEN_CONFIG_KEEP } = {}) {
+  const sorted = [...new Set(names)].sort();
+  if (sorted.length <= keep) return []; // nothing is removed unless the cap is exceeded
+  return sorted.slice(0, sorted.length - keep);
+}
+
+/**
+ * Say one line about the retention, through the app's logger when it exists.
+ *
+ * The fallback is not decoration: the **first** load of a run is the one most likely to find a damaged
+ * file, and it happens before `setConfigHealthLogger` is called (index.js loads the config, then hands
+ * the logger over). A removal that was announced only when a logger existed would therefore be silent
+ * exactly in the case the record is kept for — the same mistake `logProblem` above avoids with the same
+ * fallback.
+ */
+function logRetention(message) {
+  const line = `[config] ${message}`;
+  if (health.log) health.log.warn(line);
+  else console.error(line);
+}
+
+/**
+ * Enforce the cap above, and say in the log what went. Called at the one moment the number can grow,
+ * **after** the new copy is on disk: a prune that ran before the copy would delete a file it was about
+ * to replace, and a failed copy would then leave nothing at all.
+ */
+function pruneBrokenConfigs() {
+  const dir = path.dirname(CONFIG_PATH);
+  const prefix = path.basename(CONFIG_PATH) + '.broken-';
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.startsWith(prefix));
+  } catch (err) {
+    // An unreadable directory is not a reason to refuse; the damaged file is already preserved.
+    logRetention(`could not list ${dir} to enforce the ${BROKEN_CONFIG_KEEP}-file retention: ${err.message}`);
+    return [];
+  }
+  const removed = [];
+  for (const name of planBrokenRetention(names)) {
+    try {
+      fs.unlinkSync(path.join(dir, name));
+      removed.push(name);
+    } catch (err) {
+      // A file we cannot remove stays. The cap is a housekeeping rule, and housekeeping does not get
+      // to fail a load that has already preserved what it came to preserve.
+      logRetention(`the ${BROKEN_CONFIG_KEEP}-file retention could not remove ${name}: ${err.message}`);
+    }
+  }
+  if (removed.length) {
+    // Named, not counted: the bytes are gone, so the name is the only handle left on what was deleted.
+    logRetention(
+      `removed ${removed.length} old damaged-config copy/copies (retention ${BROKEN_CONFIG_KEEP}): ${removed.join(', ')}` +
+        ` — the newest copy is always kept`
+    );
+  }
+  return removed;
+}
 
 /** The states that mean "something is wrong", i.e. the ones that must be visible until fixed. */
 export const isConfigFault = (state) => state === 'corrupt' || state === 'unreadable';
@@ -494,7 +596,15 @@ export function resetConfigHealthForTest(state = 'fresh') {
  * silently proceeds over a config we could not preserve.
  */
 function moveAsideDamaged() {
-  const movedTo = brokenPathFor();
+  // Unique, because the retention below makes a collision visible as a wrong answer rather than as a
+  // harmless overwrite: two damage events inside the same millisecond would otherwise write the same
+  // name, the second copy would replace the first, and the count of preserved files would say "one".
+  // The suffix is appended *after* the stamp and never replaces it, so a name that carries one still
+  // sorts by the moment it was written (see `planBrokenRetention`); ten attempts is more than the
+  // three-file cap can ever reach inside one millisecond, and the loop is bounded rather than a
+  // `while (true)` so a directory full of colliding names cannot hang a load.
+  let movedTo = brokenPathFor();
+  for (let n = 2; n <= 10 && fs.existsSync(movedTo); n++) movedTo = `${brokenPathFor()}-${n}`;
   try {
     fs.copyFileSync(CONFIG_PATH, movedTo);
   } catch (err) {
@@ -506,6 +616,10 @@ function moveAsideDamaged() {
   } catch {
     stillInPlace = true;
   }
+  // Only now, with this event's copy on disk: the cap must never be able to remove the file it is
+  // making room for (a prune before the copy would delete the oldest file and then, on a failed copy,
+  // have destroyed evidence for nothing).
+  pruneBrokenConfigs();
   return { movedTo, stillInPlace, error: null };
 }
 

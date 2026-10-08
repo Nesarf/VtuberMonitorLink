@@ -2,6 +2,7 @@
 // Start the local server -> open the browser automatically -> start the built-in scheduler
 import { spawn } from 'node:child_process';
 import { configHealthSnapshot, loadConfig, saveConfig, setConfigHealthLogger, resolveDir, APP_ROOT } from './config.js';
+import { setBaselineHealthLogger } from './watch.js';
 import { createLogger } from './logger.js';
 import { createApp } from './server.js';
 import { runOnce } from './runner.js';
@@ -12,6 +13,16 @@ import path from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 43110);
 const HOST = '127.0.0.1';
+
+/**
+ * The exit code for "an exception escaped every boundary and the process is going down".
+ *
+ * It is deliberately not 1: 1 is what the launcher and the traversals already read as "the port could
+ * not be bound / the process failed to start", and a run that dies *while serving* is a different
+ * event from one that never started — the log line says which, and the code lets a script tell them
+ * apart without parsing it.
+ */
+const EXIT_UNCAUGHT = 70;
 
 /**
  * Write the paths from the config into the process environment, for submodules/third-party
@@ -42,6 +53,11 @@ const log = createLogger(path.join(resolveDir(cfg, 'logsDir'), 'server.log'));
 // logged where the user will see it, and state the load result once here — the startup line is the
 // one place a first-run and a damaged file must not look the same.
 setConfigHealthLogger(log);
+// The watch baselines get the same treatment, and for the same reason (see the block in server/src/watch.js):
+// a damaged baseline is a condition with a preserved file and a route that reports it, and the logger is what
+// makes the standing condition visible while it stands rather than only at the moment it was found. Injected
+// here — after this logger exists — exactly like the config one.
+setBaselineHealthLogger(log);
 {
   const h = configHealthSnapshot();
   if (h.state === 'corrupt' || h.state === 'unreadable') {
@@ -124,28 +140,74 @@ server.on('error', (err) => {
 // built-in scheduler
 scheduler.start(cfg, runScheduled, log);
 
-// graceful shutdown
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => {
-    log.info(`received ${sig}, shutting down`);
-    scheduler.stop();
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 3000).unref();
-  });
+/**
+ * The ordered shutdown, used by every path that ends this process.
+ *
+ * The order is the whole content of it: stop the timers (no new scheduled work is started), close the
+ * HTTP server (no new connections are accepted, in-flight ones are allowed to finish), then exit. The
+ * log is already on disk by the time this runs — logger.js writes with `appendFileSync`, so "flush the
+ * log" is satisfied by writing the last line *before* any of this, not by a flush step at the end.
+ *
+ * The 3s timer is the floor under the polite half: a hanging socket or a stuck SPA connection would
+ * otherwise keep `server.close()`'s callback from ever firing, and the process would be the one thing
+ * a shutdown must not be — still alive. It is `unref`'d so it never itself holds the process open.
+ */
+function shutdown(exitCode, why) {
+  log.info(`${why}; shutting down (exit ${exitCode})`);
+  scheduler.stop();
+  const forced = setTimeout(() => process.exit(exitCode), 3000);
+  forced.unref();
+  server.close(() => process.exit(exitCode));
 }
 
-// ── Safety net: one typo must not take the whole site down ────────────────
-// Lesson learned: Express 4 does **not** catch a throw inside an async route, so a single
-// ReferenceError (a misspelled variable name in features.js) exited the whole process and
-// blanked every page along with it.
-// Here uncaught exceptions/rejections are logged and the process keeps running — for a local
-// tool, "some endpoint returns 500" is far more acceptable than "the whole service is gone".
+// graceful shutdown on a signal: the exit code is 0 because a requested stop is a normal end
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => shutdown(0, `received ${sig}`));
+}
+
+// ── Safety net, and the two ideas that used to be one ─────────────────────
+//
+// Lesson learned the hard way: Express 4 does **not** catch a throw or a rejection inside an *async*
+// route, so a ReferenceError in one route handler once ended the whole process and blanked every page
+// with it. Two different things were then conflated in the fix, and they have to stay apart:
+//
+//   • A **failed request** is a normal, contained event. It already has an owner one layer down: the
+//     JSON error fallback in server/src/server.js (the `app.use((err, req, res, _next) => …)` at the
+//     end of `createApp`) answers 500 with the route's name and the process keeps serving. That
+//     handler is the boundary, and it is *kept* — nothing here may turn a route error into an exit.
+//   • An **uncaught** exception is a different statement. It means a throw reached the top of the
+//     stack: some async callback, timer or promise nobody awaited. The stack that unwound through it
+//     is not the stack we would have written, and whatever that code was in the middle of may be half
+//     done. Continuing from there is serving from a state nobody can vouch for — the process *looks*
+//     alive (the port answers, the dashboard reloads) while the invariant behind it is broken, which
+//     is a worse failure than being down, because being down is visible.
+//
+// So an uncaught exception is logged and then followed by the ordered shutdown above, with a non-zero
+// code. The cost is explicit and accepted: a bug that would previously have produced a few 500s now
+// ends this process, and `launcher/launch.cjs` (which starts the app and reports the child's code) and
+// the traversals (which spawn it) will see that exit — that is the intended, visible outcome, and it
+// is why the log line is written first and the exit code is distinct from "failed to start".
+//
+// `unhandledRejection` stays log-only, and that is a decision rather than an oversight: the rejection
+// paths this project actually has (a failed fetch, a refused write) are awaited or `.catch()`ed at the
+// site, so an escaped one is usually a *forgotten* `.catch()` on a promise whose failure the code
+// already treats as "this one operation did not work" — turning that into a process exit would take
+// the site down over one dead source. What it does *not* share with an uncaught exception is silence:
+// it is logged, loudly, with the stack.
+let shuttingDown = false;
 process.on('unhandledRejection', (reason) => {
   log.error(`unhandledRejection — ${reason?.stack ?? reason}`);
 });
 process.on('uncaughtException', (err) => {
   log.error(`uncaughtException — ${err?.stack ?? err}`);
-  if (/EADDRINUSE/.test(String(err?.code ?? ''))) process.exit(1);
+  // A second throw while the shutdown is already in flight is reported and then ignored: re-entering
+  // the teardown is how a shutdown ends up hanging instead of finishing.
+  if (shuttingDown) {
+    log.error('a second uncaught exception arrived while shutting down; the exit already in progress stands');
+    return;
+  }
+  shuttingDown = true;
+  shutdown(EXIT_UNCAUGHT, 'the process state can no longer be vouched for');
 });
 
 // The first-run hint that used to live here is gone: it tested `!fs.existsSync(config.json)` on its

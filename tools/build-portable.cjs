@@ -382,7 +382,12 @@ function main() {
   // The About panel serves these files at runtime, so **both** READMEs have to be in the package:
   // README.md (English) and README.zh-CN.md (Chinese) — otherwise the in-app language toggle has
   // nothing to switch to.
-  for (const f of ['README.md', 'README.zh-CN.md', 'LICENSE']) {
+  //
+  // SECURITY.md is here for the same reason, one step removed: `docs/PRIVACY.md` is copied into the
+  // package and names SECURITY.md as its companion document, so a packaged user could read the
+  // privacy policy and not the threat model it points at. It ships next to the Readmes — the same
+  // place the api/readme route looks — so the copy is where the document the user is reading says it is.
+  for (const f of ['README.md', 'README.zh-CN.md', 'LICENSE', 'SECURITY.md']) {
     if (fs.existsSync(path.join(ROOT, f))) copyFile(path.join(ROOT, f), path.join(appDir, f));
   }
   if (fs.existsSync(path.join(ROOT, 'config.example.json'))) {

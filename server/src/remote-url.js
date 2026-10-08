@@ -90,13 +90,13 @@ export const URL_POLICY_TABLE = [
   },
   {
     code: 'dns-unresolved',
-    what: 'a name the resolver cannot answer for',
-    why: 'the addresses of an unresolved name were never inspected, which is the same as no check at all. See point (2) in the header for the cost this accepts and where it is not paid.',
+    what: 'a name the resolver did not answer for — the lookup failed (NXDOMAIN, no resolver reachable, a refused query)',
+    why: 'the addresses of an unresolved name were never inspected, which is the same as no check at all. See point (2) in the header for the cost this accepts and where it is not paid. This is the code for "the lookup did not complete"; a lookup that completed with an empty answer is `dns-empty` below, because the two are different things to tell a user.',
   },
   {
     code: 'dns-empty',
-    what: 'a name the resolver answers with an empty address list',
-    why: 'a successful lookup with no addresses is a resolver saying "yes" and then naming nowhere; treating it as resolved would skip the address check entirely.',
+    what: 'a name the resolver answered with an empty address list',
+    why: 'a successful lookup with no addresses is a resolver saying "yes" and then naming nowhere; treating it as resolved would skip the address check entirely. Kept distinct from `dns-unresolved` on purpose: "this name has no address" and "this name could not be looked up" are different diagnoses, and the second is the one that means the machine\'s DNS is the problem.',
   },
 ];
 
@@ -442,8 +442,16 @@ export async function validateRemoteUrl(url, policy = {}) {
     const code = String(e?.message ?? e) === 'ETIMEOUT' ? 'dns-timeout' : 'dns-unresolved';
     return refuse(code, `无法解析 ${host} / could not resolve the name: ${e?.message ?? e}`, host);
   }
+  // An answer with no addresses in it is **not** the same diagnosis as a resolver that did not answer,
+  // and the two are told apart here because the user's next move differs: `dns-empty` says the name
+  // exists and has no A/AAAA record to reach (a domain whose records were removed, a name only served
+  // over a record type this lookup does not ask for, a filtered answer), while `dns-unresolved` says
+  // the lookup itself failed (NXDOMAIN, no resolver reachable, a broken stack). The distinction is
+  // available — `resolveAll` returns `[]` only for a query that *completed* with nothing in it, and
+  // throws for one that failed — so the code and URL_POLICY_TABLE are made to agree on it rather than
+  // declaring `dns-empty` and never returning it.
   if (!addresses.length) {
-    return refuse('dns-unresolved', `域名解析不到地址 / the name resolves to no address: ${host}`, host);
+    return refuse('dns-empty', `域名解析不到地址 / the name resolves to no address: ${host}`, host);
   }
 
   // Every answer must pass. One bad address in a mixed answer refuses the whole name: the resolver that

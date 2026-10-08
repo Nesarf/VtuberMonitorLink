@@ -72,6 +72,12 @@ jobs:
 
   fast:
     runs-on: windows-latest
+    # The engine lives in the checkout, not in the platform default location, and it is set for the whole
+    # job rather than for the install step alone: Playwright resolves PLAYWRIGHT_BROWSERS_PATH at module
+    # load, so a variable that existed only while the download ran would be gone by the time the check
+    # that has to *find* the engine starts - and the check would silently report the environment instead.
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}\pw-browsers
     steps:
       - uses: actions/checkout@v4
 
@@ -83,6 +89,53 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      # The engine, so that the browser check in `verify:fast` really renders a page here instead of
+      # printing its environment statement.
+      #
+      # `npm ci --ignore-scripts` is deliberate (Playwright's postinstall would download ~150 MB into a
+      # system location), and the consequence was that tools/browser-engine-test.mjs could only ever take
+      # its "no discoverable engine" branch in this job: the build was green whether or not the render
+      # worked. So the download happens here, once, for the one job that needs it - `release.yml`'s build
+      # job stays as fast as it was, and the packaged release gets its engine from --with-browsers.
+      #
+      # Three properties are on purpose:
+      #   * the install target is the repository (`PLAYWRIGHT_BROWSERS_PATH` at the job level), never
+      #     %LOCALAPPDATA%\ms-playwright: the engine belongs to this checkout, and a repo-local path is
+      #     the layout `firefoxBuildRoots()` already resolves first;
+      #   * a failed download is **not** a red build. It is retried, and if it still fails the step warns
+      #     and exits 0 by itself, so the honest environment statement is what the check reports - a flaky
+      #     CDN must not turn into a red build in the job that exists to give fast feedback on the source.
+      #     (`continue-on-error: true` would have the same effect on the run, and is deliberately not used:
+      #     it marks the step red in the UI for a failure that is being *tolerated* on purpose, and a red
+      #     marker nobody acts on is how people learn to ignore the colour.)
+      #     What must never happen is the opposite - a *reporting* failure staying green - and that stays
+      #     covered by `verify:fast`'s own exit code;
+      #   * the payload is reported (`firefox-*` directories found), because "the engine is present" is
+      #     the fact the render branch depends on and an install that silently installed nothing would
+      #     otherwise read as success.
+      - name: Install the browser engine (Firefox) for the render check
+        id: engine
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $target = $env:PLAYWRIGHT_BROWSERS_PATH
+          Write-Host "engine root: $target"
+          $ok = $false
+          foreach ($attempt in 1..3) {
+            # npx.cmd, not npx: pwsh does not resolve the extensionless shim the way cmd does.
+            & npx.cmd --yes playwright install firefox
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::warning title=engine install attempt $attempt failed::npx playwright install firefox exited $LASTEXITCODE"
+            Start-Sleep -Seconds (5 * $attempt)
+          }
+          $found = @(Get-ChildItem -Path $target -Directory -Filter 'firefox-*' -ErrorAction SilentlyContinue)
+          if ($found.Count -gt 0) {
+            Write-Host "engine present: $($found.Name -join ', ')"
+          } else {
+            Write-Host "::warning title=no engine installed::the render check will report this machine's environment instead of rendering, which is not a failure"
+          }
+          if (-not $ok) { Write-Host "the engine could not be downloaded; verify:fast still runs and will say so" }
+
       - name: Fast checks (integrity, locales, i18n keys, plural forms, unit tests)
         shell: pwsh
         run: |
@@ -91,7 +144,10 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content $log
           if ($code -ne 0) {
-            $tail = (Get-Content $log -Tail 12) -join "`n"
+            # 30 lines, not 12: the identity of the failing check is in the *last lines of that check's
+            # output*, and 12 of them put the name out of reach from outside - which is exactly how the
+            # last red run had to be diagnosed from the job log with a token.
+            $tail = (Get-Content $log -Tail 30) -join "`n"
             $tail = $tail -replace '%', '%25'
             $tail = $tail -replace "`r?`n", '%0A'
             Write-Host "::error title=verify:fast failed::$tail"

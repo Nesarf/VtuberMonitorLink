@@ -55,6 +55,11 @@ function check(name, ok, detail) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// What "the app is up" means, and why it is not `networkidle` any more: see tools/lib/app-ready.cjs.
+// It lives in the shared lib so the walk and tools/readiness-test.mjs cannot drift apart about the signal.
+const { waitForAppReady } = require('./lib/app-ready.cjs');
+
+
 /**
  * Only these two sources stay on: one cheap official site (direct, fast) and one wiki.
  *
@@ -329,8 +334,16 @@ async function main() {
     });
 
     // ------------------------------------------------------------------ load
+    //
+    // Wait for a **condition**, not for the network to go quiet. The reasoning, and the assumption
+    // `networkidle` got wrong about this application, are on `waitForAppReady` above; what matters here is
+    // that readiness is a **precondition** rather than a check, exactly as the old `goto` timeout was — so
+    // the walk still makes the same 242 assertions, and none of them became conditional on this wait
+    // succeeding. It still fails with its own reason (`READY_FAILED`), which is what the thrown `goto`
+    // timeout never had.
     process.stdout.write('\n1. load\n');
-    await page.goto(base + '/', { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(base + '/', { waitUntil: 'load', timeout: 30000 });
+    await waitForAppReady(page, 30000);
     const title = (await page.locator('h1').first().innerText()).trim();
     check('page mounts and shows the product title', title === "Vtuber's Monitor Link", title);
 
@@ -1265,8 +1278,11 @@ async function main() {
     check('the endpoint reports the calendar day and time zone used for the computation', /^\d{4}-\d{2}-\d{2}$/.test(tzCmp.today) && !!tzCmp.timeZone, `${tzCmp.today} @ ${tzCmp.timeZone}`);
 
     // Assert after a refresh: the page only fetches on mount / month change, so re-clicking the same
-    // tab does not re-fetch
-    await page.reload({ waitUntil: 'networkidle' });
+    // tab does not re-fetch. The refresh waits the same way the first load does — a reload of a page
+    // that polls its state API every 3 s never reaches `networkidle` either, so the old form here was
+    // the same wrong assumption in a second place.
+    await page.reload({ waitUntil: 'load' });
+    await waitForAppReady(page, 30000);
     await tab('日历').click();
     await page.waitForTimeout(900);
     const reloaded = await mainText();

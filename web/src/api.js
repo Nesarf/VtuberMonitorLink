@@ -196,6 +196,27 @@ export const api = {
   exportConfigUrl: (secrets) => `/api/config/export${secrets ? '?secrets=1' : ''}`,
   importConfig: (config) => post('/api/config/import', { config }),
 
+  // config file integrity (see the durability section of server/src/config.js)
+  //
+  // Why recovery returns the route's own answer instead of going through `j()`: the route refuses with **409**
+  // and a reason ("no config.json.bak to recover from", "config.json is in the way; it is never overwritten by
+  // a recovery"), and `j()` would flatten that into a thrown Error carrying only a message - losing the
+  // `health` snapshot the refusal carries, which is what the banner re-reads instead of assuming an outcome.
+  // The body is returned as-is, refusal included, and the caller reports it in the server's own words.
+  getConfigHealth: () => j('/api/config/health'),
+  recoverConfig: async () => {
+    const res = await fetch('/api/config/recover', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const payload = await res.json().catch(() => null);
+    if (payload && typeof payload === 'object') return { httpOk: res.ok, ...payload };
+    // A refusal that is not JSON at all (something in front of the app, a crash): the status is all there is,
+    // and it is still a reason rather than a silent no-op.
+    return { httpOk: res.ok, error: `HTTP ${res.status}`, health: null };
+  },
+
   // intel
   getIntelDiff: () => j('/api/intel/diff'),
   flagIntel: (id, patch) =>

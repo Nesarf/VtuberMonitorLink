@@ -1201,14 +1201,13 @@ export default function Settings({ onLayout }) {
         {/* The anonymous-mode switch itself lives on the Browser page, together with the profile it turns off:
             one switch, one place. It used to sit here as well, which is the arrangement that let the two copies
             disagree. */}
+        {/* A "Referer / Origin" on/off select used to sit in this row, bound to `privacy.sendReferer`. It was
+            deleted because it controlled nothing: no fetcher in this tree sets a `Referer` or an `Origin`, so
+            neither position changed a single request, and the label read as a privacy control that was not in
+            fact protecting anything. See the note where the key used to live in server/src/config.js for why
+            the other way out — making the app send those headers — was rejected: the only value it could send
+            is this app's own loopback address, to every third-party site the user configured. */}
         <div className="row">
-          <div className="field" style={{ flex: '0 0 200px' }}>
-            <label>Referer / Origin</label>
-            <select value={String(cfg.privacy?.sendReferer !== false)} onChange={(e) => patch('privacy.sendReferer', e.target.value === 'true')}>
-              <option value="true">on</option>
-              <option value="false">off</option>
-            </select>
-          </div>
           <div className="field" style={{ flex: '0 0 180px' }}>
             <label>{t('probeTtl')}</label>
             <input type="number" value={cfg.ui?.probeTtlMinutes ?? 30} onChange={(e) => patch('ui.probeTtlMinutes', Number(e.target.value))} />

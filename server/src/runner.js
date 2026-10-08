@@ -5,7 +5,7 @@ import { effectiveSources } from './sources.js';
 import { fetchAll } from './fetchers/index.js';
 import { analyze, preflight } from './analyze.js';
 import { collectItems, matchedKeywords } from './items.js';
-import { checkAll } from './watch.js';
+import { baselineHealthSnapshot, checkAll } from './watch.js';
 import { ensureDirs, runLogPath, saveFeedFiles, saveItems, saveReport } from './reports.js';
 import path from 'node:path';
 import { createLogger } from './logger.js';
@@ -256,6 +256,10 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
         ok: !!r.ok,
         changed: !!r.changed,
         summary: r.summary ?? r.error ?? '',
+        // What the baseline for this target was in when the check ran: 'ok' | 'first-run' | 'corrupt' |
+        // 'unavailable'. On the per-target record as well as in the run's own result, because "watch reported
+        // nothing for this target" means two different things depending on it.
+        baseline: r.baseline ?? null,
         // Future-facing field, kept deliberately: no watch handler sets `growth` any more, so this is null
         // on every entry today. It is the sibling of the `follower` baseline in server.js and is kept for
         // the same reason (see the comment there).
@@ -492,6 +496,11 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       silence: runState.silence ?? null,
       cost: runState.cost ?? null,
       dormant: runState.dormant ?? null,
+      // The condition of the watch baselines this run read (server/src/watch.js). It belongs in the run's own
+      // result for a reason the config fault does not have: a damaged baseline changes what the *watch* answers
+      // about the world — the first comparison after the damage cannot be a diff of it — so a report that lists
+      // watch results without this would be describing a quieter world than the one it actually looked at.
+      watchBaselines: baselineHealthSnapshot(),
     };
 
     // 7) The self-check goes **last**: fetch everything first, produce the report first, and only then

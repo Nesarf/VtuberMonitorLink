@@ -16,6 +16,7 @@ import Reports from './pages/Reports.jsx';
 import Calendar from './pages/Calendar.jsx';
 import People from './pages/People.jsx';
 import About from './About.jsx';
+import ConfigFaultBanner from './ConfigFaultBanner.jsx';
 
 const TABS = ['intel', 'search', 'people', 'calendar', 'run', 'sources', 'watch', 'browser', 'llm', 'settings', 'reports'];
 
@@ -25,19 +26,37 @@ export default function App() {
   const [alerts, setAlerts] = useState(0);
   const [layout, setLayout] = useState(null);
   const [about, setAbout] = useState(false);
+  const [stateOk, setStateOk] = useState(false);
+  // The config file's health, read on the shell's existing 3 s cadence (see `tick` below) rather than on a timer
+  // of its own. `null` means "no answer yet or the route failed", and the banner renders nothing for it - the
+  // hard case is a config damaged enough that the app is running on defaults, where the honest state is
+  // "we do not know" until the route answers, never a guess made from the state name.
+  const [configHealth, setConfigHealth] = useState(null);
   const prevRun = useRef(null);
+
+  /**
+   * Re-read the settings the *shell* itself is built from (theme, layout) and apply them.
+   *
+   * Extracted from the mount effect for the recovery path: `POST /api/config/recover` replaces the config file
+   * with the backup, so the settings this page is displaying may not be the ones on disk any more. Re-reading is
+   * how "after a successful recover, show the new state rather than assuming success" is true of the *shell* and
+   * not only of the banner - a restored theme that only appeared after a manual reload would be the silent
+   * substitution this release is about, in reverse.
+   */
+  const loadUiFromConfig = useCallback(() => {
+    return api
+      .getConfig()
+      .then((c) => {
+        applyTheme(c?.ui?.theme);
+        setLayout(c?.ui?.layout ?? {});
+        applyLayout(c?.ui?.layout);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let stop = false;
-    api
-      .getConfig()
-      .then((c) => {
-        if (stop) return;
-        applyTheme(c.ui?.theme);
-        setLayout(c.ui?.layout ?? {});
-        applyLayout(c.ui?.layout);
-      })
-      .catch(() => {});
+    loadUiFromConfig();
 
     // Broadcast when the settings page changes the layout, so the shell follows immediately
     const onLayout = (e) => {
@@ -65,8 +84,27 @@ export default function App() {
         }
         prevRun.current = { running: st.running, finishedAt: st.finishedAt };
         setAlerts(st.alerts ?? 0);
+        // "The shell is up and the API answered" as a fact in the DOM rather than as a property of the
+        // network. It is the signal anything that has to *wait for this app* should use, because the
+        // network can never tell it: `tick` below runs on a 3 s interval (and once immediately), so the
+        // page is never quiet for the 500 ms a `networkidle` wait asks for — an automated walk that
+        // waited for that would be asserting how loaded the machine is, which is exactly how it came to
+        // pass on a quiet day and time out on a busy one. Set here and not before: `stateOk` flips only
+        // after a real answer from `/api/state`, so the attribute cannot appear on a page that never
+        // reached the service.
+        setStateOk(true);
       } catch {
         /* stay silent while the service is not up */
+      }
+      // The config's health, on the same cadence and in its **own** try/catch. Two reasons it is separate
+      // rather than folded into the block above: the two routes can fail independently, and - the case this
+      // feature exists for - a config damaged enough to be running on defaults must not be able to take the
+      // shell's readiness signal down with it. A failure here leaves `configHealth` at its previous value and
+      // `data-vml-ready` exactly as it was.
+      try {
+        setConfigHealth(await api.getConfigHealth());
+      } catch {
+        /* the route is unreachable; the banner renders nothing rather than guessing */
       }
     };
     const timer = setInterval(tick, 3000);
@@ -79,6 +117,15 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * The same signal, written to the document so a walk (tools/traverse-ui.cjs) or any other observer can
+   * wait for it with an ordinary selector. In an effect rather than in the fetch callback on purpose: an
+   * effect runs after React has committed, so a waiter that sees the attribute sees a rendered shell too.
+   */
+  useEffect(() => {
+    if (stateOk) document.documentElement.setAttribute('data-vml-ready', '1');
+  }, [stateOk]);
 
   const notify = (title, body) => {
     try {

@@ -14,14 +14,79 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { resolveDir } from './config.js';
+import { APP_ROOT, resolveDir } from './config.js';
 import { netFetch, resolveProxyMode } from './net.js';
 import { gapWithJitter } from './observe.js';
 import { remoteUrlShapeProblem, validateRemoteUrl } from './remote-url.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+// ─────────────────────────────────────────────────────────────────────────────
+// The User-Agent this module sends: two values, because there are two callers
+//
+// What the audit found: one module constant
+//
+//     const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)
+//                 Chrome/126.0.0.0 Safari/537.36';
+//
+// used by **every** request this module makes, with nothing anywhere saying whether `126` meant anything. It
+// did not. The string was a copy of the one the RSS fetcher carries (server/src/fetchers/rss.js) and it dated
+// from when the product rendered with Chromium; it went stale the moment the engine became Playwright Firefox
+// in v1.0.4, and it went stale silently, because a version number in a header is read by nobody.
+//
+// The callers do not want the same thing, and saying so is the fix:
+//
+//   • A **MediaWiki API** request is not a browser. It fetches `api.php?…&format=json` — one JSON document, and
+//     no wiki serves a different one to a non-browser. What an operator wants from a UA is a name they can look
+//     up, throttle or contact, which is what the `VML/<version>` product token is for. It is also the honest
+//     thing to send when the request carries a `BotPassword` credential (see `buildWikiLoginRequest` below):
+//     claiming to be somebody's browser while using their account is a claim that cannot be backed up.
+//
+//   • A **web page** (`kind: 'url'`) is a page, and may well serve something different to a non-browser. This
+//     module is deliberately *not* the browser engine — that is server/src/fetchers/browser.js, which renders
+//     through Playwright Firefox and sends that engine's own truthful UA — so for a plain HTTP GET the least
+//     surprising thing to send is a browser token, and the engine this product actually drives is Firefox.
+//
+// Neither value pins a version, and that is the point of the change rather than an implementation detail. The
+// version of the rendering engine lives in the Playwright payload and moves with it; a number typed here would
+// be wrong on the next release and nothing would notice, which is exactly how the string above became a lie.
+// A sentinel is used (`rv:0.0`) so that "this browser token makes no version claim" is visible to anyone
+// reading the header, rather than looking like a version somebody forgot to update.
+//
+// Scope: the audit named this module. The same Chrome/126 literal also lives in
+// server/src/fetchers/rss.js, server/src/fetchers/mediawiki.js, server/src/probe.js and server/src/thumbs.js,
+// and those are **not** changed here (they are outside this change's surface and one of them is the mediawiki
+// fetcher that another change in this release owns). The rule stated above is what they should follow; the
+// duplication is recorded rather than quietly half-fixed. tools/watch-ua-test.mjs asserts that this module no
+// longer carries a versioned Chrome literal, and names the remaining sites so the next reader finds them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The package version, read once, for the product token. Never used as a claim about an engine. */
+const PRODUCT_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
+  } catch {
+    // An unreadable package.json must not stop a watch run, and 0.0.0 is obviously not a version claim.
+    return '0.0.0';
+  }
+})();
+
+/**
+ * The User-Agent for the MediaWiki API requests: a product token, not a browser.
+ *
+ * This is the shape MediaWiki's own User-Agent policy asks for, and it survives a version bump because the
+ * version is read from package.json at runtime instead of being typed into a string here.
+ */
+export const API_UA = `VtuberMonitorLink/${PRODUCT_VERSION} (+watch-target; MediaWiki API)`;
+
+/**
+ * The User-Agent for `kind: 'url'` page fetches: a Firefox token with an explicit **no-version** sentinel.
+ *
+ * Why Firefox and not Chrome: the engine this product drives is Playwright Firefox (v1.0.4 onward), so saying
+ * Firefox is the true statement about what is at the other end. Why `rv:0.0`: see the block above — the version
+ * belongs to the engine, and copying it here is the rot this change removes.
+ */
+export const PAGE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:0.0) Gecko/20100101 Firefox/0.0';
 
 export const TARGET_KINDS = [
   { id: 'url', zh: '任意网页', en: 'Any web page', login: 'none' },
@@ -109,20 +174,333 @@ export function sanitizeId(id) {
   return String(id ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80) || 'target';
 }
 
-export function getBaseline(cfg, id) {
-  const f = baselinesPath(cfg, id);
-  try {
-    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
-  } catch {
-    /* corrupt file: treat as absent */
+// ─────────────────────────────────────────────────────────────────────────────
+// The baseline: three ways it can be missing, and only two of them are "no baseline"
+//
+// The v1.0.5 audit found this shape:
+//
+//     export function getBaseline(cfg, id) {
+//       const f = baselinesPath(cfg, id);
+//       try {
+//         if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf8'));
+//       } catch {
+//         /* corrupt file: treat as absent */
+//       }
+//       return null;
+//     }
+//
+// One `catch` covering two different facts, and the comment states the decision that is wrong: a **damaged**
+// baseline is treated as one that was never there. The consequence is not a hiccup, it is the opposite of what a watch
+// feature is for — the run silently rebuilds the baseline from the *current* content of the page, so the
+// first comparison after the damage is against bytes that were written a moment ago. Nothing can be
+// reported, the target looks quiet, and the change that happened during the damage is the one change that
+// can never be reported again. The damaged file is also gone in the sense that matters: the next check
+// writes over it, so the evidence cannot be looked at afterwards.
+//
+// config.js settled the same question for its own file (see the "Config durability" block there), and the
+// rule is followed here rather than invented again:
+//
+//   missing     -> 'first-run'    a genuine first check of this target. Initialize silently, no diagnostic:
+//                                 this is the state every new watch target is in, and making it a warning
+//                                 would train the reader to ignore the warning that matters.
+//   not JSON    -> 'corrupt'      the damaged file is **copied aside** as `<id>.baseline.json.corrupt-<stamp>`
+//                                 and reported (`fault: true`); the target's baseline is then rebuilt in the
+//                                 same pass that reports the damage, so a watch does not stop working over it.
+//                                 The rebuild writes the new baseline *and* the preserved copy keeps the old
+//                                 bytes, which is what makes "what did I miss" answerable by hand afterwards.
+//   unreadable  -> 'unavailable'  the file is there and we were not allowed to look (EACCES/EPERM/EISDIR).
+//                                 Nothing is written: a file we may not read is a file we may not replace —
+//                                 and this is the state where writing would be most likely to destroy
+//                                 something, for the same reason config.js refuses to recover over it.
+//   parses      -> 'ok'
+//
+// Where the condition is *visible*: on the running process (this module's `baselineHealthSnapshot`, served
+// by GET /api/watch, in the same way config.js serves /api/config/health), and in the run report — every
+// check result carries a `baseline` field, and the run's `lastResult` carries the whole picture. A log line
+// alone was the failure: it scrolls past in a run that also prints twenty other lines.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The four states a baseline can be in at read time. There is no fifth "unknown, carry on". */
+export const BASELINE_STATES = ['ok', 'first-run', 'corrupt', 'unavailable'];
+
+/** The states that mean "something is wrong", i.e. the ones that stay visible until they are dealt with. */
+export const isBaselineFault = (state) => state === 'corrupt' || state === 'unavailable';
+
+/** Error codes that mean "we were not allowed to read it", as opposed to "its bytes are not JSON". */
+const BASELINE_PERMISSION_CODES = new Set(['EACCES', 'EPERM', 'EROFS', 'EISDIR']);
+
+/**
+ * The one sentence each fault state is reported with, **never** the error message itself.
+ *
+ * This is not tidiness. A `JSON.parse` failure in current node quotes the offending input — the message is
+ * literally `Unexpected token 'o', "nope{" is not valid JSON` — and a baseline file holds a page's text or a
+ * wiki title. Echoing the parse message into the record that `GET /api/watch` serves would put a slice of the
+ * user's own watched content on a route, which is the same class of mistake as echoing a config secret. The
+ * raw message goes to the log, where it is wanted and where it stays; the record says which state the file
+ * is in, which is what the reader needs in order to act.
+ */
+const BASELINE_ERROR_REASONS = {
+  corrupt: 'the baseline is not valid JSON',
+  unavailable: 'the baseline could not be read (permissions or an unreadable path)',
+};
+const baselineCodeOf = (err) => String(err?.code ?? err?.name ?? 'error');
+
+/** Where a damaged baseline is preserved. Same stamp shape as config.js's `brokenPathFor`. */
+export const corruptBaselinePathFor = (file, stamp = new Date().toISOString()) =>
+  `${file}.corrupt-${stamp.replace(/[:.]/g, '-')}`;
+
+/**
+ * The process's view of the baselines.
+ *
+ * `faults` is keyed by **file path**, and that is the part that makes the state persistent in the way the
+ * problem needs: a corrupt file that was repaired and then read fine on the next check is `ok` again; a file
+ * that is unreadable stays in this map until it is not, so a rebuild that could not happen is not forgotten
+ * between two runs.
+ */
+const baselineHealth = {
+  events: [],
+  /** Per baseline file: what the most recent read *or write* of it said. This is what the route and the
+   *  report read, and it is the single record the fault states are derived from. */
+  reports: new Map(),
+  log: null,
+  lastLogged: '',
+};
+
+/**
+ * The app's logger, injected once at startup (server/src/index.js).
+ *
+ * Injected rather than imported for the reason config.js states for the same arrangement: logger.js writes
+ * to a directory the config names, so importing it here would be a cycle (config.js -> logger.js -> config).
+ */
+export function setBaselineHealthLogger(log) {
+  baselineHealth.log = log ?? null;
+}
+
+/**
+ * Log a standing condition **once**, and again only when the condition itself changes. The dedupe key is
+ * `state|file|code`, not the state alone: a second, differently-damaged baseline is news, and a warning
+ * repeated on every check is how a real problem gets filtered out as noise.
+ */
+function logBaselineProblem(message, detail = {}) {
+  const key = `${detail.state ?? ''}|${detail.file ?? ''}|${detail.code ?? ''}`;
+  if (key === baselineHealth.lastLogged) return;
+  baselineHealth.lastLogged = key;
+  const line = `[watch] ${message}`;
+  if (baselineHealth.log?.warn) baselineHealth.log.warn(line);
+  else console.error(line);
+}
+
+function recordBaselineEvent(kind, state, detail = {}) {
+  const at = new Date().toISOString();
+  baselineHealth.events.push({ at, kind, state, ...detail });
+  // Bounded: this is a ring of "what happened to my baselines lately", not an audit log. A run reads one
+  // baseline per target per check, so an unbounded list would grow for the life of the process.
+  if (baselineHealth.events.length > 20) baselineHealth.events.splice(0, baselineHealth.events.length - 20);
+  // The per-file picture the route and the report read. Kept apart from the event ring on purpose: the ring
+  // answers "what happened recently", this answers "what is the state of this file now", and a check that
+  // wants the second question answered must not have to scan the first.
+  if (detail.file) {
+    const prev = baselineHealth.reports.get(detail.file) ?? {};
+    baselineHealth.reports.set(detail.file, { ...prev, ...detail, state, kind, at });
   }
-  return null;
+  return at;
+}
+
+/**
+ * One record as it may be served: everything except the raw diagnostic message.
+ *
+ * Written as its own function so "no baseline content leaves this module" is a property a reader and a test can
+ * point at, rather than a rule three call sites have to remember.
+ */
+function servedRecord(record) {
+  const { logError, ...safe } = record ?? {};
+  void logError;
+  return safe;
+}
+
+/**
+ * What a caller (the watch route, the run report, a test) is told. Never carries baseline content, only the
+ * states, the file names and what to do next — the same rule as `configHealthSnapshot`.
+ */
+export function baselineHealthSnapshot() {
+  // Everything that leaves here goes through `servedRecord`: a read failure's raw message is kept on the
+  // record as `logError` for the log, and it quotes the file's own bytes (a JSON syntax error says
+  // `Unexpected token 'o', "nope{" is not valid JSON`). This answer is served by `GET /api/watch`, and a
+  // baseline file holds a page's text or a wiki title — so the one field is stripped here, at the single
+  // boundary every served shape passes through, rather than being remembered at each of the three.
+  const reports = [...baselineHealth.reports.values()].map(servedRecord);
+  const faults = reports.filter((r) => isBaselineFault(r.state));
+  return {
+    // The one question a reader of this field has: "do I have to do something". A target that has never been
+    // checked is not a fault, and neither is a first run; only the two damaged states are.
+    state: faults.some((f) => f.state === 'unavailable') ? 'unavailable' : faults.length ? 'corrupt' : 'ok',
+    fault: faults.length > 0,
+    // The files that are still in a fault state, with the place the damaged bytes were preserved and what to
+    // do next. Same shape and same restraint as `configHealthSnapshot`: states and file names, never content.
+    faults: faults.map((f) => {
+      const r = servedRecord(f);
+      return {
+        file: r.file,
+        state: r.state,
+        at: r.at,
+        code: r.code ?? null,
+        error: r.error ?? null,
+        movedTo: r.movedTo ?? null,
+        stillInPlace: !!r.stillInPlace,
+        preserveError: r.preserveError ?? null,
+        note: r.note ?? null,
+      };
+    }),
+    reports,
+    // The ring is mapped, not spread: a read failure's raw message is kept on the event as `logError` for the
+    // log, and it quotes the file's own bytes (a JSON syntax error says `Unexpected token 'o', "nope{" is not
+    // valid JSON`). What goes out on the route is the state, the file name and where the bytes were preserved.
+    events: baselineHealth.events.map(servedRecord),
+  };
+}
+
+/**
+ * Forget everything. Tests only: the work directory is a fixture, and one case's damage must not colour the
+ * next case's state.
+ */
+export function resetBaselineHealthForTest() {
+  baselineHealth.events = [];
+  baselineHealth.reports.clear();
+  baselineHealth.lastLogged = '';
+}
+
+/**
+ * Read a baseline and say which of the four conditions it was in.
+ *
+ * This is the one place the file is interpreted; `getBaseline` below is kept as the shape the existing
+ * callers use (a baseline or null) so that every handler's "is there a previous value" test stays a
+ * one-liner, and the *reason* travels separately in the result rather than having to be re-derived.
+ *
+ * @returns {{state:'ok'|'first-run'|'corrupt'|'unavailable', data:object|null, file:string,
+ *            movedTo?:string|null, stillInPlace?:boolean, code?:string, error?:string}}
+ */
+export function readBaseline(cfg, id) {
+  const file = baselinesPath(cfg, id);
+  if (!fs.existsSync(file)) {
+    // The deliberate non-alarm: a genuine first check, recorded as such and nothing else. Making this a
+    // warning (or, worse, reporting it as damage) is what the control in tools/watch-baseline-test.mjs
+    // exists to prevent.
+    recordBaselineEvent('read', 'first-run', { file, note: 'no baseline file yet: this is a first check, not a fault' });
+    return { state: 'first-run', data: null, file };
+  }
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    const state = BASELINE_PERMISSION_CODES.has(baselineCodeOf(err)) ? 'unavailable' : 'corrupt';
+    const code = baselineCodeOf(err);
+    // The message is logged, and it is **not** put in the record that the route serves. A read error's
+    // message can quote the file's own bytes (a JSON syntax error says `"<snippet>" is not valid JSON`), and
+    // these files carry page text and wiki titles — the same class of thing the config snapshot refuses to
+    // echo for its own file. The snapshot describes the *condition*; the log keeps the diagnosis.
+    const detail = {
+      file,
+      code,
+      error: BASELINE_ERROR_REASONS[state] ?? BASELINE_ERROR_REASONS.corrupt,
+      action: 'left exactly where it is',
+      note:
+        state === 'unavailable'
+          ? 'the file is present but the process was not allowed to read it, so nothing was written: a file we may not read is a file we may not replace'
+          : 'the file could not be read, so nothing was written',
+    };
+    recordBaselineEvent('read', state, { ...detail, logError: err.message });
+    logBaselineProblem(
+      `baseline ${path.basename(file)} is ${state} (${code}): ${err.message} — nothing was written, so this target keeps reporting the condition instead of quietly re-baselining`,
+      { ...detail, state }
+    );
+    return { state, data: null, code, error: err.message, file };
+  }
+  try {
+    const data = JSON.parse(text);
+    recordBaselineEvent('read', 'ok', { file, bytes: Buffer.byteLength(text) });
+    return { state: 'ok', data, file };
+  } catch (err) {
+    // Preserve, then report. The copy is what makes this different from the old behaviour: after the run
+    // the damaged bytes are still on disk under their own name, so "what changed while the baseline was
+    // broken" can be answered by hand even though the automated answer is gone.
+    const movedTo = corruptBaselinePathFor(file);
+    let stillInPlace = false;
+    let preserveError = null;
+    try {
+      fs.copyFileSync(file, movedTo);
+    } catch (e) {
+      preserveError = `could not preserve the damaged baseline: ${e.message}`;
+    }
+    if (!preserveError) {
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        // Copy, then delete — not `rename`, for the reason config.js gives for the same choice: a file that
+        // cannot be deleted (read-only in an editor, a folder ACL) still has its bytes preserved by the
+        // copy, and the copy is what a person repairs from.
+        stillInPlace = true;
+      }
+    }
+    const code = baselineCodeOf(err);
+    // Same restraint as above, and it matters more here: a JSON syntax error quotes the file's bytes, and this
+    // file is a page's text. The parse message goes to the log; the record says what state it is in and where
+    // the damaged bytes went, which is what the reader needs in order to act.
+    const detail = {
+      file,
+      code,
+      error: BASELINE_ERROR_REASONS.corrupt,
+      movedTo: preserveError ? null : movedTo,
+      stillInPlace,
+      preserveError,
+      // What the reader has to understand: the rebuild below is real, but it cannot report the change that
+      // happened while the file was broken. That change is preserved in the copy, not in the next diff.
+      note: 'the baseline was rebuilt from the current content, so the first comparison after this cannot be a diff of what was missed',
+    };
+    // `logError` is the raw message and is deliberately *not* part of what the route serves: it quotes the
+    // file's bytes (see BASELINE_ERROR_REASONS). The snapshot strips it, and the log below keeps it.
+    recordBaselineEvent('read', 'corrupt', { ...detail, logError: err.message });
+    logBaselineProblem(
+      preserveError
+        ? `baseline ${path.basename(file)} is not valid JSON (${err.message}) and could not be preserved: ${preserveError} — it will be rebuilt, and the damaged bytes are gone`
+        : `baseline ${path.basename(file)} is not valid JSON (${err.message}); the damaged file was kept as ${path.basename(detail.movedTo)} (${stillInPlace ? 'the original could not be removed and is still in place' : 'and removed'}) and the baseline will be rebuilt`,
+      { ...detail, state: 'corrupt' }
+    );
+    return { state: 'corrupt', data: null, movedTo: detail.movedTo, stillInPlace, code, error: err.message, file };
+  }
+}
+
+/**
+ * The baseline for one target, or `null` when there is nothing usable to compare against.
+ *
+ * `null` is returned for 'first-run' **and** for the two fault states, because the caller's question here is
+ * only "is there a previous value" — the difference between them is a property of the *check result*, not of
+ * this return value, and it is reported through `ctx.baselineState` / the result's `baseline` field, which
+ * every handler's caller can read. Folding the two into one silent `null` here and nowhere stating it is
+ * exactly the defect.
+ */
+export function getBaseline(cfg, id) {
+  const r = readBaseline(cfg, id);
+  return r.data ?? null;
 }
 
 export function setBaseline(cfg, id, data) {
   const f = baselinesPath(cfg, id);
+  // A baseline we were not allowed to read is not replaced. This is the same rule config.js applies to an
+  // unreadable config, and it is the state where a write does the most damage: the file may be perfectly
+  // good and merely locked, and overwriting it loses whatever it held.
+  const standing = baselineHealth.reports.get(f);
+  if (standing?.state === 'unavailable') {
+    logBaselineProblem(
+      `baseline ${path.basename(f)} is present but unreadable, so it is left alone: no new baseline was written for ${id} (fix the permissions, or delete the file to start over)`,
+      { state: 'unavailable', file: f, code: standing.code }
+    );
+    return null;
+  }
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, JSON.stringify({ ...data, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  // A successful write is what clears a corrupt state (the damaged bytes are already preserved elsewhere by
+  // then). An `unavailable` one is not cleared by a write, because there was no write.
+  recordBaselineEvent('write', 'ok', { file: f, target: id });
   return data;
 }
 
@@ -250,12 +628,24 @@ export function targetPolicy(target = {}) {
   return { allowLoopback: target?.allowLoopback === true };
 }
 
+/**
+ * The profile for one request.
+ *
+ * The decision belongs here, next to the code that makes the request, rather than being imported from a
+ * constant that names no caller: `kind === 'url'` is a page and gets the page profile; every other kind talks
+ * to `api.php` and gets the product token. Written as a function of the *target* rather than of the URL so that
+ * "which profile does this request use" is answerable without reading the string.
+ */
+export function userAgentFor(target = {}) {
+  return target?.kind === 'url' ? PAGE_UA : API_UA;
+}
+
 async function jget(url, { cfg, target, timeout = 25000, headers } = {}) {
   const r = await netFetch(
     url,
     {
       headers: {
-        'user-agent': UA,
+        'user-agent': userAgentFor(target),
         accept: 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
         ...(headers ?? {}),
@@ -275,12 +665,18 @@ function apiOf(apiUrl) {
 
 // ── 1) Any web page
 async function checkUrl(target, ctx) {
+  // The baseline is read **first**, before the address check inside `jget` and before the network. The state
+  // of the baseline is a fact about this check whatever else happens to it, and reading it here is what puts
+  // that fact on the result of a check that never reached the page — the case where a reader most needs to
+  // know that the comparison half is unavailable too. Reading it late is how "the baseline was damaged" became
+  // a property of "everything else went well", which is the wrong way round. It is also the order the words
+  // suggest: read what we are comparing against, then go and fetch.
+  const prev = baselineFor(target, ctx);
   const r = await jget(target.url, { cfg: ctx.cfg, target });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const raw = await r.text();
   const text = truncate(normalizeText(target.mode === 'html' ? raw : stripHtml(raw), target.ignorePatterns));
   const hash = sha256(text);
-  const prev = getBaseline(ctx.cfg, target.id);
 
   if (!prev) {
     setBaseline(ctx.cfg, target.id, { kind: 'url', hash, text, url: target.url });
@@ -329,8 +725,8 @@ async function fetchPageRev(target, ctx) {
 }
 
 async function checkMediaWikiPage(target, ctx) {
+  const prev = baselineFor(target, ctx);
   const { rev, title } = await fetchPageRev(target, ctx);
-  const prev = getBaseline(ctx.cfg, target.id);
 
   if (!prev) {
     setBaseline(ctx.cfg, target.id, { kind: 'mediawiki-page', revid: rev.revid, size: rev.size, title, timestamp: rev.timestamp });
@@ -401,6 +797,7 @@ function rcToEvents(rows, rules) {
 }
 
 async function checkRecentChanges(target, ctx) {
+  const prev = baselineFor(target, ctx);
   const ns = (target.namespaces ?? [0]).join('|');
   const url =
     `${apiOf(target.apiUrl)}&action=query&list=recentchanges` +
@@ -410,7 +807,6 @@ async function checkRecentChanges(target, ctx) {
   const r = await jget(url, { cfg: ctx.cfg, target });
   const j = await r.json().catch(() => null);
   const rows = j?.query?.recentchanges ?? [];
-  const prev = getBaseline(ctx.cfg, target.id);
   const since = prev?.lastTimestamp ? Date.parse(prev.lastTimestamp) : 0;
 
   const fresh = since ? rows.filter((x) => Date.parse(x.timestamp) > since) : rows;
@@ -498,7 +894,10 @@ export function buildWikiLoginRequest(target = {}) {
     // from `host` because the cookie probe lower-cases and may strip a leading `www.`.
     domain: host.replace(/^www\./, ''),
     headers: {
-      'user-agent': UA,
+      // Always the product token: this is `api.php`, and this request carries a credential — see the block at
+      // the top of this file. A browser string here would be a claim about an engine that has nothing to do
+      // with the request.
+      'user-agent': API_UA,
       accept: 'application/json',
       // BotPassword credentials are sent as basic auth (`BotName@TaskName:password`).
       authorization: `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`,
@@ -617,7 +1016,8 @@ async function mwLogin(target, ctx) {
     api,
     {
       method: 'POST',
-      headers: { 'user-agent': UA, 'content-type': 'application/x-www-form-urlencoded' },
+      // The product token again, for the reason stated on the builder above: this POST carries a password.
+      headers: { 'user-agent': API_UA, 'content-type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
       signal: withTimeout(25000),
     },
@@ -630,6 +1030,7 @@ async function mwLogin(target, ctx) {
 }
 
 async function checkWatchlist(target, ctx) {
+  const prev = baselineFor(target, ctx);
   if (!target.username || !target.botPassword) {
     throw new Error('监视列表需要 username 与 botPassword / username & botPassword required');
   }
@@ -641,7 +1042,6 @@ async function checkWatchlist(target, ctx) {
   const j = await r.json().catch(() => null);
   if (j?.error) throw new Error(`watchlist 报错 / error: ${j.error.info ?? j.error.code}`);
   const rows = j?.query?.watchlist ?? [];
-  const prev = getBaseline(ctx.cfg, target.id);
   const since = prev?.lastTimestamp ? Date.parse(prev.lastTimestamp) : 0;
   const fresh = since ? rows.filter((x) => Date.parse(x.timestamp) > since) : rows;
   const events = rcToEvents(fresh, ctx.rules);
@@ -665,6 +1065,44 @@ const HANDLERS = {
   'mediawiki-watchlist': checkWatchlist,
 };
 
+/**
+ * A helper the handlers call instead of `getBaseline` when they want both halves at once.
+ *
+ * The handlers below still use `getBaseline` for the comparison itself (a baseline or null, which is all a
+ * diff needs); this exists for the states where "there is no previous value" is not the whole answer, and it
+ * parks the state on `ctx` so `checkTarget` can put it in the result without every handler having to return
+ * it. That is the difference between a condition that is *reported* and one that is only logged.
+ */
+function baselineFor(target, ctx) {
+  const r = readBaseline(ctx.cfg, target.id);
+  ctx.baseline = r;
+  return r.data ?? null;
+}
+
+/**
+ * What the result says about the baseline, and — when the baseline was damaged — the sentence the report and
+ * the watch page show. Written once here so the four handlers cannot drift into four different phrasings of
+ * the same condition (`tools/watch-baseline-test.mjs` asserts the wording, because a user-facing sentence
+ * that changes silently is the same as no sentence).
+ */
+function baselineResultFor(ctx) {
+  const state = ctx.baseline?.state ?? 'first-run';
+  const fault = isBaselineFault(state);
+  const out = { state, fault };
+  if (state === 'corrupt') {
+    out.movedTo = ctx.baseline?.movedTo ?? null;
+    out.stillInPlace = !!ctx.baseline?.stillInPlace;
+    out.note = ctx.baseline?.note ?? null;
+    out.summary = out.movedTo
+      ? `基线损坏，已重建（旧文件保留为 ${path.basename(out.movedTo)}）/ baseline was corrupt and is being rebuilt (the damaged file is kept as ${path.basename(out.movedTo)}), so this check cannot report what changed while it was broken`
+      : '基线损坏且未能保留，已重建 / baseline was corrupt and could not be preserved; it is being rebuilt, so this check cannot report what changed while it was broken';
+  } else if (state === 'unavailable') {
+    out.note = 'the baseline file is present but unreadable, so nothing was written and this check rebuilt nothing';
+    out.summary = '基线不可读，未写入任何内容 / the baseline could not be read (permissions); nothing was written, so this target reports the condition until the file can be read';
+  }
+  return out;
+}
+
 /** Check a single watch target / check one target */
 export async function checkTarget(target, { cfg, rules, log } = {}) {
   const fn = HANDLERS[target.kind];
@@ -672,13 +1110,18 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
   const ctx = { cfg, log, rules: { ...DEFAULT_RULES, ...(rules ?? cfg?.watch?.rules ?? {}) }, applyRules };
   try {
     const r = await fn(target, ctx);
-    const out = { ok: true, ...r };
+    // The baseline condition travels with the result. `...r` comes last for the handler's own value of
+    // `first`, which is the same statement seen from the other side (a first check and a damaged baseline
+    // both have no previous value, but only one of them is normal).
+    const out = { ok: true, baseline: baselineResultFor(ctx), ...r };
+    if (out.baseline.fault) out.summary = `${out.baseline.summary}${out.summary ? ` — ${out.summary}` : ''}`;
     // Only record history when something changed, to avoid noise
     if (out.changed && !out.first) {
       appendHistory(cfg, target.id, {
         kind: target.kind,
         label: target.label,
         summary: out.summary,
+        baseline: out.baseline.state,
         // Future-facing field, kept deliberately: no handler returns a `growth` any more, so this is null on
         // every history entry today (see the comment on the `follower` baseline in server.js).
         growth: out.growth ?? null,
@@ -692,7 +1135,9 @@ export async function checkTarget(target, { cfg, rules, log } = {}) {
     const cause = err?.cause?.message ?? err?.cause?.code ?? '';
     const msg = cause ? `${err.message}（${cause}）` : err.message;
     log?.error(`watch ${target.id} failed / failed — ${msg}`);
-    return { target, ok: false, changed: false, events: [], error: msg };
+    // The baseline condition is reported on the failure path too: a target whose baseline was damaged and
+    // whose fetch then failed is the case where a reader most needs to know the baseline half.
+    return { target, ok: false, changed: false, events: [], error: msg, baseline: ctx.baseline ? baselineResultFor(ctx) : null };
   }
 }
 

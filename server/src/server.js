@@ -34,7 +34,7 @@ import {
 import { diffHunks, diffLines, diffStats } from './diff.js';
 import { preflight } from './analyze.js';
 import { PRESETS, activeProvider, listModels, newProvider, providerPolicy } from './llm.js';
-import { TARGET_KINDS, DEFAULT_RULES, allBaselines, checkTarget, checkWatchLogin, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
+import { TARGET_KINDS, DEFAULT_RULES, allBaselines, baselineHealthSnapshot, checkTarget, checkWatchLogin, readHistory, sanitizeId, sanitizeTarget, watchDir } from './watch.js';
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
@@ -514,6 +514,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       targets,
       rules: { ...DEFAULT_RULES, ...(cfg.watch?.rules ?? {}) },
       kinds: TARGET_KINDS,
+      // The condition of the baselines themselves, on the route the watch page already polls. The v1.0.5
+      // audit's finding for these files was that a damaged one was indistinguishable from an absent one and
+      // that the fact lived only in a log line; a log line in a run that prints twenty others is not a
+      // report. Same arrangement as config.js: the condition is a property of the running process, so the
+      // running process is where it is asked for, and `faults` names the preserved copy so the reader knows
+      // where the bytes went. Carries no baseline content — file names and states only.
+      baselineHealth: baselineHealthSnapshot(),
     });
   });
 
@@ -555,6 +562,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         ...r,
         target: { ...r.target, baseline: baselines[sanitizeId(r.target?.id)] ? true : null },
       })),
+      // A check that ran against a damaged baseline is exactly the moment the reader has to be told, and it
+      // is the moment the old code was quietest: the run rebuilt the baseline and reported "no change".
+      baselineHealth: baselineHealthSnapshot(),
     });
   });
 
@@ -2347,6 +2357,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   // ── JSON error fallback ──────────────────────────────────────────
   // When a route throws, Express replies with an HTML error page by default — the frontend's JSON.parse of it
   // only ever yields "Unexpected token '<'", which is very hard to debug. Here it is uniformly turned into JSON.
+  //
+  // This middleware is also **the route-level error boundary**, and it is the reason the uncaught-exception
+  // handler in index.js is allowed to end the process (see the comment on it there): a handler that throws
+  // synchronously lands here, becomes a 500 with the route named, and the process keeps serving. Only a throw
+  // that gets past every boundary — an async callback, a timer, an unawaited promise — reaches
+  // `uncaughtException`, and that one means the state is no longer vouched for. Removing this middleware
+  // would silently move every route bug into the "ends the process" bucket.
   app.use((err, req, res, _next) => {
     log?.error('route error — ' + req.method + ' ' + req.originalUrl + ': ' + (err.stack ?? err.message));
     if (res.headersSent) return;

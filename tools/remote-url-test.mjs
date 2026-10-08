@@ -196,7 +196,12 @@ const REFUSED = [
   ['unparsable', 'not a url at all', {}, 'unparsable'],
   ['empty', '   ', {}, 'empty'],
   ['unresolved', 'http://nope.example.test/', { dnsResolve: resolverFor({}) }, 'dns-unresolved'],
-  ['dns-empty-answer', 'http://empty.example.test/', { dnsResolve: async () => [] }, 'dns-unresolved'],
+  // The distinction this row pins, and the reason it is two rows rather than one: `resolverFor({})` above
+  // *throws* (ENOTFOUND), which is a lookup that failed, while the resolver here **answers with an empty
+  // list** - a domain that exists and has no address to reach. Both are refused, and what must not happen
+  // is the two collapsing into one code: `dns-empty` was declared in URL_POLICY_TABLE and never returned,
+  // so a user with a filtered or record-less name was told their DNS was broken.
+  ['dns-empty-answer', 'http://empty.example.test/', { dnsResolve: async () => [] }, 'dns-empty'],
 ];
 
 /** The same policy, and the addresses that must come out of it allowed. */
@@ -898,11 +903,11 @@ const MUTATIONS = [
   {
     source: 'server/src/remote-url.js',
     what: 'the pre-fix validator: a name that resolves to nothing is treated as a name that resolved',
-    from: "  if (!addresses.length) {\n    return refuse('dns-unresolved'",
-    to: "  if (false) {\n    return refuse('dns-unresolved'",
+    from: "  if (!addresses.length) {\n    return refuse('dns-empty'",
+    to: "  if (false) {\n    return refuse('dns-empty'",
     // The assertion this breaks is the *empty* answer: a resolver that throws is caught above this line and is
     // still refused, so pointing the control at "unresolved" would have been a control that never failed.
-    breaks: 'refuses dns-empty-answer as dns-unresolved',
+    breaks: 'refuses dns-empty-answer as dns-empty',
   },
   {
     source: 'server/src/llm.js',

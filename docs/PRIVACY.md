@@ -49,11 +49,13 @@ surprise: `cloudflare.com/cdn-cgi/trace` (which country an exit appears to be in
 explicit-confirm gate, and the hand-off it offers opens the site's own compose page **in your browser** — anything
 published there is sent by your browser and your account, not by this app.
 
-One honest note about a setting you can see in the UI: `privacy.anonymousMode` is enforced centrally (see the
-cookie section below), but **`privacy.sendReferer` is not read by anything in this tree** — grep finds the config
-default, the switch on the settings page, and no consumer. No fetcher in this build sets a `Referer` or `Origin`
-header at all, so there is nothing for that switch to turn on or off today; it is recorded here so it is not
-mistaken for a control that is protecting anything.
+One honest note about a setting that used to be visible in the UI: `privacy.anonymousMode` is enforced centrally
+(see the cookie section below), while **`privacy.sendReferer` has been removed**. No fetcher in this build sets a
+`Referer` or `Origin` header at all, so the only thing that switch could have done is *fabricate* one - and the
+only value this app could send is its own loopback address, announced to every third-party site in your source
+list. A switch that leaks an address when it is on and suppresses a header nobody sends when it is off is not a
+control, so the default, the settings row and the key are gone. A config that still carries `privacy.sendReferer`
+keeps it as an unknown key and nothing reads it.
 
 ## The API is loopback-only, and now enforces it
 

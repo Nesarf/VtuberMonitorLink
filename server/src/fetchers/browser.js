@@ -203,14 +203,76 @@ export function describeEgressFailure(err, { mode = 'direct', socks = '' } = {})
   return msg;
 }
 
-/** render a URL and return its text */
+/**
+ * The error a render that ran out of time answers with.
+ *
+ * It is a class of its own, and a `code` on the returned object, because the caller has to be able to tell
+ * "this page never finished" from "the page came back and here it is": the previous version returned the
+ * ordinary shape and set `process.exitCode = 3` instead, which is not a result at all — it is a
+ * process-wide side effect a library call has no business setting, and it is invisible to the caller (the
+ * run report would show whatever the caller made of `undefined`).
+ */
+export class RenderTimeoutError extends Error {
+  constructor(ms) {
+    super(`render exceeded the hard timeout of ${ms}ms and was aborted`);
+    this.name = 'RenderTimeoutError';
+    this.code = 'render-timeout';
+    this.timeoutMs = ms;
+  }
+}
+
+/**
+ * The sleep a render does after navigation, cancellable by the hard-timeout controller.
+ *
+ * Exported for `tools/render-timeout-test.mjs`, which pins the cancellation itself (an abort during the
+ * sleep must reject with the timeout error, and a sleep nothing aborts must resolve). The end-to-end check
+ * needs a real engine and is the expensive half; this is the half that can be checked anywhere.
+ */
+export function cancellableSleep(ms, signal, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new RenderTimeoutError(timeoutMs));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * render a URL and return its text
+ *
+ * The hard timeout is a **deadline for the work**, not a flag for the process. It started life as
+ * `setTimeout(() => { log.error(…); process.exitCode = 3 }, hardMs)`, which did neither of the two things
+ * the name promises: nothing was cancelled or closed — the page, its context, the browser process and (for
+ * a temporary profile) a directory under `paths.tempDir` all survived the "timeout" for the rest of the
+ * process's life, one hung navigation at a time — and `process.exitCode` was a global side effect that made
+ * a *library call* decide the eventual exit status of the whole program.
+ *
+ * So the deadline now aborts the work through an `AbortController`, and the existing `finally` — which
+ * already closes the context and the browser, and already tolerates an SPA that makes `close()` hang — is
+ * what cleans up. The caller is told with a `RenderTimeoutError` (`code: 'render-timeout'`) instead of a
+ * value that looks like a result.
+ *
+ * What deliberately did **not** change: a refused egress is still a reason (`ok:false` with the sentence
+ * naming the SOCKS port or the proxy), and a page hop refused by the URL policy is still reported rather
+ * than thrown. `process.exitCode` is not touched anywhere in this file any more.
+ */
 export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject = null, policy = null } = {}) {
   const bcfg = cfg?.browser ?? {};
   const hardMs = bcfg.hardTimeoutMs ?? 90000;
-  const watchdog = setTimeout(() => {
-    log?.error(`hard timeout after ${hardMs}ms, forcing exit`);
-    process.exitCode = 3;
-  }, hardMs);
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(new RenderTimeoutError(hardMs)), hardMs);
+  controller.signal.addEventListener('abort', () => {
+    log?.error(`hard timeout after ${hardMs}ms — aborting the render and closing the browser (${url})`);
+  }, { once: true });
 
   let browser = null;
   let context = null;
@@ -272,8 +334,11 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
       log?.warn(`browser request refused (${check.code}): ${target} — ${check.reason}`);
       return route.abort('addressunreachable').catch(() => {});
     });
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-    await page.waitForTimeout(waitMs ?? bcfg.waitMs ?? 6000);
+    // The deadline reaches the navigation as well as the sleep after it. `page.goto` has its own
+    // (shorter) timeout, and it is kept: it is what turns an unreachable host into a reason in ~45s
+    // instead of waiting for the hard deadline, which is meant for work that is *making progress*.
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000, signal: controller.signal });
+    await cancellableSleep(waitMs ?? bcfg.waitMs ?? 6000, controller.signal, hardMs);
     // A refused hop is the answer, not a footnote: the page content that did come back was fetched *around*
     // the refusal, so reporting it as a successful render would describe a page that was never fully loaded.
     if (refusals.length) {
@@ -298,6 +363,17 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
     log?.info(`render ok ${content.length}B${blocked ? ' (possible wall/login page)' : ''} — ${url}`);
     return { ok: true, content, ext: mode === 'html' ? 'html' : 'txt', blocked, url, egress: egressMode };
   } catch (err) {
+    // The deadline is checked **first**, and on the signal rather than on the error: an abort surfaces on
+    // this engine as `page.goto: Target page, context or browser has been closed` (Playwright closes what
+    // the abort touches), which says nothing about a deadline and would otherwise be reported as a page
+    // that vanished. The signal is the fact; the message is not.
+    if (controller.signal.aborted) {
+      const e = new RenderTimeoutError(hardMs);
+      log?.error(`render timed out — ${url} :: ${e.message}`);
+      // The caller gets a result with a distinguishable `code`, so "the page never finished" cannot be
+      // mistaken for a page that came back empty, and `error` stays a sentence for the report.
+      return { ok: false, code: e.code, error: e.message, timedOut: true, timeoutMs: hardMs, egress: egressMode, url };
+    }
     // A proxy failure that got past the port check (Tor up but not bootstrapped, say) is reported as the
     // egress being at fault instead of as a Mozilla error code
     const reason = describeEgressFailure(err, { mode: egressMode, socks });
@@ -305,18 +381,43 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
     return { ok: false, error: reason, egress: egressMode, url };
   } finally {
     // bounded teardown: SPA pages make close() hang forever, so never wait without a limit
-    await Promise.race([
-      (async () => {
-        try {
-          await context?.close();
-        } catch {}
-        try {
-          await browser?.close();
-        } catch {}
-      })(),
+    //
+    // This is also the half that makes the timeout mean something. It runs on every path — a normal render,
+    // a refusal, a throw, the deadline — and it is what gives back the page, the context, the browser
+    // process and (when the profile was temporary) the profile directory Playwright made under the temp
+    // dir. Before this, a timed-out render skipped none of this *except* that the process had been told to
+    // keep going with a browser still attached: the cleanup was already here, but the deadline returned a
+    // value before ever reaching it.
+    //
+    // The `allSettled` shape is deliberate. The previous `Promise.race([teardown, 6s])` **returned after 6
+    // seconds even when the teardown had not finished**, leaving the close promises running while the
+    // caller thought the browser was gone — a leak that only shows up on exactly the hang this is for. Two
+    // things are kept from it: the wait is still bounded (the racing sleep is not what ends the function
+    // any more — this awaits the real closes), and a teardown that does not finish in time is *reported*
+    // rather than passed over in silence, so "the browser refused to close" stops being invisible.
+    const closedInTime = await Promise.race([
+      Promise.allSettled([
+        (async () => {
+          try {
+            await context?.close();
+          } catch {
+            /* a context that cannot be closed is reported by the timeout below, not thrown from here */
+          }
+        })(),
+        (async () => {
+          try {
+            await browser?.close();
+          } catch {
+            /* same */
+          }
+        })(),
+      ]).then(() => true),
       new Promise((r) => setTimeout(r, 6000)),
     ]);
-    clearTimeout(watchdog);
+    if (closedInTime !== true) {
+      log?.error(`teardown did not finish within 6000ms — the browser may still be running for ${url}`);
+    }
+    clearTimeout(deadline);
   }
 }
 

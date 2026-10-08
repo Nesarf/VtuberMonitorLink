@@ -44,7 +44,20 @@ export function torSocksUrl(cfg) {
 }
 
 /**
- * The Tor egress URL, optionally **on a fresh circuit every time**.
+ * The Tor egress URL, with **one circuit per subject** - not one per call.
+ *
+ * Three vocabularies are easy to confuse, so they are named once here. *Per-request* isolation would give
+ * every single fetch its own circuit. *Per-round* would share one circuit across a whole run. What is
+ * implemented is *per-subject*: the same subject (a source, a person) keeps the same circuit across calls,
+ * and different subjects get different ones. That is deliberate - a source that changes exit mid-run looks
+ * like a different client to the site, and hiding the *relationship between requests* is the point rather
+ * than hiding each request on its own.
+ *
+ * One measured limitation belongs here too: this applies to fetches made by this module. The bundled
+ * browser's traffic goes out through the same Tor egress but rides the **default circuit**, because
+ * Playwright's Firefox cannot authenticate to SOCKS5 (see the browser egress path in v1.0.4) - so
+ * browser-rendered sources are not part of the per-subject rotation, and a username on that proxy would
+ * only have looked like isolation.
  *
  * How it works: Tor's IsolateSOCKSAuth (on by default) isolates circuits by SOCKS username:
  * different username → different circuit → different exit IP. Measured (2026-09-12):

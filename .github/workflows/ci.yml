@@ -144,6 +144,23 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content $log
           if ($code -ne 0) {
+            # The failing check by name, before the tail. A tail is a guess about where the failure is:
+            # a suite that prints hundreds of [ok] lines after the failing one puts the cause out of the
+            # window, which is how two red runs on this repository had to be diagnosed from the job log with
+            # a token. The line above a [FAIL] is usually that suite's banner, so it is kept with it.
+            $all = Get-Content $log
+            $named = @()
+            for ($i = 0; $i -lt $all.Count; $i++) {
+              if ($all[$i] -match '\[FAIL\]|\bFAILED\b|AssertionError') {
+                $prev = if ($i -gt 0 -and $all[$i - 1] -notmatch '^\s*\[ok\]') { $all[$i - 1].Trim() } else { '' }
+                $named += (@($prev, $all[$i].Trim()) | Where-Object { $_ }) -join ' | '
+              }
+            }
+            if ($named.Count -gt 0) {
+              $f = (($named | Select-Object -First 12) -join "`n") -replace '%', '%25'
+              $f = $f -replace "`r?`n", '%0A'
+              Write-Host "::error title=the failing checks::$f"
+            }
             # 30 lines, not 12: the identity of the failing check is in the *last lines of that check's
             # output*, and 12 of them put the name out of reach from outside - which is exactly how the
             # last red run had to be diagnosed from the job log with a token.

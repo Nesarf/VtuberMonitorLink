@@ -126,6 +126,31 @@ import * as scheduler from './scheduler.js';
 import { listProfiles, pickerFor, resolveProfileTarget } from './browser-target.js';
 import { browserTargetReport } from './browser-consumers.js';
 
+/**
+ * The "why is this one event" summary the events API serves.
+ *
+ * Kept here rather than in cluster.js because it is a *view*: cluster.js answers with the full evidence
+ * (per-item reasons, every shared key, the similarity of every pair), and an HTTP response should not
+ * carry that for 60 events at a time. The layer name and the key are what a person debugging a wrong
+ * merge needs; the counts say whether the guards were doing anything at all.
+ */
+function eventWhy(cluster) {
+  const e = cluster?.evidence;
+  if (!e) return null;
+  return {
+    by: e.by,
+    layers: (e.layers ?? []).map((l) => ({
+      layer: l.layer,
+      label: l.label,
+      key: l.key,
+      items: l.items?.length ?? 0,
+      scores: l.scores ?? undefined,
+    })),
+    merges: e.merges ?? null,
+    refused: e.refused ?? null,
+  };
+}
+
 export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   const app = express();
   // Before anything else, and before the body parser: a request that fails the loopback check must not be
@@ -2170,8 +2195,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   });
 
   // ── multi-source event merging / similarity dedupe / source weight ─
-  // The algorithm and its self-test live in cluster.js + tools/cluster-test.mjs: IDF-weighted Dice + single-link
-  // union-find + a "must share a rare term" gate + a time window; source weight is learned from the history of "who reported it first".
+  // The algorithm and its self-tests live in cluster.js + tools/cluster-test.mjs (the similarity
+  // machinery) and tools/cluster-identity-test.mjs (the layers): identity first — native id, canonical
+  // url, extracted item id, exact title — and IDF-weighted Dice with a diameter limit last. Source
+  // weight is learned from the history of "who reported it first".
+  //
+  // Every event carries **why its members are one event** (`why`), because a wrong merge is otherwise
+  // invisible: `why.by` is the strongest layer that actually joined something, `why.layers` names the
+  // shared key per layer, and `why.refused` counts the candidate pairs the guards turned away. `item.why`
+  // says the same thing per item. This is additive: every field the UI read before is unchanged.
   app.get('/api/events', (req, res) => {
     const cfg = getConfig();
     const items = latestIntel(cfg, Number(req.query.limit ?? 500)).items ?? [];
@@ -2194,7 +2226,9 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
         leadSourceId: c.leadSourceId,
         firstSourceId: c.firstSourceId,
         people: c.people,
-        items: c.items.map((i) => ({ id: i.id, title: i.title, sourceId: i.sourceId, url: i.url, publishedAt: i.publishedAt ?? i.at ?? null })),
+        similarityRange: c.similarityRange ?? null,
+        why: eventWhy(c),
+        items: c.items.map((i) => ({ id: i.id, title: i.title, sourceId: i.sourceId, url: i.url, publishedAt: i.publishedAt ?? i.at ?? null, why: i.reason ?? null })),
       })),
     });
   });

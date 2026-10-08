@@ -99,6 +99,32 @@ const cfgFor = (timeZone) => ({ paths: { feedsDir }, calendar: { timeZone } });
  */
 const oldUtcDay = (iso) => new Date(Date.parse(iso)).toISOString().slice(0, 10);
 
+/**
+ * Shift one instant so that the same wall clock stands at the target zone's offset.
+ *
+ * It exists only to build fixtures whose days are provably a **named** zone's own, never the machine's
+ * (see the equal-zone rebuild below); no assertion compares a shifted stamp with anything but itself.
+ */
+const asWrittenInZone = (iso, tz) => {
+  const at = new Date(iso);
+  // Enumerated fields rather than the locale's date string: a date string is formatted *in the host's
+  // locale* and parsing it back is the kind of thing that works on one machine and not another.
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(at);
+  const v = (type) => Number(parts.find((p) => p.type === type).value);
+  const wallClock = Date.UTC(v('year'), v('month') - 1, v('day'), v('hour'), v('minute'), v('second'));
+  // offset = wall clock − instant; adding it moves the instant to the one whose wall clock stands there
+  return new Date(at.getTime() + (wallClock - at.getTime())).toISOString();
+};
+
 // ───────────────────────────────────────────── 1. the day function
 
 process.stdout.write('\narchive-day: the one definition\n');
@@ -413,11 +439,17 @@ t('the run day is the local day, and it is the day the archive files the run und
 process.stdout.write('\narchive-day: migrating an archive the old rule already wrote\n');
 
 /**
- * Build a database with the **v1 shape** exactly as the previous release created it, filled by the old
- * UTC rule, and leave its user_version at 1. Written with raw SQL on purpose: this is a fixture of the
- * old world, and going through today's code to build it would make the migration test test itself.
+ * Build a database with the **v1 shape** exactly as the previous release created it, and leave its
+ * user_version at 1. Written with raw SQL on purpose: this is a fixture of the old world, and going
+ * through today's code to build it would make the migration test test itself.
+ *
+ * `dayIn` is the calendar the fixture's days are written on, and it is a parameter rather than the
+ * machine's zone for the reason this whole file is about: `utc-v1` names the UTC calendar, so the days a
+ * `utc-v1` fixture holds must be UTC days **wherever the suite runs**. The default below used to be the
+ * machine's zone, which made this fixture mean one thing on a UTC machine and another one on the
+ * owner's — the class of dependency this file exists to refuse.
  */
-function makeLegacyArchive(file) {
+function makeLegacyArchive(file, { dayIn = oldUtcDay } = {}) {
   const db = new DatabaseSync(file);
   db.exec(`
     PRAGMA user_version = 1;
@@ -449,8 +481,9 @@ function makeLegacyArchive(file) {
   ];
   const ins = db.prepare('INSERT INTO items (id, day, source_id, title, published_at, first_seen_at, people, keywords, image_count) VALUES (?,?,?,?,?,?,?,?,0)');
   for (const [id, at, src, people, keywords] of legacy) {
-    // the old rule: day = UTC calendar day of the stamp, or the run day when there is none
-    const day = at ? new Date(Date.parse(at)).toISOString().slice(0, 10) : '2026-09-16';
+    // the writing release's rule: the day is that calendar's day of the stamp, read by the clock it ran
+    // on; a row with no stamp at all takes the run day the fixture files it under
+    const day = at ? dayIn(at) : '2026-09-16';
     ins.run(id, day, src, id, at, '2026-09-16T01:00:00.000Z', JSON.stringify(people), keywords);
   }
   const bump = db.prepare('INSERT INTO daily (day, source_id, items, with_media, alerts, updated_at) VALUES (?,?,?,?,?,?)');
@@ -564,7 +597,13 @@ t('the rebuild recomputes the days from the raw timestamps and reports what it c
     // both worlds are readable, and each names itself
     const stored = storedRules(db).map((r) => r.rule).sort();
     assert.deepEqual(stored, [ruleFor(TZ), RULE_UTC_V1].sort());
-    const b = bucketRule(db, { cfg: legacyCfg });
+    // The zone is spelled out here, and it has to be: `bucketRule` takes a **zone**, not a config
+    // (`{ timeZone, frozen }` — archive.js:258), so passing `{ cfg }` is silently ignored and the zone
+    // falls through to `effectiveTimeZone(null)`, which is the **system** zone. Reading it with no zone
+    // at all was the same mistake in a shorter form, and it is what made this assertion depend on where
+    // the suite runs: it read `pending: true` on the UTC runner and `false` on the owner's machine,
+    // which is exactly why CI was red on a commit that was green here.
+    const b = bucketRule(db, { timeZone: TZ });
     assert.equal(b.rule, ruleFor(TZ));
     assert.equal(b.pending, false, 'after the rebuild the archive is on the current rule');
   } finally {
@@ -621,6 +660,79 @@ t('an interruption rolls back: the journal survives, and no half-rebuilt table i
     const done = db.prepare("SELECT value FROM meta WHERE key = 'rebuild.done'").get();
     assert.ok(done, 'the rebuild journals its completion in the file itself');
     assert.equal(JSON.parse(done.value).rule, ruleFor(TZ));
+  } finally {
+    db.close();
+  }
+});
+
+t('rebuilding under the zone the rows were already written in moves nothing — and that is a pass', () => {
+  // The missing case, and the one the CI failure was actually about. The assertion above proves rows DO
+  // move when the effective zone differs from the zone the rows were written under; this one is its other
+  // half: when the two are the same zone, the honest answer is "nothing had to move", zero rows, and the
+  // archive is already on the rule the configuration asks for. Both are statements about the same code,
+  // so a suite that can only state the first one fails on a machine whose zone happens to be the rows'.
+  //
+  // "The same zone" cannot be expressed by reading the machine's zone, which is what made the old
+  // assertion machine-dependent: it is the fixture's zone, named here, and the fixture is built to be
+  // provably that zone's (see `asWrittenInZone`) rather than the machine's.
+  const ROWS_WERE_WRITTEN_IN = 'UTC';
+  const writtenInUtc = (iso) => dayOfInstant(iso, ROWS_WERE_WRITTEN_IN);
+  const file = path.join(tmp, 'same-zone.db');
+  makeLegacyArchive(file, { dayIn: writtenInUtc });
+  // the same shape as the fixture above, so the two cases really are the same archive read two ways
+  const sameZoneCfg = {
+    paths: { feedsDir: tmp },
+    calendar: {
+      timeZone: ROWS_WERE_WRITTEN_IN,
+      entries: [{ id: 'e1', name: 'test', kind: 'event', date: '2026-09-16', at: asWrittenInZone('2026-09-16T01:00:00.000Z', ROWS_WERE_WRITTEN_IN) }],
+    },
+  };
+  const db = openArchive(sameZoneCfg, { file });
+  try {
+    const before = digest(db);
+    // what a plan says first: nothing to move, and not in sync only because the rows are still stamped
+    // with the old rule's marker and the frozen row still has to be re-stamped
+    const plan = rebuildPlan(db, { cfg: sameZoneCfg });
+    assert.equal(plan.rule, ruleFor(ROWS_WERE_WRITTEN_IN));
+    assert.equal(plan.currentRule, RULE_UTC_V1, 'the rows say they were written by the old UTC rule');
+    assert.equal(plan.recomputable, 2);
+    assert.equal(plan.wouldMove, 0, 'the day already on each row IS this zone\'s day');
+    assert.equal(digest(db), before, 'and a plan writes nothing');
+
+    const res = rebuildAggregates(db, { cfg: sameZoneCfg, log: { info() {} } });
+    assert.equal(res.rule, ruleFor(ROWS_WERE_WRITTEN_IN));
+    assert.equal(res.from, RULE_UTC_V1);
+    assert.equal(res.itemsMoved, 0, 'nothing had to move');
+    assert.equal(res.itemsFrozen, 1, 'the row with no raw timestamp is still reported, not guessed');
+    assert.equal(res.dailyRows, 3, 'and every row is still counted');
+    assert.equal(res.preservedRules.join(','), RULE_UTC_V1);
+    // the section's own rule: zero rows moved is a fact to report, and the rebuild is complete when the
+    // archive says so — not an error, and not "the rebuild never ran"
+    assert.equal(
+      bucketRule(db, { timeZone: ROWS_WERE_WRITTEN_IN }).pending,
+      false,
+      'an archive whose rows are already on the configured zone\'s calendar is on the current rule'
+    );
+    // the rows the rebuild could recompute now name the rule that is in force, so the file itself says
+    // which calendar it is on rather than only the meta journal
+    for (const id of ['old-late', 'old-early']) {
+      assert.equal(db.prepare('SELECT day_tz FROM items WHERE id = ?').get(id).day_tz, ROWS_WERE_WRITTEN_IN, `${id} names the zone its day now belongs to`);
+    }
+
+    // CONTROL: the same file, the same rows, a different zone on purpose — now rows DO move, so the zero
+    // above is a property of the zone matching the rows and not of the fixture being a no-op for some
+    // other reason. The count is derived from the rows' own timestamps in the two named zones rather than
+    // written down, because a literal here would be a second machine-dependent statement: '2026-09-15' is
+    // `old-early`'s day in BOTH of these zones (`15:30Z` is `23:30` in Shanghai, `15:30` in UTC), so the
+    // answer really is 1 or 2 depending on which zone the fixture's days were written in.
+    const movedInAside = [...db.prepare('SELECT published_at FROM items WHERE published_at <> \'\'').all()].filter(
+      (r) => dayOfInstant(r.published_at, TZ) !== dayOfInstant(r.published_at, ROWS_WERE_WRITTEN_IN)
+    ).length;
+    const aside = rebuildAggregates(db, { cfg: legacyCfg, log: { info() {} } });
+    assert.equal(aside.rule, ruleFor(TZ));
+    assert.ok(movedInAside >= 1, 'the two zones must not be the same calendar, or this control proves nothing');
+    assert.equal(aside.itemsMoved, movedInAside, `moving to ${TZ} must move exactly the rows whose day differs between the two zones`);
+    assert.notEqual(digest(db), before, 'so the file really did change, and the zero stood for something');
   } finally {
     db.close();
   }
@@ -790,6 +902,16 @@ const MUTATIONS = [
     from: '      const day = recomputed ?? asDay(r.day);',
     to: '      const day = recomputed ?? dayOfInstant(at, tz);',
     expect: 'the series, the per-person activity and the run day all read the same calendar',
+  },
+  {
+    // The other half of the rebuild: a report that says rows moved when none had to. This is the shape a
+    // "rebuild fix" takes when it derives the day from a zone other than the rule it is moving rows to —
+    // and it is the one assertion that a check for "some rows moved" cannot see.
+    name: 'rebuild-moves-in-place',
+    word: 'a rebuild under the rows\' own zone claims to have moved them',
+    from: '        if (r.day !== recomputed) itemsMoved++;',
+    to: '        if (dayOfInstant(rebuildStampOf(r), tz) !== null) itemsMoved++;',
+    expect: 'nothing had to move',
   },
 ];
 

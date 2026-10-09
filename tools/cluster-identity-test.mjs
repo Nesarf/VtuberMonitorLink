@@ -397,10 +397,17 @@ await tf('the windowed title layer is what joins a same-title pair that straddle
     { id: 'q1', sourceId: 's1', title: '同名标题 同一件事', url: 'https://a.example/1', time: at('2026-09-14T10:00:00Z') },
     { id: 'q2', sourceId: 's2', title: '同名标题 同一件事', url: 'https://b.example/2', time: at('2026-09-14T23:00:00Z') },
   ];
-  // 13 hours apart: outside the same local day (Asia/Shanghai puts 23:00Z on the next day), inside the
-  // window. So the same-day layer cannot join them and the windowed title layer is what does: the
-  // evidence names only that layer, and the same-day key differs.
-  const full = cluster(items, { weight: () => 1 });
+  // 13 hours apart: outside the same local day, inside the window. So the same-day layer cannot join
+  // them and the windowed title layer is what does: the evidence names only that layer, and the
+  // same-day key differs.
+  //
+  // The day line is a property of a zone, not of the machine: on a UTC runner these two instants are
+  // the same day and the same-day layer joins them instead, which makes the assertion above fail for a
+  // reason that has nothing to do with what it tests. The zone is therefore declared here and passed to
+  // every cluster() call in this check — Asia/Shanghai is what puts 23:00Z on the next day, and pinning
+  // it is what makes the check mean the same thing on this box and on CI.
+  const tz = 'Asia/Shanghai';
+  const full = cluster(items, { weight: () => 1, timeZone: tz });
   assert.equal(full.length, 1, 'baseline: one event');
   assert.deepEqual(full[0].evidence.layers.map((l) => l.layer), ['title'], 'the windowed title layer is the only reason');
   assert.notEqual(identityKeys(items[0], '2026-09-14').titleDay, identityKeys(items[1], '2026-09-15').titleDay, 'and the same-day keys really differ');
@@ -410,9 +417,9 @@ await tf('the windowed title layer is what joins a same-title pair that straddle
     { id: 'z1', sourceId: 's1', title: '同名标题 一年后', url: 'https://a.example/1', time: at('2026-09-14T10:00:00Z') },
     { id: 'z2', sourceId: 's2', title: '同名标题 一年后', url: 'https://b.example/2', time: at('2027-09-14T10:00:00Z') },
   ];
-  assert.equal(cluster(far, { weight: () => 1 }).length, 2, 'a year apart must stay apart');
+  assert.equal(cluster(far, { weight: () => 1, timeZone: tz }).length, 2, 'a year apart must stay apart');
   const m = await mutation('Math.abs(ts - prev.epoch) > windowMs', 'false', {});
-  assert.equal(m.cluster(far, { weight: () => 1 }).length, 1, 'with the window test forced to "always inside" they merge');
+  assert.equal(m.cluster(far, { weight: () => 1, timeZone: tz }).length, 1, 'with the window test forced to "always inside" they merge');
 });
 
 await tf('mutation: making the title fingerprint fuzzy turns exact agreement back into a loose one', async () => {

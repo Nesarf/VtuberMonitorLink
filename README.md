@@ -229,7 +229,10 @@ document.
   runs on defaults **visibly** — one line at startup, the state on `GET /api/config/health`, and a warning on every
   later write.
   `POST /api/config/recover` puts the backup back, and only when you ask. Saves are atomic (temp file in the same
-  directory, flush, rename), so an interrupted write cannot truncate the config it was replacing.
+  directory, flush, rename), so an interrupted write cannot truncate the config it was replacing. Since v1.0.6 the
+  app also shows the condition as a **banner in the shell**, visible from every tab, with a recovery button that is
+  disabled when there is no usable backup — and it appears only when the server says the config is at fault, so a
+  first run and a healthy config look exactly as they did.
 - **A deliberate local endpoint needs `"allowLoopback": true` on that one entry** in `config.json` — a custom
   source, a watch target, a notification webhook, an LLM profile, or `vdb.allowLoopback`. The URL rule refuses
   loopback by default, the flag relaxes **loopback only** (not "anything local"), and there is no UI switch for it

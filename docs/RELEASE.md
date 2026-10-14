@@ -1,5 +1,173 @@
 # Release notes
 
+## v1.0.6
+
+**A consistency round.** There is one new thing a user can see - a banner that closes a gap the v1.0.5 notes
+admitted - and everything else is a place where two parts of the product told different stories, or where the code
+did not do what it said it did. Each was measured on real data before a line was changed, and two of those
+measurements are the reason this is worth a release rather than a commit: **62 of the 126 archive rows that carry a
+timestamp - 49 percent - sat on a different day than the time zone the rest of the product works in**, and a single
+event in the real corpus held two unrelated characters of the same wiki, joined because `Deluta/Gallery` and
+`FeraLune/Gallery` scored **0.696** on a shared suffix while the similarity between the two characters themselves
+was **0.000**.
+
+### Upgrading: the archive will relabel its days, and you do not have to do anything
+
+There were **two day boundaries in one product**. The archive derived an item's day from its UTC calendar day,
+while the calendar tab, the trends, per-person activity, silence and dormant baselines all asked in the configured
+time zone, so the same event could belong to two different days depending on which page asked. `server/src/day.js`
+is now the only place an instant becomes a day, `calendar.js` re-exports it instead of keeping a formatter of its
+own, and the zone is the single field the calendar tab already owns - no new setting to find.
+
+A stored bucket now says **which rule produced it**, because a day number without its rule is ambiguous. Every item
+row carries the zone that made its day; a second marker says whether the day came from a real timestamp, from the
+ingest run or from the legacy rule, and therefore whether it can be recomputed at all; the aggregate table is keyed
+by rule, so the old aggregate survives beside the new one as a named row set instead of being overwritten; and a
+meta table records the rule and a rebuild journal, so the archive can be read without any code at all.
+
+The rebuild runs at the end of an ordinary run and is a no-op once the archive is in sync. It recomputes item days
+and daily rows from the raw timestamps in one transaction whose journal row commits with the work, so an
+interruption leaves either no trace or a complete record, and it is idempotent because the rows for the target rule
+are deleted and recomputed rather than appended. It also reports what it did: items moved, items frozen, rows
+rebuilt. **Installing this release does not touch your data.** The mislabelled rows keep their UTC days until the
+next run rebuilds them, or until you call `POST /api/archive/rebuild` - add `?plan=1` to see what it would move
+before it moves anything. Two things are named as impossible rather than quietly skipped: `source_health` is a
+rolling counter with no per-check instant, and the day label a run writes into its own record is not recomputable
+from items. Rows with no timestamp keep their day, keep their legacy marker, and are still counted, so the
+aggregate still sums to the items table.
+
+### One identity rule for clusters, and it no longer chains
+
+Clustering merged items with a careful similarity method whose underlying structure was single-link chaining: if A
+resembled B and B resembled C, all three became one event even when A and C had nothing to do with each other. On
+the real corpus of 332 items the wrong chain was concrete: a thirteen-item event held Deluta and FeraLune, two
+unrelated characters of the same wiki, and the same corpus put *Happy Birthday Alban* beside *Happy Birthday Aia*
+and produced an eleven-item reddit chain running from *she noticed you* through *Mouseathon day 13* to *Ironmouse
+x Fortnite*.
+
+`server/src/identity.js` is now the single owner of "is this the same thing" - canonical URL normalisation,
+host-specific content id extraction, an NFKC title fingerprint - and `cluster.js` is layer-driven: native id,
+canonical URL, extracted id, exact title with the day, exact title within the window, and similarity last. The
+bound on similarity is now the **minimum pair similarity inside a cluster** rather than the distance to a
+representative, because a representative-only rule never compares the far end of a chain against the near end,
+which is exactly the hole the defect came through; the representative survives only as evidence. A width backstop
+and a measured floor of 0.38 sit behind it - genuine community reposts measure as low as 0.55 and the observed
+bridges sit at 0.696.
+
+Every event can now explain itself. `event.why` and `item.why` on the events route name the layer that joined a
+group, the shared key, the items involved and the scores, and carry the counts that were refused for diameter,
+width and identity. The measurement also says what does not pay, and it is stated rather than dressed up: native
+ids are the only layer that merges anything in this corpus (100 groups, 95 of them repeating across both days),
+while canonical URL and extracted id add zero merges because the corpus has no mirror hosts and no query strings.
+Those layers are kept because they are exact, cheap, and the only thing that would catch a cross-host repost - and
+the report says they are dormant today. The person-aware threshold is inert in production because people tags are
+attached at read time, after clustering; that was left alone and said out loud rather than quietly changed.
+
+Writing the controls caught three real bugs, each recorded where it happened: an `Infinity` default that silently
+refused every edge; identity unions that failed to re-root their per-group caches, which handed the diameter rule
+one member instead of two - the mistake that merged Deluta with FeraLune; and a self-reroot that deleted merged
+group bookkeeping, splitting twenty identical reports into four and sixteen.
+
+### Four things the code promised and did not do
+
+1. **`uncaughtException` logged and kept running**, so a process whose stack had already unwound kept the port, the
+   scheduler and the dashboard. It now logs, stops the scheduler, closes the server and exits with **70** - not 1,
+   which already means "failed to start" to the launcher and to the traversals. A route error still answers 500 and
+   the process keeps serving.
+2. **The browser render's hard timeout only set `process.exitCode`.** A hung page pinned a browser, its context and
+   a temporary profile for the life of the process, and a library call silently changed a process-wide status. It
+   now aborts through an `AbortController`, tears down in a `finally` that waits for the closes instead of racing
+   them, and returns a distinguishable `render-timeout`.
+3. **A damaged watch baseline was read as "no baseline"**, so the first comparison after the damage could warn
+   about nothing and the damaged bytes were then overwritten. Baselines now have four states like the config, the
+   damaged file is copied aside, the condition is reported through the API and in the run report, and no error
+   message echoes a JSON parse failure that quotes the file.
+4. **A `Chrome/126` user-agent literal from the Chromium era was sent on every watch request.** A wiki API request
+   is not a browser: it now carries the product token with its version, page fetches carry an explicit
+   no-version Firefox token, and one function decides which is which.
+
+### The checks that were not checking
+
+The UI walk waited for `networkidle`, which asks for 500 ms of network quiet while the shell polls its state route
+every 3 s **by design** - so the gate was asserting how loaded the machine was, passing on a quiet day and timing
+out on a busy one. It now waits for the shell's own readiness attribute, set after the first real state answer, as
+a throwing precondition; the count stays 242 and no assertion became conditional.
+
+The gate itself could hang, which is worse than being flaky: the no-logger probe mode had no early exit, so it fell
+through into the whole suite, which spawns that probe again - a chain measured at nine nested processes, one every
+four seconds, each parent waiting on its child, which the fast gate would never have finished. Mode dispatch is now
+exclusive, with a recursion guard and a reaper. Tracing it found the defect that was actually turning runs red: six
+async HTTP checks in one section were never awaited, so the server was closed with six requests in flight - a green
+summary with exit 1 on a loaded machine, which is the same class of lie as the hang. And the flakiness that started
+that investigation had three candidates, only the last of which was real: an ephemeral port the runtime refuses
+(measured 0 of 600 binds in the blocked range, kept as a guard), a multi-megabyte child payload that was
+load-bearing only while the parent raced a directory entry, and **ambient memory starvation** - another process
+holding 10.8 GB with 128 MB free makes a control child abort inside V8 at a 21 MB heap. That one is now named,
+capped and retried rather than hidden.
+
+Two smaller things of the same class: the CI failure annotation carried the last 30 lines of the fast gate, which
+is a guess about where the failure is - it now scans the log and names the failing checks first, keeping the suite
+banner above each one. And the `fast` job now installs the browser engine, so the browser render is exercised there
+instead of being asserted as an environment fact, with retries and a warn-and-continue path so a flaky download
+cannot paint a build red.
+
+### In the app
+
+The **config-fault banner** consumes `GET /api/config/health` - the gap the v1.0.5 notes recorded as "no page
+consumes the health route yet". It sits in the shell chrome, above the tab strip, so it is visible from every tab;
+it renders **only** when the server says the config is at fault, so a first run, a healthy config and a failed
+write on a healthy config all look exactly as they did. Its sentence body comes from the server, so no translation
+layer had to move; a dismissal sticks until the fault is a *different* fault; recovery is offered and never
+automatic; the recovery button is disabled when there is no usable backup; and after a recovery the shell re-reads
+its own settings instead of assuming it worked.
+
+`privacy.sendReferer` is **removed** rather than wired. The only value it could send is this app's own loopback
+address announced to every configured third-party site, and a switch that leaks when on and suppresses a header
+nobody sends when off is not a control. A config that still carries the key is accepted and the key is ignored.
+`SECURITY.md` now travels inside the packaged app, next to the `PRIVACY.md` that points at it, and the
+`config.json.broken-<stamp>` copies are capped at three, with the newest never a candidate for removal and every
+removal logged by name.
+
+### Also fixed here
+
+- **The UI crashed on load** and no check that stays away from a browser could see it: the shell called
+  `useCallback` without importing it while extracting the settings reload for the recovery path. Every fast check
+  was green because the UI walk had been running against a stale `web/dist` from before the change - a build step
+  is not a substitute for walking the build it produced.
+- **Two suites were measuring the machine they ran on.** The archive-day suite resolved a time zone through the
+  system when the rule under test was the configured one, which is why CI was red and only on CI; and the day-line
+  fixture in the cluster suite needs its two instants to fall on different days, which they do in Asia/Shanghai and
+  do not in UTC. Both fixtures now declare their own zone, and the rest of the cluster suite was audited by running
+  it in four zones including +14 and -11 rather than assumed safe.
+- **`config.example.json` is generated from the real defaults** instead of hand-copied. It had been showing the
+  legacy flat LLM block and 8 of the 24 sections the product has, and it is not a harmless sample: the portable
+  build copies it into the packaged app, so it was the shape a user would copy. The generator refuses to write if
+  any secret-shaped key holds a non-empty value.
+- **The Tor comment claimed more than the code did**: it said the egress goes on a fresh circuit every time, while
+  the implementation gives one circuit per subject and the browser path cannot rotate at all because Playwright
+  Firefox cannot authenticate to SOCKS5. The three vocabularies are now named in one place, the measured limitation
+  is written where a reader of that module will hit it, and no behaviour changed.
+
+### Known gaps, stated
+
+- The banner's **fault-appearance path has no test of its own**. It is exercised by the build, by the fast gate and
+  by the UI walk, and that is not the same claim as a test - which is why this paragraph exists.
+- `tools/cluster-test.mjs` has **one load-sensitive assertion**, a 3000 ms threshold on 2000 items. It measures
+  about 1400 ms here, equal to the same measurement at the previous commit, so it is not a regression - but it is
+  the one check in the tree that could go red because the machine was busy.
+- `source_health` and a run's own day label are **not rebuildable** by construction, as described above.
+- The `config.json.broken-<stamp>` cap is a **count of three, not an age**, and the files are evidence, so nothing
+  removes them silently.
+- Until an archive rebuild runs, **the 62 measured rows keep the day the old rule gave them**.
+
+### Not yet verified
+
+The same two as every release so far: posting from a real account and vision tagging with a real key need the
+owner's own credentials, so the self-checks use local fakes. Nothing in this build posts anywhere - the remaining
+targets declare no publish code, which is stated rather than implied.
+
+---
+
 ## v1.0.5
 
 **A security round, not a feature round.** Three problems with the same shape - the app trusted something it

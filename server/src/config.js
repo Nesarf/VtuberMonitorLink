@@ -884,6 +884,14 @@ const SECRET_NAME_RES = [
 ];
 
 /**
+ * The same list, for the two callers outside this module that have to ask "would this name be masked?":
+ * `tools/config-example.mjs` (which refuses to write an example config in which any of these holds a value)
+ * and `server/scripts/sanitize-check.mjs`. Exported as a copy so a stray `/g` cannot make a `.test()` in one
+ * caller change the answer in another — a stateful regex is the kind of bug that only shows up in a loop.
+ */
+export const secretNameRes = () => SECRET_NAME_RES.map((r) => new RegExp(r.source, r.flags.replace('g', '')));
+
+/**
  * Paths that look like secrets but are not, so they are not turned into '***' (which would break a page
  * that needs the real value). Full path, `[]` for an array element, dot-separated.
  */

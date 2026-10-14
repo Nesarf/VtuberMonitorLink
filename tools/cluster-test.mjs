@@ -253,22 +253,83 @@ t('no over-chaining: a batch sharing only boilerplate stays in separate clusters
   const cs = cluster(many, { weight: () => 1 });
   assert.equal(cs.length, 60, `must not merge, got ${cs.length}`);
 });
-t('2000 items do not degrade to O(n²) (bucketing plus a candidate cap)', () => {
-  const many = [];
-  for (let i = 0; i < 2000; i++) {
-    many.push({
-      id: 'm' + i,
-      sourceId: 'src-' + (i % 12),
-      title: `第 ${i} 条普通情报 关于某个话题的说明`,
-      publishedAt: new Date(Date.UTC(2026, 2, 1 + (i % 40), i % 24)).toISOString(),
-    });
-  }
-  const t0 = Date.now();
-  const cs = cluster(many, { weight: () => 1 });
-  const ms = Date.now() - t0;
-  assert.ok(ms < 3000, `2000 items took ${ms}ms, too slow`);
-  assert.ok(cs.length > 0);
-  process.stdout.write(`         (2000 items -> ${cs.length} events, ${ms}ms)\n`);
+t('a large input scales with the item count, not with its square (and a control says what that means)', () => {
+  // This used to be `assert.ok(ms < 3000)` for 2000 items, which measured this machine rather than the
+  // algorithm: measured here at about 1300 ms, so a busy machine or a slow runner could turn it red while
+  // the code was unchanged - the last load-sensitive assertion in the tree (BUGS #93). The property that
+  // actually matters is the *shape*: four times the items must not cost sixteen times the time. So the
+  // assertion is the ratio between two sizes, taken as the median of three runs so that one scheduling
+  // hiccup cannot decide it, and the numbers are printed either way.
+  const SMALL = 250;
+  const BIG = 2000; // eight times the items: linear growth costs 8x, quadratic growth 64x
+  const make = (n) => {
+    const many = [];
+    for (let i = 0; i < n; i++) {
+      many.push({
+        id: 'm' + i,
+        sourceId: 'src-' + (i % 12),
+        title: `第 ${i} 条普通情报 关于某个话题的说明`,
+        publishedAt: new Date(Date.UTC(2026, 2, 1 + (i % 40), i % 24)).toISOString(),
+      });
+    }
+    return many;
+  };
+  const medianMs = (fn, runs = 3) => {
+    const samples = [];
+    let last;
+    for (let r = 0; r < runs; r++) {
+      const t0 = process.hrtime.bigint();
+      last = fn();
+      samples.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    samples.sort((a, b) => a - b);
+    return { ms: samples[Math.floor(runs / 2)], last };
+  };
+  const clusterAt = (n) => cluster(make(n), { weight: () => 1 });
+
+  const small = medianMs(() => clusterAt(SMALL));
+  const big = medianMs(() => clusterAt(BIG));
+  // A floor of 0.5 ms on the divisor: below the timer's own resolution the ratio would be an artefact.
+  const ratio = big.ms / Math.max(small.ms, 0.5);
+  assert.ok(big.last.length > 0, 'the large input produced no events at all');
+  assert.ok(
+    small.ms < 3000,
+    `${SMALL} items alone took ${small.ms.toFixed(1)}ms, which no machine should need for this size`
+  );
+  assert.ok(
+    ratio < 25,
+    `8x the items cost ${ratio.toFixed(1)}x the time (${SMALL}: ${small.ms.toFixed(1)}ms, ${BIG}: ${big.ms.toFixed(1)}ms) - quadratic growth would be 64x`
+  );
+
+  // The control: the same measurement, on a real quadratic scan. Without it, "the ratio is small" could mean
+  // the algorithm is fine or that this check cannot see the difference - and the second is the failure mode
+  // that matters, because the bound is the only thing standing between a quadratic merge and a red suite.
+  //
+  // It measures at its **own** sizes, heavier than the ones above, and that is deliberate: at 250 items a
+  // genuinely quadratic scan runs in fractions of a millisecond, where the timer's own overhead flattens the
+  // ratio - the first version of this control reported 6x, 10x and 6x where the shape is 64x, and a control
+  // that cannot see the shape proves nothing about the bound. 1000 items is ~1 ms and 8000 is ~100 ms, both
+  // far enough above the noise for 64x to be unmistakable.
+  const CONTROL_SMALL = 1000;
+  const CONTROL_BIG = 8000; // the same eight-times spread
+  const quadraticAt = (n) => {
+    const a = new Array(n);
+    for (let i = 0; i < n; i++) a[i] = (i % 97) + 1;
+    let s = 0;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) s += Math.sqrt(a[i] * a[j]);
+    return s;
+  };
+  const qSmall = medianMs(() => quadraticAt(CONTROL_SMALL));
+  const qBig = medianMs(() => quadraticAt(CONTROL_BIG));
+  const qRatio = qBig.ms / Math.max(qSmall.ms, 0.5);
+  assert.ok(
+    qRatio > 25,
+    `the control (a genuinely quadratic scan) measured only ${qRatio.toFixed(1)}x over the same spread, so this check could not tell the two shapes apart`
+  );
+  process.stdout.write(
+    `         (${SMALL} -> ${small.ms.toFixed(1)}ms, ${BIG} -> ${big.ms.toFixed(1)}ms, ${ratio.toFixed(1)}x for 8x the items, ${big.last.length} events; ` +
+      `control at ${CONTROL_SMALL}/${CONTROL_BIG}: ${qSmall.ms.toFixed(1)}ms -> ${qBig.ms.toFixed(1)}ms = ${qRatio.toFixed(1)}x)\n`
+  );
 });
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);

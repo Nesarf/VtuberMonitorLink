@@ -7,6 +7,17 @@ Status: `fixed` / `open` / `not a bug (clarified by measurement)`
 
 ---
 
+## unreleased — the tidy-up round and the parked items (started 2026-10-14)
+
+> After v1.0.6 went out, the workspace was cleaned and the items parked on purpose were picked up one at a time —
+> each one measured first, each one with a control, each one recorded here.
+
+| # | Symptom | Root cause | Status |
+| --- | --- | --- | --- |
+| 93 | The last load-sensitive assertion in the tree: `tools/cluster-test.mjs` required 2000 items to cluster in under **3000 ms** | The assertion was an absolute stopwatch reading, so it measured the machine rather than the algorithm — measured here at about 1300 ms, and at 1633-1820 ms with three CPU loops running, meaning the threshold sat roughly twice above the normal cost and less than twice below the loaded one. What the check exists for is the **shape** of the growth (bucketing plus a candidate cap, not an all-pairs comparison), and a shape can be measured without knowing how fast the machine is | **fixed** (the check times two sizes — 250 and 2000 items — takes the median of three runs, and asserts the ratio stays under 25: eight times the items would cost 8x for linear growth and 64x for quadratic. Measured 11.8-13.4x idle and 12.1-13.5x under three busy loops, while the loaded absolute time rose by a quarter to a third — exactly what the old form was reading. A loose absolute backstop stays (250 items alone must stay under 3000 ms, 30x its measured cost) so a machine that is broken rather than busy is still caught. The control is a genuinely quadratic scan over the same eight-times spread and must exceed the bound — and the first version of that control did **not**: at 250 items a quadratic scan runs in fractions of a millisecond, where the timer's own overhead flattened the ratio to 6-10x instead of 64x, so the control now measures at 1000 and 8000 items (1.6 ms against 630 ms, 350-414x) where the shape is unmistakable. **How it was verified**: three idle runs and two runs under three busy loops, all green, with both ratios printed either way) |
+
+---
+
 ## v1.0.6 — the release cut itself (2026-10-14)
 
 > The round that shipped one day boundary, one identity rule for clusters, four promises the code did not keep and

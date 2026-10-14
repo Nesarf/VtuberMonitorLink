@@ -25,6 +25,14 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # The engine, for the same reason the fast job has it (see ci.yml): a check inside `verify:fast` renders
+    # a real page, so without an engine this job reports this machine's environment instead of the product.
+    # This was found the hard way - the first release cut after tools/render-timeout-test.mjs landed was red
+    # with six unrelated-looking failures, all of them "Executable doesn't exist", because the fast job had
+    # been given the engine and this one had not. The same path is the design rule at the top of this file;
+    # a check in tools/integrity-check.mjs now holds the two workflow files to it.
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}\pw-browsers
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +44,29 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
+      - name: Install the browser engine (Firefox) for the render check
+        id: engine
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $target = $env:PLAYWRIGHT_BROWSERS_PATH
+          Write-Host "engine root: $target"
+          $ok = $false
+          foreach ($attempt in 1..3) {
+            # npx.cmd, not npx: pwsh does not resolve the extensionless shim the way cmd does.
+            & npx.cmd --yes playwright install firefox
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::warning title=engine install attempt $attempt failed::npx playwright install firefox exited $LASTEXITCODE"
+            Start-Sleep -Seconds (5 * $attempt)
+          }
+          $found = @(Get-ChildItem -Path $target -Directory -Filter 'firefox-*' -ErrorAction SilentlyContinue)
+          if ($found.Count -gt 0) {
+            Write-Host "engine present: $($found.Name -join ', ')"
+          } else {
+            Write-Host "::warning title=no engine installed::the render check will report this machine's environment instead of rendering, which is not a failure"
+          }
+          if (-not $ok) { Write-Host "the engine could not be downloaded; verify:fast still runs and will say so" }
+
       - name: Fast checks (integrity, locales, i18n keys, plural forms, unit tests)
         shell: pwsh
         run: |
@@ -44,9 +75,22 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content $log
           if ($code -ne 0) {
-            # The job log needs a token to read; a check annotation does not. Emit the tail as an
-            # annotation so a failed release stays diagnosable from outside (BUGS #71).
-            $tail = (Get-Content $log -Tail 12) -join "`n"
+            # The failing check by name, before the tail - the same annotation the fast job emits, because
+            # the job log needs a token to read and a red release is exactly when it is needed most.
+            $all = Get-Content $log
+            $named = @()
+            for ($i = 0; $i -lt $all.Count; $i++) {
+              if ($all[$i] -match '\[FAIL\]|\bFAILED\b|AssertionError') {
+                $prev = if ($i -gt 0 -and $all[$i - 1] -notmatch '^\s*\[ok\]') { $all[$i - 1].Trim() } else { '' }
+                $named += (@($prev, $all[$i].Trim()) | Where-Object { $_ }) -join ' | '
+              }
+            }
+            if ($named.Count -gt 0) {
+              $f = (($named | Select-Object -First 12) -join "`n") -replace '%', '%25'
+              $f = $f -replace "`r?`n", '%0A'
+              Write-Host "::error title=the failing checks::$f"
+            }
+            $tail = (Get-Content $log -Tail 30) -join "`n"
             $tail = $tail -replace '%', '%25'
             $tail = $tail -replace "`r?`n", '%0A'
             Write-Host "::error title=verify:fast failed::$tail"

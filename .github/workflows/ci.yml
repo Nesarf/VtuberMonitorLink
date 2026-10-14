@@ -95,8 +95,15 @@ jobs:
       # `npm ci --ignore-scripts` is deliberate (Playwright's postinstall would download ~150 MB into a
       # system location), and the consequence was that tools/browser-engine-test.mjs could only ever take
       # its "no discoverable engine" branch in this job: the build was green whether or not the render
-      # worked. So the download happens here, once, for the one job that needs it - `release.yml`'s build
-      # job stays as fast as it was, and the packaged release gets its engine from --with-browsers.
+      # worked. So the download happens here - and in `release.yml`'s build job, which runs the same gate
+      # and therefore needs the same engine. It is *not* for the packaged release: the published package
+      # ships no engine at all (the user points at their own browser), and `--with-browsers` is a separate
+      # variant for anyone who wants one inside the package.
+      #
+      # The two jobs drifting apart is what this comment used to promise would not matter, and it did: the
+      # first release cut after tools/render-timeout-test.mjs landed was red in `release.yml` with six
+      # "Executable doesn't exist" failures while this job was green. The engine path and the install step
+      # are now asserted to be present in both files by tools/integrity-check.mjs.
       #
       # Three properties are on purpose:
       #   * the install target is the repository (`PLAYWRIGHT_BROWSERS_PATH` at the job level), never

@@ -111,6 +111,15 @@ banner above each one. And the `fast` job now installs the browser engine, so th
 instead of being asserted as an environment fact, with retries and a warn-and-continue path so a flaky download
 cannot paint a build red.
 
+And the release path was not the path the gate runs: `release.yml` runs the same `verify:fast`, but only the `fast`
+job had been given the engine the render check needs, so the first cut of this release was red on the runner with
+six `Executable doesn't exist` failures that named nothing about the cause, while the fast job on the same commit
+was green - the drift the header of that workflow exists to prevent. Both jobs now set the same engine root and
+install Firefox the same way, both name the failing checks in their annotation, and a new section of the integrity
+check holds **every** workflow that runs the gate to all three, with a control rejecting each of the three ways of
+getting it wrong (no engine root, the retired Chromium engine, and a tail-only annotation that no longer names the
+failure).
+
 ### In the app
 
 The **config-fault banner** consumes `GET /api/config/health` - the gap the v1.0.5 notes recorded as "no page

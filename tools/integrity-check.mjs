@@ -1504,6 +1504,74 @@ try {
   problems.push(`could not read the identity surface: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5o. a workflow that runs the gate installs what the gate needs
+
+// The finding this section answers: `verify:fast` contains a check that renders a real page
+// (tools/render-timeout-test.mjs), and the engine it needs comes from a workflow step. That step was added
+// to ci.yml's `fast` job only, while release.yml runs the same gate — so the first release cut after the
+// render check landed was red with six "Executable doesn't exist" failures that named nothing about the
+// cause, on a commit whose fast job was green. Two jobs running "the same gate" while one of them is
+// missing what the gate needs is the exact drift the header of release.yml promises cannot happen.
+//
+// A self-test cannot catch this: it is a property of files that are never executed in the test run. So the
+// check is on the pair, over **every** workflow that runs the gate rather than the two that happen to
+// exist today: each one must set the same engine root, install Firefox, and name the failing checks in its
+// annotation (a red release is when a reader most needs the cause without a token).
+try {
+  const wfDir = path.join(ROOT, '.github', 'workflows');
+  const workflows = fs
+    .readdirSync(wfDir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .map((f) => ({ name: f, text: fs.readFileSync(path.join(wfDir, f), 'utf8') }));
+  // The value is spelled `${{ github.workspace }}\pw-browsers`, so it contains a space: the capture is the
+  // rest of the line rather than a non-space run, and the trimmed value is what gets compared between files.
+  const engineRoot = (text) => ((text.match(/^\s*PLAYWRIGHT_BROWSERS_PATH:\s*(.+?)\s*$/m) || [])[1] || '').trim();
+  const installsEngine = (text) => /playwright install firefox\b/.test(text);
+  const namesFailing = (text) => /title=the failing checks/.test(text);
+
+  const runners = workflows.filter((w) => /verify:fast/.test(w.text));
+  const missing = [];
+  const roots = new Set();
+  for (const w of runners) {
+    const root = engineRoot(w.text);
+    if (root) roots.add(root);
+    if (!root) missing.push(`${w.name} runs the gate without setting PLAYWRIGHT_BROWSERS_PATH`);
+    if (!installsEngine(w.text)) missing.push(`${w.name} runs the gate but never installs the Firefox the render check needs`);
+    if (!namesFailing(w.text)) missing.push(`${w.name} runs the gate but does not name the failing checks in its annotation`);
+  }
+  if (runners.length < 2) {
+    problems.push(`only ${runners.length} workflow file(s) run verify:fast, so this section would pass on a pair that no longer exists`);
+  } else if (missing.length) {
+    problems.push('a workflow runs the gate without what the gate needs: ' + missing.join('; '));
+  } else if (roots.size !== 1) {
+    problems.push(`the workflows install the engine into different roots (${[...roots].join(' vs ')}): a root that differs per job is how one of them goes red alone`);
+  } else {
+    process.stdout.write(`   [ok]   all ${runners.length} workflow(s) running the gate set the same engine root, install Firefox and name the failing checks\n`);
+  }
+
+  // The controls, so a green line above means the predicates ran rather than that they never matched. Each
+  // one is a real way this could be "fixed" wrongly: dropping the env, installing the engine that the
+  // product no longer uses, or keeping the old tail-only annotation.
+  const sample = runners[0] ? runners[0].text : '';
+  const controlFails = (text, pred) => !pred(text);
+  if (!sample) {
+    notes.push('the engine-root control could not run: no workflow file runs the gate');
+  } else if (
+    controlFails(sample.replace(/^\s*PLAYWRIGHT_BROWSERS_PATH:.*$/m, ''), engineRoot) &&
+    controlFails(sample.replace(/playwright install firefox/g, 'playwright install chromium'), installsEngine) &&
+    controlFails(sample.replace(/title=the failing checks/g, 'title=verify:fast failed'), namesFailing) &&
+    engineRoot(sample) &&
+    installsEngine(sample) &&
+    namesFailing(sample)
+  ) {
+    process.stdout.write('   [ok]   (and the controls: no engine root, the retired Chromium engine and a tail-only annotation are each rejected)\n');
+  } else {
+    problems.push('the workflow predicates do not tell the fixed file from the three ways of being wrong, so the check above proves nothing');
+  }
+} catch (e) {
+  problems.push(`could not read the workflow files: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── result
 
 process.stdout.write('\n6. result\n');

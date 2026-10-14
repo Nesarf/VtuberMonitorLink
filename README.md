@@ -59,6 +59,7 @@ The dimension "follow by person" and "group view" were missing is **the agency**
 - **Those account fields are data about people, not a connection to those sites**: a person's `bilibili` or `twitter` id is a field name in their record, matched locally against text the app already collected. It is never fetched, queried or posted to — the platform set here is the roster's vocabulary, not this build's network
 - **Import takes the same sanitising path**: selection → person shape → the same validation as manual entry; anything rejected is reported per row with a reason, never silently dropped
 - **Licensed CC BY-NC-SA 4.0**: so it is **fetched at runtime only**, cached in a runtime directory, and **never committed or bundled** (the release checks stop it), with attribution in both the UI and the docs
+- **You can pin the bytes you accepted**: the cache records the `sha256` of the archive it was built from and the URL it came from, the log prints the full digest on every fetch, and setting `"expectSha256": "<64 hex>"` under `vdb` in `config.json` **refuses** a download whose bytes are not that artifact — which is what makes fetching a moving branch a decision rather than a hope. A pin that is not a 64-character hex digest is reported as such instead of refusing every refresh. Clear the value to accept a new roster you have looked at
 - Details: `docs/VDB.md`
 
 ## Group view, silence & dormant, observation mode, usage & budget

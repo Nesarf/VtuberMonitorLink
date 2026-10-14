@@ -3,7 +3,9 @@
 // silently loses people); (2) matching that only knows bilibili (the people the user actually follows live on
 // twitch / youtube / twitter and are then unsearchable).
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -11,6 +13,8 @@ import { parsePax, readTar } from '../server/src/tar.js';
 import {
   PLATFORM_URLS,
   buildIndex,
+  checkArtifactPin,
+  ensureIndex,
   indexSummary,
   loadCachedIndex,
   membersOfGroup,
@@ -25,6 +29,22 @@ let fail = 0;
 const t = (name, fn) => {
   try {
     fn();
+    pass++;
+    process.stdout.write('  [ok]   ' + name + '\n');
+  } catch (e) {
+    fail++;
+    process.stdout.write('  [FAIL] ' + name + '  -- ' + e.message + '\n');
+  }
+};
+
+/**
+ * The async half. `t` takes a synchronous function, and a check handed to it that returns a promise would run
+ * its body *after* the summary had already been printed - a green suite that never ran the check, which is a
+ * bug this repository has recorded before. So async checks have their own runner and the summary waits below.
+ */
+const ta = async (name, fn) => {
+  try {
+    await fn();
     pass++;
     process.stdout.write('  [ok]   ' + name + '\n');
   } catch (e) {
@@ -303,6 +323,116 @@ if (fs.existsSync(realTgz)) {
 } else {
   process.stdout.write('  [skip] real tarball (point VML_VDB_TARBALL at a vdb tar.gz and this one runs)\n');
 }
+
+// ─────────────────────────────── the artifact pin: which bytes is this roster, and is that the accepted set?
+//
+// The finding this answers: the roster is fetched from a **moving branch** by default, and nothing recorded or
+// checked which bytes had been accepted. A silent upstream change, a compromised mirror and an ordinary refresh
+// all looked the same. `vdb.expectSha256` makes "the roster changed" a decision the user takes, and the index
+// records the digest so the question stays answerable after the download is gone.
+
+const PIN_TGZ = zlib.gzipSync(
+  tarOf([['vdb-master/vtbs/pin-a.json', JSON.stringify({ name: 'Pin A', accounts: { bilibili: '1001' } })]]),
+);
+
+t('the digest is of the bytes given, not of the records parsed out of them', () => {
+  const mine = crypto.createHash('sha256').update(PIN_TGZ).digest('hex');
+  const got = checkArtifactPin(PIN_TGZ);
+  assert.equal(got.sha256, mine, 'the recorded digest is not the sha256 of the artifact');
+  assert.equal(got.bytes, PIN_TGZ.length, 'the recorded size is not the artifact size');
+  assert.equal(got.pinned, false, 'an empty pin must not report itself as pinned');
+  // control: other bytes are a different artifact
+  assert.notEqual(checkArtifactPin(Buffer.from('other bytes')).sha256, mine, 'two different artifacts share a digest');
+});
+
+t('a pin matches whatever case the log printed it in (control: a wrong digest is refused)', () => {
+  const digest = checkArtifactPin(PIN_TGZ).sha256;
+  assert.equal(
+    checkArtifactPin(PIN_TGZ, digest.toUpperCase() + '\n').ok,
+    true,
+    'a digest pasted with different case or a trailing newline is refused',
+  );
+  const wrong = checkArtifactPin(PIN_TGZ, 'a'.repeat(64));
+  assert.equal(wrong.ok, false, 'a pin that does not match was accepted');
+  assert.equal(wrong.usablePin, true, 'a 64-hex pin must count as usable, so the refusal is about content');
+});
+
+t('a pin that is not a digest is reported as one, not as a content mismatch (control: the two cases differ)', () => {
+  const junk = checkArtifactPin(PIN_TGZ, 'v1.0.6');
+  assert.equal(junk.ok, false, 'nonsense as a pin was accepted');
+  assert.equal(junk.usablePin, false, 'nonsense as a pin was reported as a usable pin');
+  assert.equal(checkArtifactPin(PIN_TGZ, 'a'.repeat(64)).usablePin, true, 'the two cases are not distinguished');
+});
+
+t('buildIndex records the artifact and the source it came from (control: other bytes record another digest)', () => {
+  const index = buildIndex(PIN_TGZ, { sourceUrl: 'http://example.invalid/vdb.tar.gz' });
+  assert.equal(index.artifact.sha256, checkArtifactPin(PIN_TGZ).sha256, 'the index does not carry its own artifact digest');
+  assert.equal(index.artifact.bytes, PIN_TGZ.length);
+  assert.equal(index.sourceUrl, 'http://example.invalid/vdb.tar.gz', 'the index does not record where it came from');
+  const other = buildIndex(zlib.gzipSync(tarOf([['vdb-master/vtbs/pin-b.json', JSON.stringify({ name: 'Pin B' })]])));
+  assert.notEqual(other.artifact.sha256, index.artifact.sha256, 'two different archives recorded the same digest');
+});
+
+t('indexSummary shows the short digest, and stays readable for an index written before it existed', () => {
+  const index = buildIndex(PIN_TGZ);
+  const shown = indexSummary(index);
+  assert.ok(shown.includes(index.artifact.sha256.slice(0, 12)), 'the summary does not show the digest: ' + shown);
+  // control: an index from before this field existed must not grow a stray ellipsis or an empty label
+  const legacy = indexSummary({ count: 3, groups: {}, generatedAt: '2026-01-01T00:00:00.000Z' });
+  assert.ok(!legacy.endsWith('\u2026'), 'a legacy summary ends with the digest separator and nothing after it: ' + legacy);
+  assert.ok(!legacy.includes(index.artifact.sha256.slice(0, 12)), 'a legacy summary invented a digest: ' + legacy);
+});
+
+// The whole path, against a real fetch - served from this machine, so no network leaves it. The pin has to be
+// enforced where the bytes arrive, not where the records come out, and this is the case that says so.
+await ta('ensureIndex records the digest of what it fetched, and refuses a roster that is not the pinned artifact', async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'vml-vdb-pin-'));
+  const feeds = path.join(parent, 'feeds');
+  fs.mkdirSync(feeds, { recursive: true });
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/gzip' });
+    res.end(PIN_TGZ);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}/vdb.tar.gz`;
+  const digest = checkArtifactPin(PIN_TGZ).sha256;
+  const cfgFor = (vdb) => ({ paths: { feedsDir: feeds }, vdb: { url, allowLoopback: true, ...vdb } });
+  try {
+    // 1. no pin: accepted, and the digest is recorded so it can be pinned later
+    const plain = await ensureIndex(cfgFor({}), { force: true });
+    assert.equal(plain.count, 1, 'the served roster did not parse into one record');
+    assert.equal(plain.artifact.sha256, digest, 'the fetched index does not record the digest of what was fetched');
+    assert.equal(plain.sourceUrl, url, 'the fetched index does not record where it came from');
+
+    // 2. the same digest, pinned: accepted (this is the control for 3 - a pin is not simply refusing everything)
+    const pinned = await ensureIndex(cfgFor({ expectSha256: digest }), { force: true });
+    assert.equal(pinned.artifact.sha256, digest, 'a correctly pinned roster was not accepted');
+
+    // 3. a different digest: refused, and the message names both ends so the user can decide
+    let refusal = null;
+    try {
+      await ensureIndex(cfgFor({ expectSha256: 'b'.repeat(64) }), { force: true });
+    } catch (e) {
+      refusal = e;
+    }
+    assert.ok(refusal, 'a roster that is not the pinned artifact was accepted');
+    assert.ok(refusal.message.includes('b'.repeat(12)), 'the refusal does not name the pinned digest: ' + refusal.message);
+    assert.ok(refusal.message.includes(digest.slice(0, 12)), 'the refusal does not name what was downloaded: ' + refusal.message);
+
+    // 4. a pin that cannot match anything says so, instead of refusing every download as a content mismatch
+    let junk = null;
+    try {
+      await ensureIndex(cfgFor({ expectSha256: 'not-a-digest' }), { force: true });
+    } catch (e) {
+      junk = e;
+    }
+    assert.ok(junk, 'a pin that is not a digest was accepted');
+    assert.ok(!junk.message.includes('not-a-digest'), 'the nonsensical pin was echoed back into the message');
+  } finally {
+    server.close();
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
 
 process.stdout.write(`\n${pass}/${pass + fail} checks passed\n`);
 if (fail) {

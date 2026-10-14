@@ -22,6 +22,7 @@
 // Platform-agnostic: nothing here assumes bilibili. Whatever platforms `accounts` carries are accepted
 // (bilibili/youtube/twitter/twitch/acfun/weibo/tiktok/niconico/showroom/pixiv/…),
 // and both matching and display follow the generic "platform → id" shape.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -33,6 +34,15 @@ import { validateRemoteUrl } from './remote-url.js';
 export const VDB_DEFAULTS = {
   url: 'https://codeload.github.com/dd-center/vdb/tar.gz/refs/heads/master',
   ttlDays: 7, // the roster changes very slowly; once a week is plenty, and `force` refreshes immediately
+  /**
+   * Empty means "accept whatever this URL serves", which is the default because the roster is upstream's and
+   * it legitimately changes. Set it to a digest you have looked at (the log prints one on every fetch) and a
+   * download whose bytes are not that artifact is **refused** instead of parsed - the difference between
+   * noticing a changed upstream and trusting it. The pin is about content, not about version numbers: the URL
+   * can be a moving branch (`.../tar.gz/refs/heads/master`), and this is what makes that acceptable when you
+   * decide it should be.
+   */
+  expectSha256: '',
   timeoutMs: 60000,
   software: 'VML',
 };
@@ -108,11 +118,33 @@ export function parseRecord(raw, file = '') {
 }
 
 /**
- * Build the index from the tarball contents. A pure function (touches no disk), so it is easy to assert on.
- * @param {Buffer} tarGz
- * @param {{prefix?:string}} opts
+ * The digest of one downloaded artifact, and the answer to "is this the artifact that was pinned?".
+ *
+ * Exported because it is the half a test can hold: the fetch needs the network, but the decision - the thing
+ * that has to be right - is a pure function of the bytes and the configured digest. `expected` is compared
+ * case-insensitively with surrounding whitespace ignored, because a digest pasted out of a log arrives either
+ * way, and a pin that silently never matched would be worse than no pin at all (that is what `usablePin`
+ * reports: a pin that is not 64 hex characters cannot match anything, and the caller says so out loud rather
+ * than refusing every download with a message about content).
  */
-export function buildIndex(tarGz, { prefix = null, generatedAt = new Date().toISOString() } = {}) {
+export function checkArtifactPin(buf, expected = '') {
+  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  const bytes = buf.length;
+  const want = String(expected ?? '').trim().toLowerCase();
+  if (!want) return { ok: true, pinned: false, sha256, bytes };
+  const usablePin = /^[0-9a-f]{64}$/.test(want);
+  return { ok: usablePin && want === sha256, pinned: true, usablePin, sha256, bytes, expected: want };
+}
+
+/**
+ * Build the index from the tarball contents. A pure function (touches no disk), so it is easy to assert on.
+ *
+ * `artifact` and `sourceUrl` are recorded so that "which bytes is this roster?" is answerable from the cached
+ * index alone - the pinned-digest feature is only meaningful if the digest of what was accepted is on record.
+ * @param {Buffer} tarGz
+ * @param {{prefix?:string, generatedAt?:string, sourceUrl?:string}} opts
+ */
+export function buildIndex(tarGz, { prefix = null, generatedAt = new Date().toISOString(), sourceUrl = '' } = {}) {
   const files = readTar(zlib.gunzipSync(tarGz));
   const records = [];
   let skipped = 0;
@@ -138,6 +170,10 @@ export function buildIndex(tarGz, { prefix = null, generatedAt = new Date().toIS
     generatedAt,
     count: records.length,
     skipped,
+    // Which bytes this index was built from, so a cached roster can be identified later without re-downloading
+    // it: a digest in the log is a fact for one run, a digest in the index is a fact for the file on disk.
+    sourceUrl: sourceUrl || '',
+    artifact: checkArtifactPin(tarGz),
     groups: Object.fromEntries([...groups.entries()].sort((a, b) => b[1] - a[1])),
     platforms: Object.fromEntries([...platforms.entries()].sort((a, b) => b[1] - a[1])),
     records,
@@ -180,7 +216,28 @@ export async function ensureIndex(cfg, { force = false, log = null } = {}) {
   );
   if (!res.ok) throw new Error(`VDB 下载失败 HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  const index = buildIndex(buf, { generatedAt: new Date().toISOString() });
+
+  // The pin is checked **before** anything is parsed, and that order is the point: the question "are these the
+  // bytes I accepted?" has to be answered about the bytes, not about the records that happened to come out of
+  // them. An empty pin accepts the download and says which digest it was, which is how a user gets a value to
+  // pin in the first place (`vdb.expectSha256`).
+  const pin = checkArtifactPin(buf, opts.expectSha256);
+  if (pin.pinned && !pin.usablePin) {
+    throw new Error(
+      `vdb.expectSha256 不是一个 sha256 摘要（应为 64 位十六进制，当前 ${String(opts.expectSha256).length} 个字符）：` +
+        '这个值永远匹配不上任何内容，所以这里直接说出来，而不是把它当作「内容不匹配」拒绝每一次下载。'
+    );
+  }
+  if (!pin.ok) {
+    throw new Error(
+      `VDB 花名册与 vdb.expectSha256 不一致：已锁定 ${pin.expected.slice(0, 12)}…，这次拿到 ${pin.sha256.slice(0, 12)}…（${pin.bytes} 字节）。` +
+        '这份内容不是你锁定的那一版；确认过新版本之后把 vdb.expectSha256 清空即可接受它。'
+    );
+  }
+  if (pin.pinned) log?.info?.(`VDB roster matches the pinned digest (sha256 ${pin.sha256.slice(0, 12)}…)`);
+  else log?.info?.(`VDB roster digest: sha256 ${pin.sha256} (${pin.bytes} bytes) — set vdb.expectSha256 to this value to refuse anything else`);
+
+  const index = buildIndex(buf, { generatedAt: new Date().toISOString(), sourceUrl: checked.url });
   if (!index.count) throw new Error('VDB 包里没有解析出任何条目（上游结构可能变了）');
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -267,5 +324,8 @@ export function slug(s) {
 /** Index summary (for the UI and the logs) */
 export function indexSummary(index) {
   if (!index?.count) return '尚未获取 VDB 花名册';
-  return `${index.count} 位（社团 ${Object.keys(index.groups ?? {}).length} 个）· 更新于 ${String(index.generatedAt).slice(0, 10)}`;
+  // The digest belongs in the summary: "which roster is this?" is otherwise unanswerable from the interface,
+  // and a pin the user cannot see the current value of is a setting they cannot check or renew.
+  const digest = index.artifact?.sha256 ? ` · 校验 ${String(index.artifact.sha256).slice(0, 12)}…` : '';
+  return `${index.count} 位（社团 ${Object.keys(index.groups ?? {}).length} 个）· 更新于 ${String(index.generatedAt).slice(0, 10)}${digest}`;
 }

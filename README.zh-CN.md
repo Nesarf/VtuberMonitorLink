@@ -234,6 +234,7 @@ v1.0.5 安全轮次里四条使用者看得见的结论；完整说明见项目�
 ## 发布校验
 
 ```bash
+npm test              # 与 verify:fast 同一条链：最顺手的命令跑的就是真东西
 npm run verify        # 校对发行包：必需文件 / ASCII / UTF-8 / 密钥与个人路径残留 / 运行数据
 npm run traverse      # 遍历全部 HTTP 端点、SPA 兜底、错误路径
 npm run traverse:ui   # 真实浏览器里走完十一个页面，并用 mock LLM 真跑一次
@@ -242,6 +243,8 @@ npm run english       # 英文覆盖率（工程层 / 界面两侧的百分比�
 npm run commit-msg    # 整段历史里每条提交信息都是英文
 npm run release       # 上述全套
 ```
+
+`npm test` 与 `npm run verify:fast` 是同一条链：它是工程完整的自检面，所以新人最先敲的那条命令不会是「悄悄会过」的子集。想单跑某一套时，也都有各自入口（`npm run test:cluster`、`npm run test:archive` 等）。
 
 另外四条「约定」类守卫也在这条链里（`verify:fast`）：
 `tools/english-logic.mjs`（工程层只许英文 —— 注释与日志，界面词条与产品文案不在此列，

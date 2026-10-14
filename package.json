@@ -14,6 +14,7 @@
     "dev:server": "node server/src/index.js",
     "dev:web": "vite --config web/vite.config.js",
     "build": "vite build --config web/vite.config.js",
+    "test": "npm run verify:fast",
     "i18n:hant": "node tools/i18n-hant.mjs",
     "i18n:translate": "node tools/i18n-translate.mjs",
     "i18n:review": "node tools/i18n-translate.mjs --review",

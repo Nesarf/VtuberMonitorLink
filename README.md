@@ -267,6 +267,7 @@ Scraped items belong to their own publishers. This tool aggregates them locally 
 ## Release checks
 
 ```bash
+npm test              # the same chain as verify:fast, so the obvious command does the real thing
 npm run verify        # proofread the release: required files / ASCII / UTF-8 / leaked keys & paths / run data
 npm run traverse      # walk every HTTP endpoint, the SPA fallback and the error paths
 npm run traverse:ui   # walk all eleven pages in a real browser and do a real run against the mock LLM
@@ -275,6 +276,10 @@ npm run english       # English coverage, for both the engineering layer and the
 npm run commit-msg    # every commit message in the history is English
 npm run release       # all of the above
 ```
+
+`npm test` and `npm run verify:fast` are the same chain: it is the project's whole self-check surface, so the
+command a newcomer types first is not a subset that quietly passes. The per-suite entries are also there
+individually (`npm run test:cluster`, `npm run test:archive`, ...) when one of them is what you want.
 
 Four convention guards ride along in the same chain (`verify:fast`):
 `tools/english-logic.mjs` (the engineering layer is English only — comments and logs; UI strings and

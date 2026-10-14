@@ -419,8 +419,23 @@ function main() {
     // --ignore-scripts on purpose: playwright's postinstall would download
     // ~150 MB of browser kernels into a system-level cache. Browser kernels are
     // a runtime choice (Settings > Browser) or an explicit --with-browsers.
+    //
+    // `npm ci`, not `npm install`, and server/package-lock.json is why: with `install`, the caret ranges in
+    // server/package.json were resolved **at build time**, so two builds of one commit could ship different
+    // dependency patches. Measured after v1.0.6: the published zip carried playwright-core 1.64.1 while a
+    // local build of the same commit carried 1.64.0, and the only visible trace was one content-hashed asset
+    // name inside that dependency - nothing in the release chain could see it (BUGS #92). `ci` installs
+    // exactly the locked versions and refuses to run when the lock and the manifest disagree, which is the
+    // honest failure rather than a silent drift.
+    if (!fs.existsSync(path.join(serverDir, 'package-lock.json'))) {
+      throw new Error(
+        'server/package-lock.json is missing, so the packaged dependencies would be resolved at build time ' +
+          'and two builds of one commit could ship different versions (BUGS #92). Regenerate it with: ' +
+          'npm install --package-lock-only --ignore-scripts --workspaces=false (run in server/)'
+      );
+    }
     runNpm(
-      ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'],
+      ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'],
       { cwd: serverDir }
     );
     if (!fs.existsSync(serverModules)) {

@@ -424,6 +424,64 @@ function main() {
     else process.stdout.write('   [ok]   app/' + d + '/ is empty or absent\n');
   }
 
+  // ------------------------------------------------- the packaged deps match the lock
+  //
+  // Why this check exists: the packaged app installs its own dependencies inside the package, and with
+  // `npm install` those came from the caret ranges in server/package.json **resolved at build time** - so two
+  // builds of one commit could ship different dependency patches, and nothing in this file could see it,
+  // because the zip manifest lists paths and not hashes. Measured after v1.0.6: the published zip carried
+  // playwright-core 1.64.1 while a local build of the same commit carried 1.64.0, the single trace being one
+  // content-hashed asset name (BUGS #92). The packager now installs with `npm ci` from
+  // server/package-lock.json; this is the check that the package it produced really is that tree.
+  const lockPath = path.join(args.dir, 'app', 'server', 'package-lock.json');
+  const modulesDir = path.join(args.dir, 'app', 'server', 'node_modules');
+  if (!fs.existsSync(lockPath)) {
+    notes.push('no app/server/package-lock.json in this build, so the packaged dependency versions cannot be checked against a lock');
+  } else if (!fs.existsSync(modulesDir)) {
+    problems.push('app/server/package-lock.json is there but app/server/node_modules is not: the package carries a lock it did not install from');
+  } else {
+    let lock;
+    try {
+      lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    } catch (e) {
+      problems.push('app/server/package-lock.json is not valid JSON');
+    }
+    if (lock) {
+      const entries = lock.packages || {};
+      const mismatched = [];
+      let compared = 0;
+      for (const [rel, entry] of Object.entries(entries)) {
+        if (!rel.startsWith('node_modules/') || !entry || !entry.version) continue;
+        // The lock's keys are npm paths ("node_modules/a/node_modules/b"), so the installed tree is walked by
+        // the same shape: nested installs are compared where they actually landed, not only at the top level.
+        const installedDir = path.join(modulesDir, rel.slice('node_modules/'.length).split('/').join(path.sep));
+        const manifest = path.join(installedDir, 'package.json');
+        if (!fs.existsSync(manifest)) continue; // an optional platform-specific dep the lock allows to be absent
+        compared++;
+        let installed = '';
+        try {
+          installed = JSON.parse(fs.readFileSync(manifest, 'utf8')).version || '';
+        } catch (e) {
+          mismatched.push(rel.replace('node_modules/', '') + ' (unreadable package.json)');
+          continue;
+        }
+        if (installed !== entry.version) {
+          mismatched.push(rel.replace('node_modules/', '') + ' ' + installed + ' != ' + entry.version);
+        }
+      }
+      if (compared === 0) {
+        problems.push('the packaged lock recorded no installable dependency, so this check compared nothing');
+      } else if (mismatched.length) {
+        problems.push(
+          'the packaged dependencies do not match app/server/package-lock.json: ' + mismatched.slice(0, 5).join(', ') +
+            (mismatched.length > 5 ? ' (and ' + (mismatched.length - 5) + ' more)' : '')
+        );
+      } else {
+        process.stdout.write('   [ok]   all ' + compared + ' packaged dependencies match app/server/package-lock.json (versions pinned)\n');
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- 5. report
   process.stdout.write('\n6. result\n');
   for (const n of notes) process.stdout.write('   note: ' + n + '\n');

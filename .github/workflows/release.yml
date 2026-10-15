@@ -143,6 +143,40 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+      # A tag push must not silently replace a release that is already published.
+      #
+      # Found the hard way: v1.0.7 was published by hand with assets that had been built and verified
+      # locally, and pushing its tag started this workflow, which would have uploaded a different zip
+      # over them -- different in bytes because make-zip stamps every entry with the current time, so
+      # even an identical build produces a different file. Nothing in the workflow would have said so,
+      # and the checksums already published in SHA256SUMS.txt would have described a file that no longer
+      # existed.
+      #
+      # So: if the tag already has assets, this fails instead. Re-releasing a version is a decision, and
+      # the way to make it is to delete the assets first -- deliberately, knowing what it costs.
+      - name: Refuse to replace assets that are already published
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $existing = gh release view $tag --repo "${{ github.repository }}" --json assets --jq '.assets[].name' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "no release for $tag yet; this run will create it"
+            exit 0
+          }
+          $names = @($existing | Where-Object { $_ })
+          if ($names.Count -eq 0) {
+            Write-Host "the release for $tag has no assets yet; nothing to replace"
+            exit 0
+          }
+          Write-Host "::error::$tag already has $($names.Count) published asset(s): $($names -join ', ')"
+          Write-Host "This run would replace them with a rebuild, which is never byte-identical"
+          Write-Host "(make-zip stamps each entry with the current time). If replacing is intended, delete"
+          Write-Host "the assets on the release first, then re-run this workflow."
+          exit 1
+
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

@@ -3,23 +3,36 @@
 //
 // Why this file exists at all, in the release notes' own words: "The banner's fault-appearance path has no
 // test of its own. It is exercised by the build, by the fast gate and by the UI walk, and that is not the
-// same claim as a test." Those three exercise the *words* (`web/src/config-fault.js` is covered by the pure
-// decision functions) and they exercise the *server* (the durability test drives the config states). None of
-// them can see the thing the user is promised, which is that a band appears in the shell chrome.
+// same claim as a test." Measured later, that sentence was wrong twice over: the *build* had already dropped
+// the component (the shipped bundle carried no `config-fault` string at all), and neither the fast gate nor
+// the UI walk asserts that a band is on screen anywhere - so the path was exercised by nothing.
+//
+// The header of this file used to add a third claim of its own - that `web/src/config-fault.js`, the decision
+// half, "is covered by the pure decision functions". It is not: `grep -rn 'config-fault|decideConfigFaultBanner'
+// tools/` matches this file and nothing else, so the decisions that this browser run cannot reach (a dismissal
+// that has to survive until the fault is a *different* one, a health answer that is not a health answer) have
+// no test either. Recorded here rather than quietly deleted, and recorded as an open gap in docs/BUGS.md #95.
+//
+// What this file does hold is the one thing none of the others could see: that the band appears in the shell
+// chrome, that it states the server's own condition, and that its recovery button is disabled with a reason
+// when there is no usable backup - each with a control, and the passing-direction control (a healthy config
+// shows no band) being the one that keeps "the banner is visible" from being satisfied by a banner that is
+// always visible.
 //
 // Why a **real browser** is the only harness that can make that claim - measured, not assumed:
 //
 //   · The decision half is pure and already reachable from Node, so a Node-only case would re-test what
-//     exists and would pass on a shell where the decision is computed and then *never rendered*. That is not
-//     hypothetical: App.jsx held `const [configHealth, setConfigHealth] = useState(null)` and
-//     `setConfigHealth(await api.getConfigHealth())` while the JSX never mentioned `<ConfigFaultBanner>` -
-//     the state was filled and thrown away, and the shipped bundle contained no `config-fault` string. The
-//     fact "the banner is on screen" can only be observed from the rendered document.
-//   · What the browser costs here is one already-installed engine and one page load; the app itself is the
-//     packaged exe this repo already builds for the UI walk, and no second build is required to run it.
+//     exists and would still pass on a shell where the decision is computed and then *never rendered*. That
+//     is not hypothetical: `web/src/App.jsx` held `const [configHealth, setConfigHealth] = useState(null)`
+//     and `setConfigHealth(await api.getConfigHealth())` while its JSX never mentioned `<ConfigFaultBanner>` -
+//     the state was filled and thrown away, and the bundle the packaged app shipped contained no
+//     `config-fault` string at all. The fact "the banner is on screen" is only observable from a rendered
+//     document, which is why this file pays for an engine.
+//   · What the browser costs is one already-installed engine and two page loads; the app itself is the
+//     packaged exe this repo already builds for the UI walk, so no second build is required to run it.
 //
 // How the fault is made real, and why `VML_CONFIG_PATH` rather than a hand-made health payload: the point is
-// to reach the banner through the whole chain the user's machine has - a config file the server cannot parse,
+// to reach the banner through the whole chain a user's machine has - a config file the server cannot parse,
 // the server's own state, the shell's own poll, the banner's own decision - and never by mounting the shell
 // against a stubbed answer. `VML_CONFIG_PATH` is the injection point `server/src/config.js` already provides
 // for exactly this (`config.json.bak` follows the config, so both live in the temp directory and the user's
@@ -30,11 +43,19 @@
 //   · passing direction - the same run with a *healthy* config must show no banner at all. Without it, "the
 //     banner is visible" is satisfied by a banner that is always visible.
 //   · failing direction - observed by hand against a deliberately wrong product, because a control that
-//     cannot go red is not a control. The transcript is in the change that added this file; the mutation was
-//     removing the banner's own render path, and check 1 went red with "the banner did not appear".
+//     cannot go red is not a control. Measured: with the banner's own render path removed from App.jsx (the
+//     import, the state and the poll all left in place) check 1 went red with "the banner did not appear",
+//     and restoring the file byte-for-byte returned it to green.
 //
-// Readiness is `tools/lib/app-ready.cjs` (the attribute the shell sets), never a sleep and never
-// `networkidle`: the shell polls `/api/state` every 3 s, so the page is never quiet by design.
+// Readiness, not navigation, is what gates the assertions: `tools/lib/app-ready.cjs` waits for the
+// `html[data-vml-ready="1"]` attribute the shell sets after a real `/api/state` answer. Measured on this
+// machine, the navigation *completion events* are not a fact this app guarantees a harness - against the same
+// packaged exe, `domcontentloaded` hung for 12 s three times and resolved in 8.2 s on another run, while
+// `load` hung once and resolved in 5.8 s another time, with the app log in the hung runs showing its 3 s
+// `/api/config/health` poll arriving the whole time (the document had loaded and React was running). That is
+// the same measurement that got rid of `networkidle`; so the navigation here is fired and *not* waited on -
+// `commit` (the response arrived) is the wait, its failure is recorded rather than thrown, and readiness
+// decides. A dead app still fails, with the readiness reason plus the navigation error.
 //
 //   node tools/config-fault-banner-test.mjs
 //
@@ -69,8 +90,18 @@ const ta = async (name, fn) => {
 process.stdout.write('\nconfig-fault banner: a damaged config is visible without reading the log\n\n');
 
 /**
+ * The ports this file asks for, in a range nothing else in this repo uses (the UI walk takes 43195-43198).
+ *
+ * Asked for, not reserved - see `readBoundPort`: the app may bind somewhere else entirely, and it is the
+ * app's own line that this file believes. One fixed number per direction rather than `:0`, so the port stays
+ * out of the ephemeral range, where the OS hands the same number to something else between probe and bind.
+ */
+const PORT_FAULTY = 43211;
+const PORT_HEALTHY = 43212;
+
+/**
  * `PLAYWRIGHT_BROWSERS_PATH` is set **before** the import, because Playwright reads it once at load: setting
- * it afterwards - the obvious way to write this - has no effect and the engine is looked up in the platform
+ * it afterwards - the obvious way to write this - has no effect, and the engine is looked up in the platform
  * default location instead. Same trap and same reason as `tools/readiness-test.mjs`.
  */
 const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(ROOT, 'pw-browsers');
@@ -88,23 +119,102 @@ const enginePresent = !!enginePath && fs.existsSync(enginePath);
 
 const APP_DIR = path.join(ROOT, 'dist', 'VtuberMonitorLink');
 const EXE = path.join(APP_DIR, process.platform === 'win32' ? 'VtuberMonitorLink.exe' : 'VtuberMonitorLink');
-// Scratch goes to the machine's cache drive, never the system one: an app writes logs and reports beside
+// Scratch goes to the machine's cache drive, never the system one: the app writes logs and reports beside
 // itself, and this fixture is deliberately short-lived.
 const TMP_ROOT = process.env.VML_TEST_TMP || 'E:\\DaShaoHuo\\cache\\tmp';
+const TMP_PREFIX = 'vml-config-fault-';
 
-/** An ephemeral port this process owned a moment ago and therefore knows is free. */
-function freePort() {
-  return new Promise((resolve, reject) => {
+/**
+ * Remove scratch directories this file left in earlier runs.
+ *
+ * Only its own prefix is touched, and only directories: one per pid, never reused, so they accumulate - 17 of
+ * them had piled up here before this existed. Deletion happens at the start rather than the end on purpose: a
+ * run that is interrupted (Ctrl-C, a killed gate) never reaches its cleanup, and the *next* run then sweeps
+ * what the failed one left. The current run's own directories do not exist yet at this point, so nothing that
+ * is in use can be removed.
+ */
+function cleanStaleScratch() {
+  let names = [];
+  try {
+    names = fs.readdirSync(TMP_ROOT).filter((n) => n.startsWith(TMP_PREFIX));
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    try {
+      fs.rmSync(path.join(TMP_ROOT, name), { recursive: true, force: true });
+      removed++;
+    } catch {
+      /* a directory held open by a still-running stray is not this run's problem to solve */
+    }
+  }
+  return removed;
+}
+
+/**
+ * Is this port bindable right now?
+ *
+ * The app treats a taken port as a preference and moves to another one - reasonable for a desktop tool, and a
+ * trap for a test: a leftover instance from an earlier run turns the next run into a *phantom*, where the app
+ * this file started listens somewhere else, `page.goto` waits out its whole timeout against the port that was
+ * asked for, and the run ends with the browser and the app still up, poisoning the run after it. That
+ * happened here twice before this check existed. Failing in the first second with the reason beats waiting for
+ * a symptom.
+ *
+ * It is a *bind attempt* rather than a connection: a bind asks the OS the question the app's own bind will
+ * ask, while a connection would be answered by anything listening, app or not.
+ */
+function portIsFree(port) {
+  return new Promise((resolve) => {
     const sock = net.createServer();
-    sock.once('error', reject);
-    sock.listen(0, '127.0.0.1', () => {
-      const port = sock.address().port;
-      sock.close((err) => (err ? reject(err) : resolve(port)));
-    });
+    sock.once('error', () => resolve(false));
+    sock.listen(port, '127.0.0.1', () => sock.close(() => resolve(true)));
   });
 }
 
-/** Poll a URL until it answers 200: the app takes a moment to bind. */
+/**
+ * The port the app **actually bound**, read from its own startup line.
+ *
+ * Asking the OS for a free port and then handing that number over is a race, and it lost here once: the app
+ * was started with `--port 12936` and reported `listening on http://127.0.0.1:7702`, so the fixture polled a
+ * number nothing was listening on until its wait ran out. The app has a fallback - it moves to another port
+ * when the one it was given is taken - which is the right behaviour for a desktop tool and the wrong thing
+ * for a test to assume away. The app's own line is the source of truth; the number this file asked for is
+ * only ever a request.
+ */
+async function readBoundPort(logPath, requested) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    let text = '';
+    try {
+      text = fs.readFileSync(logPath, 'utf8');
+    } catch {
+      /* the file appears with the first line of output */
+    }
+    // A hand-off, not a bind: the app has single-instance behaviour, so an instance already serving makes this
+    // one announce the running copy and exit instead of listening. Nothing downstream would work - there is no
+    // process of ours to drive - and the honest failure is this sentence rather than a navigation timeout.
+    const handoff = /already running[^\n]*/.exec(text);
+    if (handoff) {
+      throw new Error(
+        `the app did not start a second instance: its own log says "${handoff[0].trim()}" - another copy is ` +
+          'already serving, so this run would have measured that one instead',
+      );
+    }
+    const m = /listening on http:\/\/127\.0\.0\.1:(\d+)/.exec(text);
+    if (m) {
+      if (Number(m[1]) !== requested) {
+        process.stdout.write(`         the app moved off the requested port ${requested} (taken) and bound ${m[1]}\n`);
+      }
+      return Number(m[1]);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`the app never reported a listening port in its log (asked for 127.0.0.1:${requested})`);
+}
+
+/** Poll a URL until it answers 200: the app prints its URL a moment before it serves. */
 async function waitHttp(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -122,19 +232,24 @@ async function waitHttp(url, timeoutMs) {
 /**
  * Start the packaged app with its config pointed into a temp directory of its own.
  *
- * Returns the process, the port and the paths, so the caller can assert against the very files the server
- * is describing. `VML_CONFIG_PATH` is the whole isolation: the app's real `app/config.json` is not read,
- * not written, and not restorable-to by this file.
+ * Returns the process, the port and the paths, so the caller can assert against the very files the server is
+ * describing. `VML_CONFIG_PATH` is the whole isolation: the app's real `app/config.json` is not read, not
+ * written, and not restorable-to by this file.
  */
-async function startApp({ marker, configBytes }) {
-  const dir = path.join(TMP_ROOT, `vml-config-fault-${marker}-${process.pid}`);
-  fs.rmSync(dir, { recursive: true, force: true });
+async function startApp({ marker, configBytes, port }) {
+  if (!(await portIsFree(port))) {
+    throw new Error(
+      `port ${port} is already in use before this test starts anything - almost always a leftover instance ` +
+        'from an interrupted run. The app would silently bind elsewhere and every navigation below would time ' +
+        'out against the port that was asked for, so this stops here: close the stray process and run again.',
+    );
+  }
+  const dir = path.join(TMP_ROOT, `${TMP_PREFIX}${marker}-${process.pid}`);
   fs.mkdirSync(dir, { recursive: true });
   const cfgPath = path.join(dir, 'config.json');
-  if (configBytes !== null) fs.writeFileSync(cfgPath, configBytes, 'utf8');
+  fs.writeFileSync(cfgPath, configBytes, 'utf8');
   const logPath = path.join(dir, 'app.log');
   const log = fs.openSync(logPath, 'w');
-  const port = await freePort();
   const child = spawn(EXE, ['--no-open', '--port', String(port)], {
     cwd: APP_DIR,
     // The override travels to the child here and nowhere else: a process started without it resolves the
@@ -142,22 +257,28 @@ async function startApp({ marker, configBytes }) {
     env: { ...process.env, VML_CONFIG_PATH: cfgPath },
     stdio: ['ignore', log, log],
   });
-  await waitHttp(`http://127.0.0.1:${port}/api/state`, 30000);
+  // The parent's copy of the descriptor is not needed once the child owns it; keeping it open would leak one
+  // per run for the life of the process.
+  fs.closeSync(log);
+  const bound = await readBoundPort(logPath, port);
+  if (child.exitCode !== null) {
+    throw new Error(`the app exited with code ${child.exitCode} before answering on port ${bound}`);
+  }
+  await waitHttp(`http://127.0.0.1:${bound}/api/state`, 30000);
   return {
     child,
-    port,
+    port: bound,
     dir,
     cfgPath,
     logPath,
-    base: `http://127.0.0.1:${port}`,
+    base: `http://127.0.0.1:${bound}`,
     stop: async () => {
-      child.kill();
-      await new Promise((r) => setTimeout(r, 600));
       try {
-        fs.closeSync(log);
+        child.kill();
       } catch {
-        /* the descriptor may already be gone with the child */
+        /* already gone */
       }
+      await new Promise((r) => setTimeout(r, 600));
     },
     /** The app's own log, for a failure message that says what the app thought rather than only what we saw. */
     tail: () => {
@@ -172,7 +293,7 @@ async function startApp({ marker, configBytes }) {
 
 /** A config file that is valid JSON, so the server's own verdict for it is `ok`. */
 const HEALTHY_CONFIG = JSON.stringify({ ui: { theme: 'dark' }, llm: { providers: [] } }, null, 2);
-/** The same file, made unparseable by one missing close brace - the bytes a text editor leaves behind. */
+/** The same content, made unparseable by one missing close brace - the bytes a text editor leaves behind. */
 const CORRUPT_CONFIG = '{ "ui": { "theme": "dark", "layout": { "cols": 3 }';
 
 if (!fs.existsSync(EXE)) {
@@ -186,15 +307,50 @@ if (!enginePresent) {
   process.exit(1);
 }
 
+const swept = cleanStaleScratch();
+if (swept) process.stdout.write(`         swept ${swept} scratch director${swept === 1 ? 'y' : 'ies'} from earlier runs\n`);
+
+// One browser for both directions: the engine's cold start is the expensive part and neither direction
+// depends on a fresh profile.
 const browser = await firefox.launch({ headless: true });
 const page = await browser.newPage();
+// Every locator gets the same bound, so a failure is one sentence naming the selector rather than Playwright's
+// default per-call timeouts spread across the file.
+page.setDefaultTimeout(30000);
+
+/**
+ * Navigate and then wait for the fact that actually matters.
+ *
+ * The navigation is fire-and-record rather than awaited: `commit` (the response arrived) is the wait, and its
+ * failure is kept instead of thrown, because a document that arrived but whose completion event never fired is
+ * a state this app is *measured* to produce (see the header). The readiness attribute decides - it is set by
+ * the shell only after a real `/api/state` answer, so an app that never rendered still fails here, with the
+ * navigation error attached when there is one.
+ */
+async function gotoAndAwaitReady(base) {
+  let navError = null;
+  await page
+    .goto(base + '/', { waitUntil: 'commit', timeout: 15000 })
+    .catch((e) => {
+      navError = e;
+    });
+  try {
+    // 45 s rather than the walk's 30: measured here, the *first* navigation of a freshly launched engine is
+    // the slow one (2.3 s to readiness on a warm page, but one run took the 30 s and gave up while the page
+    // was fine). The budget is for a cold engine, and a genuinely dead app still fails - just later.
+    await waitForAppReady(page, 45000);
+  } catch (e) {
+    const nav = navError ? ' | navigation: ' + String(navError.message).split('\n')[0] : ' | navigation: ok';
+    throw new Error(e.message + nav);
+  }
+}
 
 try {
   // ───────────────────────────────────── direction 1: a real fault makes the banner appear
   //
-  // The condition is created on disk before the app starts, so the fault is the *first* thing the server
-  // ever reports - there is no "it would have appeared if something else had happened first" in this run.
-  const faulty = await startApp({ marker: 'corrupt', configBytes: CORRUPT_CONFIG });
+  // The condition is created on disk before the app starts, so the fault is the *first* thing the server ever
+  // reports - there is no "it would have appeared if something else had happened first" in this run.
+  const faulty = await startApp({ marker: 'corrupt', configBytes: CORRUPT_CONFIG, port: PORT_FAULTY });
   try {
     process.stdout.write('a config file whose bytes do not parse\n');
 
@@ -206,17 +362,18 @@ try {
     assert.equal(health.backupExists, false, `a config.json.bak appeared beside the temp config (${health.backupPath})`);
     assert.equal(health.backupUsable, false, 'the server called an absent backup usable');
 
-    await page.goto(faulty.base + '/', { waitUntil: 'load', timeout: 30000 });
-    await waitForAppReady(page, 30000);
+    await gotoAndAwaitReady(faulty.base);
 
     await ta('the config-fault banner appears for a config whose bytes do not parse', async () => {
       const banner = page.locator('[data-testid="config-fault"]');
-      await banner.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-      assert.equal(
-        await banner.count(),
-        1,
-        'the banner did not appear — the app log says: ' + faulty.tail(),
-      );
+      // The banner is fed by the shell's 3 s poll, so it may legitimately be absent at the instant readiness
+      // is reached. Waiting for the element is the event-shaped way to bound that - and the poll that carries
+      // it is observed, so this is not a sleep dressed up as a wait.
+      await page
+        .waitForResponse((r) => r.url() === faulty.base + '/api/config/health', { timeout: 10000 })
+        .catch(() => {});
+      await banner.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+      assert.equal(await banner.count(), 1, 'the banner did not appear - the app log says: ' + faulty.tail());
     });
 
     await ta('the banner states the condition the server reported', async () => {
@@ -241,8 +398,8 @@ try {
       assert.ok(reason && reason.length > 0, 'the disabled recovery button carries no reason');
       const body = await page.locator('[data-testid="config-fault"]').innerText();
       assert.ok(body.includes(reason), `the refusal reason "${reason}" is not shown next to the control: ${body}`);
-      // And the route agrees rather than merely the button: a disabled control that the server would have
-      // honoured is a different bug from a control that is correctly refused.
+      // And the route agrees rather than merely the button: a disabled control the server would have honoured
+      // is a different bug from a control that is correctly refused.
       assert.equal(health.backupError, 'no config.json.bak to recover from', `the route's refusal text changed: ${health.backupError}`);
     });
   } finally {
@@ -253,37 +410,41 @@ try {
   //
   // Same binary, same run shape, one difference: the config parses. Without this, every check above is
   // satisfied by a band that is rendered unconditionally.
-  const healthy = await startApp({ marker: 'ok', configBytes: HEALTHY_CONFIG });
+  const healthy = await startApp({ marker: 'ok', configBytes: HEALTHY_CONFIG, port: PORT_HEALTHY });
   try {
     process.stdout.write('\na healthy config, as the control\n');
 
     const health = await (await fetch(healthy.base + '/api/config/health')).json();
     assert.equal(health.fault, false, `the control's config was called a fault (state=${health.state})`);
 
-    await page.goto(healthy.base + '/', { waitUntil: 'load', timeout: 30000 });
-    await waitForAppReady(page, 30000);
-    // The banner is fed by the shell's 3 s poll, so "not there yet" and "never" look alike at load time.
-    // This waits out one full poll interval rather than asserting at first paint - and it is the *only*
-    // place in this file that waits on time, because absence is the one fact that has no event to hang on.
-    // It is bounded by a network fact instead: the poll itself is observable, so a request is awaited.
-    const polled = page.waitForResponse(
-      (r) => r.url() === healthy.base + '/api/config/health' && r.status() === 200,
-      { timeout: 10000 },
-    );
-    await polled.catch(() => {});
-    await new Promise((r) => setTimeout(r, 1200));
+    await gotoAndAwaitReady(healthy.base);
+    // Then the same bound as above, in the other direction: the poll's response is awaited and the element is
+    // given its chance to *detach*, which is a state Playwright reports rather than a sleep.
+    const banner = page.locator('[data-testid="config-fault"]');
+    await page
+      .waitForResponse((r) => r.url() === healthy.base + '/api/config/health' && r.status() === 200, { timeout: 10000 })
+      .catch(() => {});
+    await banner.waitFor({ state: 'detached', timeout: 4000 }).catch(() => {});
 
     await ta('no banner at all when the config is healthy (the control in the passing direction)', async () => {
-      const banner = page.locator('[data-testid="config-fault"]');
-      assert.equal(await banner.count(), 0, 'the banner is visible although the config parsed: it is not gated on the server\'s verdict');
-      assert.equal(await page.locator('html').getAttribute('data-vml-ready'), '1', 'the control page never reached readiness, so this check would pass for the wrong reason');
+      assert.equal(await banner.count(), 0, "the banner is visible although the config parsed: it is not gated on the server's verdict");
+      assert.equal(
+        await page.locator('html').getAttribute('data-vml-ready'),
+        '1',
+        'the control page never reached readiness, so this check would pass for the wrong reason',
+      );
     });
   } finally {
     await healthy.stop();
   }
+} catch (e) {
+  // A precondition or startup failure (a port held by a stray, a hand-off, a dead child) is not an assertion
+  // result, so it is reported as its own line and counted - an interruption must never look like a pass.
+  fail++;
+  process.stdout.write('  [FAIL] the fixture could not reach the banner: ' + e.message + '\n');
 } finally {
-  await page.close();
-  await browser.close();
+  await page.close().catch(() => {});
+  await browser.close().catch(() => {});
 }
 
 process.stdout.write('\n' + (fail ? `${fail} failed, ${pass} passed.` : `all ${pass} config-fault banner checks passed.`) + '\n');

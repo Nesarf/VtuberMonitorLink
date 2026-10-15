@@ -198,6 +198,13 @@ export default function App() {
           </button>
         ))}
       </nav>
+      {/* Directly under the header and above the tab strip, outside `<main>`, which is where the component
+          argues it belongs (see ConfigFaultBanner.jsx): a damaged config has to be visible on every tab, and
+          the page that fixes it must stay reachable. `configHealth` is null until the route answers, and the
+          banner renders nothing for that rather than guessing from a state name.
+          `onRecovered` is where the shell re-reads its own settings after a recovery: the config file was
+          replaced, so the theme and layout on screen may not be the ones on disk any more. */}
+      <ConfigFaultBanner health={configHealth} onRecovered={() => loadUiFromConfig()} />
       <main>
         {tab === 'intel' && <Intel layout={layout} />}
         {tab === 'search' && <Search layout={layout} />}

@@ -95,6 +95,18 @@ nav.tabs button {
 }
 nav.tabs button.active { background: var(--panel); color: var(--fg); border-color: var(--accent); }
 
+/* ── Config fault band ──
+   Sits between the header and the tab strip (see ConfigFaultBanner.jsx for why it lives in the chrome and not
+   on a page). Warning-coloured rather than error-red: the app survives on defaults, so this reports a condition
+   to fix, not a failure to panic about. The band has no dismiss animation and no shadow - it is meant to read as
+   part of the furniture until the condition is gone. */
+.config-fault { border-bottom: 1px solid var(--err); background: var(--del-bg); padding: 8px 20px 10px; }
+.config-fault-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.config-fault-head .spacer { flex: 1; }
+.config-fault-body { margin-top: 6px; display: flex; flex-direction: column; gap: 2px; }
+.config-fault-body .detail { margin: 0; font-size: 12px; color: var(--fg); word-break: break-word; }
+.config-fault-body .reason { margin: 0; font-size: 12px; color: var(--muted); }
+
 main { padding: 16px 20px 60px; max-width: 1180px; }
 
 .panel {

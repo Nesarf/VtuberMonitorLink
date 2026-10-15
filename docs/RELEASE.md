@@ -130,6 +130,18 @@ layer had to move; a dismissal sticks until the fault is a *different* fault; re
 automatic; the recovery button is disabled when there is no usable backup; and after a recovery the shell re-reads
 its own settings instead of assuming it worked.
 
+> **Correction, recorded after the release (2026-10-15): the banner did not appear in the build described above.**
+> At the released tag, `web/src/App.jsx` imports `ConfigFaultBanner` and stores the health answer - and never
+> renders the component. Measured two ways: reading the tag, and running the new
+> `tools/config-fault-banner-test.mjs` against the published `VtuberMonitorLink-1.0.6-win-x64.zip` unpacked from
+> the Releases page, where the first check fails with "the banner did not appear" **while that app's own log
+> shows `GET /api/config -> 200`, `GET /api/config/health -> 200` and then `304` every three seconds**. So the
+> paragraph above describes the component correctly and the screen incorrectly: the condition was fetched, and
+> nothing put it on screen. The shell mounts it from the commit that adds the missing line, the appearance is
+> held by that test inside `verify:fast`, and `docs/BUGS.md` #95 records why nothing caught it - every check that
+> existed was blind to it by construction, and these notes were written from the change list rather than from
+> the screen.
+
 `privacy.sendReferer` is **removed** rather than wired. The only value it could send is this app's own loopback
 address announced to every configured third-party site, and a switch that leaks when on and suppresses a header
 nobody sends when off is not a control. A config that still carries the key is accepted and the key is ignored.

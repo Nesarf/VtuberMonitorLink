@@ -70,6 +70,27 @@ export function sizeOf(dir) {
   return walk(dir).files.reduce((n, f) => n + f.bytes, 0);
 }
 
+/**
+ * The band verdict, as a pure function so it can be tested rather than trusted.
+ *
+ * The floor is not decoration: a checkout that shrank far below it did so by losing something (253 MB -> 153 MB
+ * happened once), and the ceiling is what stops a year of artifacts from accumulating. Both edges are inclusive -
+ * "at least 400 MB" and "at most 1 GB" - which is the kind of thing that quietly becomes a `<` somewhere else.
+ */
+export function bandVerdict(mb, floor = FLOOR_MB, ceiling = CEILING_MB) {
+  // Strictly a number: `Number(null)` is 0 and `Number('many')` is NaN, so a lenient coercion would report an
+  // unknown measurement as "a zero-megabyte tree, under the floor" - a plausible-looking answer to a question that
+  // was never measured. Only a finite number is a measurement. (Found by the suite this function exists for.)
+  const value = typeof mb === 'number' ? mb : NaN;
+  const finite = Number.isFinite(value);
+  return {
+    mb: value,
+    within: finite && value >= floor && value <= ceiling,
+    over: finite && value > ceiling,
+    under: finite && value < floor,
+  };
+}
+
 export function report(root = ROOT) {
   const { files, links: found } = walk(root);
   const checkout = files.reduce((n, f) => n + f.bytes, 0);
@@ -132,7 +153,7 @@ export function report(root = ROOT) {
     neededBrowsers: NEEDED_BROWSERS,
     floorMB: FLOOR_MB,
     ceilingMB: CEILING_MB,
-    withinBand: mb(checkout + needed) >= FLOOR_MB && mb(checkout + needed) <= CEILING_MB,
+    withinBand: bandVerdict(mb(checkout + needed)).within,
   };
 }
 

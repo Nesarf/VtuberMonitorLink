@@ -85,6 +85,9 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerProxyRestRoutes } from './routes/proxy-rest.js';
+import { registerArchiveRestRoutes } from './routes/archive-rest.js';
+import { registerSourcesCustomRoutes } from './routes/sources-custom.js';
 import { registerCostRoutes } from './routes/cost.js';
 import { registerSilenceRoutes } from './routes/silence.js';
 import { registerGroupsRoutes } from './routes/groups.js';
@@ -301,30 +304,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── custom sources ───────────────────────────────────────────────
-  app.post('/api/sources/custom', (req, res) => {
-    let cfg = getConfig();
-    // A user-added source carries free-form keys (url / proxy / note), so the mask rule is applied before
-    // the sanitiser picks the fields out.
-    const s = sanitizeCustomSource(preserveSecretsIn(req.body ?? {}));
-    if (!s.id) return res.status(400).json({ error: 'id is required' });
-    // Every fetch kind this build offers reads a url: the uid-only kind (an account-id feed) was removed
-    // with its platform, and a source that carries nothing to fetch would be refused by the fetch stage anyway.
-    if (!s.url) return res.status(400).json({ error: 'url is required' });
-    if (effectiveSources(cfg).some((x) => x.id === s.id)) return res.status(409).json({ error: `source already exists: ${s.id}` });
-    cfg.customSources = [...(cfg.customSources ?? []), s];
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, source: s, sources: effectiveSources(cfg) });
-  });
+  // Moved to server/src/routes/sources-custom.js (see its header for the shape the remaining groups follow).
+  registerSourcesCustomRoutes(app, { getConfig, patchConfig, log, persist, preserveSecretsIn });
 
-  app.delete('/api/sources/custom/:id', (req, res) => {
-    let cfg = getConfig();
-    const before = (cfg.customSources ?? []).length;
-    cfg.customSources = (cfg.customSources ?? []).filter((s) => s.id !== req.params.id);
-    if (cfg.sources?.[req.params.id]) delete cfg.sources[req.params.id];
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, removed: before - cfg.customSources.length, sources: effectiveSources(cfg) });
-  });
+
 
   // Moved to server/src/routes/browser.js (see its header for the shape the remaining groups follow).
   registerBrowserRoutes(app, { getConfig, patchConfig, log });
@@ -457,47 +440,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── proxy control (mihomo / Clash) ───────────────────────────────
-  app.get('/api/proxy/control', async (_req, res) => {
-    const cfg = getConfig();
-    const d = await proxyctl.detectControl(cfg);
-    res.json(d);
-  });
+  // Moved to server/src/routes/proxy-rest.js (see its header for the shape the remaining groups follow).
+  registerProxyRestRoutes(app, { getConfig, patchConfig, log, persist, busyGuard, preserveSecretsIn });
 
-  app.get('/api/proxy/nodes', async (req, res) => {
-    const cfg = getConfig();
-    const control = String(req.query.control ?? '').trim() || undefined;
-    try {
-      const r = await proxyctl.listGroups(cfg, control);
-      res.json({ ok: true, ...r });
-    } catch (e) {
-      res.json({ ok: false, error: e.message, hint: '需要在内核配置里打开 external-controller' });
-    }
-  });
 
-  // the latency from every node to **one specific site** — "pick the fastest node per site" leans on exactly this
-  app.post('/api/proxy/nodes/test', busyGuard('proxy node test'), async (req, res) => {
-    const cfg = getConfig();
-    const { group, nodes, url, timeout } = req.body ?? {};
-    if (!group || !Array.isArray(nodes) || !nodes.length) return res.status(400).json({ error: 'group and nodes are required' });
-    try {
-      const r = await proxyctl.groupDelaysFor(cfg, req.body?.control, group, nodes, url, Number(timeout) || 5000);
-      res.json({ ok: true, ...r });
-    } catch (e) {
-      res.json({ ok: false, error: e.message });
-    }
-  });
-
-  app.post('/api/proxy/node', async (req, res) => {
-    const cfg = getConfig();
-    const { group, node } = req.body ?? {};
-    if (!group || !node) return res.status(400).json({ error: 'group and node are required' });
-    try {
-      res.json(await proxyctl.selectNode(cfg, req.body?.control, group, node));
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
 
   // ── config import & export ───────────────────────────────────────
   // This route keeps its own blank-the-fields redaction on purpose, and it is the precedent the read-side
@@ -724,107 +670,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  app.get('/api/archive/series', (req, res) => {
-    const cfg = getConfig();
-    // The chart's time range. A range shorter than a week is answered from the items rather than from the
-    // daily table, which cannot see below a day; the bucket width is stated per range so that every range
-    // draws a readable number of points (thirty minutes in one-minute buckets, three days in six-hour
-    // ones). `days` is still accepted: it is the same request for the day-based ranges, and it is what
-    // this endpoint took before the selector offered the short ones.
-    const RANGES = {
-      '30m': { minutes: 30, bucket: 1 },
-      '1h': { minutes: 60, bucket: 5 },
-      '4h': { minutes: 240, bucket: 15 },
-      '12h': { minutes: 720, bucket: 60 },
-      '1d': { minutes: 1440, bucket: 120 },
-      '3d': { minutes: 4320, bucket: 360 },
-      '7d': { days: 7 },
-      '30d': { days: 30 },
-      '90d': { days: 90 },
-      '180d': { days: 180 },
-      '360d': { days: 360 },
-    };
-    const range = String(req.query.range ?? '').trim();
-    const spec = RANGES[range] ?? null;
-    const days = Math.max(1, Math.min(365, Number(spec?.days ?? req.query.days ?? 30)));
-    let db = null;
-    try {
-      db = openArchive(cfg);
-      if (spec && !spec.days) {
-        const r = recentSeries(db, {
-          minutes: spec.minutes,
-          bucketMinutes: spec.bucket,
-          keywordLimit: Number(req.query.keywords ?? 12),
-        });
-        res.json({
-          ok: true,
-          range,
-          bucket: r.bucket,
-          daily: { from: r.from, to: r.to, days: r.days },
-          bySource: { from: r.from, to: r.to, days: [], totals: r.totals },
-          people: { from: r.from, to: r.to, totals: r.peopleTotals, byDay: {} },
-          keywords: { from: r.from, to: r.to, keywords: r.keywords },
-          health: { from: r.from, to: r.to, sources: r.health, granularity: 'day' },
-        });
-        return;
-      }
-      res.json({
-        ok: true,
-        range: range || `${days}d`,
-        bucket: { minutes: 1440 },
-        daily: series(db, { days, cfg }),
-        bySource: series(db, { days, groupBy: 'source', cfg }),
-        people: peopleSeries(db, { days, cfg }),
-        keywords: keywordSeries(db, { days, limit: Number(req.query.keywords ?? 12), cfg }),
-        health: healthSeries(db, { days, cfg }),
-      });
-    } catch (e) {
-      res.json({ ok: false, error: e.message });
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  });
+  // Moved to server/src/routes/archive-rest.js (see its header for the shape the remaining groups follow).
+  registerArchiveRestRoutes(app, { getConfig, patchConfig, log });
 
-  app.get('/api/archive/items', (req, res) => {
-    const cfg = getConfig();
-    let db = null;
-    try {
-      db = openArchive(cfg);
-      const items = queryItems(db, {
-        day: req.query.day ?? null,
-        sourceId: req.query.source ?? null,
-        personId: req.query.person ?? null,
-        q: req.query.q ?? null,
-        limit: Number(req.query.limit ?? 100),
-        offset: Number(req.query.offset ?? 0),
-      });
-      res.json({ ok: true, count: items.length, items });
-    } catch (e) {
-      res.json({ ok: false, error: e.message });
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  });
 
-  // backfill the latest intel into the archive (to add history after an upgrade, or to rebuild when the archive was deleted)
-  app.post('/api/archive/ingest', (req, res) => {
-    const cfg = getConfig();
-    const limit = Number(req.body?.limit ?? 500);
-    const data = latestIntel(cfg, limit);
-    // The fallback is the **local** day, for the same reason the run's own date is (see runner.js): this
-    // day becomes the bucket for every item in the batch that carries no timestamp of its own.
-    const fallbackDay = todayIn(cfg) ?? String(data.date ?? '').slice(0, 10);
-    const r = archiveRun(cfg, { date: data.date ?? fallbackDay, items: data.items ?? [] });
-    res.json({ ok: r.ok, ...r });
-  });
 
   // ── multi-source event merging / similarity dedupe / source weight ─
   // The algorithm and its self-tests live in cluster.js + tools/cluster-test.mjs (the similarity

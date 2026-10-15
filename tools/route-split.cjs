@@ -16,17 +16,29 @@ const ROOT = path.resolve(__dirname, '..');
 // Everything else is unchanged from the scratch version this was lifted from.
 const argv = process.argv.slice(2);
 const fileFlag = argv.indexOf('--file');
+const asFlag = argv.indexOf('--as');
 const SERVER_FILE = fileFlag >= 0 ? path.resolve(argv[fileFlag + 1]) : path.join(ROOT, 'server', 'src', 'server.js');
 const ROUTES_DIR = path.join(path.dirname(SERVER_FILE), 'routes');
-// `fileFlag + 1` is 0 when the flag is absent, which would filter the group name itself out of the arguments -
-// measured, and it made every invocation print the usage line instead of doing the work.
-const rest = fileFlag >= 0 ? argv.filter((_, i) => i !== fileFlag && i !== fileFlag + 1) : argv.slice();
+// `--as <name>` names the module something other than the group. A group can span several clusters, and the first
+// cluster already owns `<group>.js` - the overwrite refusal below would stop the second one forever. With a second
+// name it becomes an ordinary extraction that is registered separately, which is what the remaining `/sources`,
+// `/archive` and `/proxy` routes need.
+const AS_NAME = asFlag >= 0 ? String(argv[asFlag + 1] || '').trim() : '';
+// Filter by position only when the flag is actually present. `flag + 1` is 0 when the flag is absent, and the
+// obvious one-liner therefore deletes the group name itself - a bug introduced twice now, once for `--file` and once
+// for `--as`, which is why the condition is written out instead of squeezed into a slice.
+const rest = argv.filter((_, i) => {
+  if (fileFlag >= 0 && (i === fileFlag || i === fileFlag + 1)) return false;
+  if (asFlag >= 0 && (i === asFlag || i === asFlag + 1)) return false;
+  return true;
+});
 
 const GROUP = rest[0];
 if (!GROUP) throw new Error('usage: node tools/route-split.cjs <group> [extraCtx,comma,separated] [--file <server.js>]');
 
 // Extras are deliberate, named additions to the context a group receives ("give it those through ctx
 // deliberately, or leave it in the factory") - they are never widened silently.
+const MODULE_NAME = AS_NAME || GROUP;
 const EXTRA_CTX = (rest[1] || '').split(',').map((s) => s.trim()).filter(Boolean);
 const ALLOWED_CTX = ['getConfig', 'patchConfig', 'log', ...EXTRA_CTX];
 const FACTORY_PROVIDED = ['getConfig', 'setConfig', 'onConfigChanged', 'log', 'patchConfig', 'persist', 'busyGuard'];
@@ -256,13 +268,13 @@ const importLines = [...needed.entries()]
 // the factory. Split on whatever is not a letter or digit and camel-case the pieces.
 const fnName =
   'register' +
-  GROUP.split(/[^A-Za-z0-9]+/)
+  MODULE_NAME.split(/[^A-Za-z0-9]+/)
     .filter(Boolean)
     .map((part) => part[0].toUpperCase() + part.slice(1))
     .join('') +
   'Routes';
 const header = [
-  `// routes/${GROUP}.js — the ${GROUP} endpoints, moved out of the factory.`,
+  `// routes/${MODULE_NAME}.js — the ${GROUP} endpoints, moved out of the factory.`,
   '//',
   '// Same shape as routes/calendar.js: a registrar that receives the live configuration, the one place that',
   '// persists a patch of it and the logger, and imports everything else from the module that owns it. The handlers',
@@ -277,7 +289,7 @@ const header = [
   '',
 ].join('\n');
 const out = header + body.map((l) => (l.trim() === '' ? '' : '  ' + l)).join('\n') + '\n}\n';
-const outPath = path.join(ROUTES_DIR, `${GROUP}.js`);
+const outPath = path.join(ROUTES_DIR, `${MODULE_NAME}.js`);
 // Never overwrite a module that is already there. A group can be split across several clusters in the factory
 // (that is what "first contiguous cluster" means), so a second run for the same group would replace the module
 // holding the first cluster's routes - and the registration call it adds points at a module that no longer
@@ -297,13 +309,13 @@ console.log(`wrote ${path.relative(ROOT, outPath).split(path.sep).join('/')} —
 console.log(JSON.stringify({ group: GROUP, module: outPath, handlers: body.length, ctx: ALLOWED_CTX }));
 
 const replacement = [
-  `  // Moved to server/src/routes/${GROUP}.js (see its header for the shape the remaining groups follow).`,
+  `  // Moved to server/src/routes/${MODULE_NAME}.js (see its header for the shape the remaining groups follow).`,
   `  ${fnName}(app, { ${ALLOWED_CTX.join(', ')} });`,
   '',
   '',
 ];
 const importAnchor = `import { docLang, pickDoc, readDocs } from './docs.js';`;
-const newImport = `import { ${fnName} } from './routes/${GROUP}.js';`;
+const newImport = `import { ${fnName} } from './routes/${MODULE_NAME}.js';`;
 let t = lines.slice(0, start).concat(replacement, lines.slice(end)).join('\n');
 if (!t.includes(importAnchor)) throw new Error('the docs import anchor is missing; add the import by hand');
 if (!t.includes(newImport)) t = t.replace(importAnchor, `${importAnchor}\n${newImport}`);

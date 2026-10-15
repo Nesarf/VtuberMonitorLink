@@ -299,6 +299,8 @@ reviewed. `npm run commit-msg` checks the whole history (`tools/commit-msg-check
 shallow clone can only judge its tip. Quoting another language as evidence — a Russian plural form,
 an Arabic date phrase — stays allowed: that is data about a translation, not Chinese prose.
 
+The server factory and the route groups it wires are described in [docs/SERVER-ROUTES.md](docs/SERVER-ROUTES.md): what moved out of server/src/server.js, what stays in it on purpose, and what to check before moving the next group.
+
 ## Footprint
 
 `node tools/size-report.mjs` prints where this checkout's bytes are and states the verdict against its size band:

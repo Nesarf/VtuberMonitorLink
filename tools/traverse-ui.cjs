@@ -1673,11 +1673,15 @@ async function main() {
     const aboutShown = await aboutBody();
     check('the panel renders the document (a heading, not escaped markup)', aboutShown.includes("Vtuber's Monitor Link") && !aboutShown.includes('## '), aboutShown.slice(0, 60).replace(/\n/g, ' '));
     check('the document has real structure inside the panel (headings/tables)', (await page.locator('.readme-doc h2').count()) > 3, (await page.locator('.readme-doc h2').count()) + ' headings');
-    const zhSeg = page.locator('.seg button', { hasText: '中文' });
-    const enSeg = page.locator('.seg button', { hasText: 'English' });
+    // Both selectors are scoped to the *language* group: the panel now also carries a document selector
+    // (`[data-testid="about-docs"]`), and a bare `.seg button.active` matched two elements the moment that group
+    // appeared - a strict-mode violation, which is the walk doing its job. The fix belongs here rather than in the
+    // component: the query was ambiguous, not the interface.
+    const zhSeg = page.locator('[data-testid="about-langs"] button', { hasText: '中文' });
+    const enSeg = page.locator('[data-testid="about-langs"] button', { hasText: 'English' });
     check('both language choices are offered', (await zhSeg.count()) === 1 && (await enSeg.count()) === 1);
     // switch to the other language and require the text to actually change
-    const wasZh = (await page.locator('.seg button.active').innerText()).includes('中文');
+    const wasZh = (await page.locator('[data-testid="about-langs"] button.active').innerText()).includes('中文');
     await (wasZh ? enSeg : zhSeg).click();
     await page.waitForFunction(
       (prev) => {

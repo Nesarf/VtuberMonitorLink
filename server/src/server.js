@@ -81,6 +81,9 @@ import { groupView } from './groups.js';
 import { budgetStatus, costSummary, loadUsage, summarizeUsage } from './cost.js';
 import { loadObservationState } from './observe.js';
 import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } from './vdb.js';
+// The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
+// key in it rather than a path. See server/src/docs.js for why that lives in a module.
+import { docLang, pickDoc, readDocs } from './docs.js';
 import {
   accountsForTarget,
   applyShareSettings,
@@ -1884,41 +1887,39 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
   // ── README (shown inside the app) ────────────────────────────────
   // The UI has an "About" panel that renders these files and switches language instantly, so a
-  // reader never has to leave the app (and never has to find the file on disk). Two fixed file
-  // names, no user-controlled path: `lang=zh` → README.zh-CN.md, anything else → README.md.
-  // In a packaged build they sit next to app/ (build-portable copies them); from a source checkout
-  // they are at the repo root. Both candidates are tried, nothing else.
+  // reader never has to leave the app (and never has to find the file on disk).
+  //
+  // Which documents it may show, and what each one is called, is `server/src/docs.js`: a fixed allowlist, so the
+  // caller picks a *key* in it and never a path. `privacy` and `security` joined the Readme there, which is what
+  // makes the privacy posture readable inside the app rather than only in the package folder. The document's
+  // title is its own first heading, so the panel needs no new i18n key and the label cannot drift from the file.
+  // In a packaged build the files sit next to app/ (build-portable copies them); from a source checkout they are
+  // at the repo root. Both candidates are tried, nothing else.
   app.get('/api/readme', (req, res) => {
-    const lang = String(req.query.lang ?? '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
-    const files = { en: 'README.md', zh: 'README.zh-CN.md' };
+    const lang = docLang(req.query.lang);
     const roots = [APP_ROOT, path.join(APP_ROOT, '..'), process.cwd()];
-    const available = [];
-    let found = null;
-    for (const [code, name] of Object.entries(files)) {
-      for (const root of roots) {
-        const p = path.join(root, name);
-        if (!fs.existsSync(p)) continue;
-        if (!available.includes(code)) available.push(code);
-        if (code === lang && !found) found = { code, name, p };
-        break;
-      }
+    const result = readDocs(req.query.doc, lang, roots);
+    if (!result.found) {
+      return res.status(404).json({
+        ok: false,
+        error: `no ${result.wanted} document next to the app`,
+        documents: result.available,
+      });
     }
-    if (!found) {
-      return res.status(404).json({ ok: false, error: 'README not found next to the app', available });
-    }
-    let markdown = '';
-    try {
-      markdown = fs.readFileSync(found.p, 'utf8');
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: `could not read ${found.name}: ${e.message}`, available });
-    }
+    const requested = pickDoc(req.query.doc);
     res.json({
       ok: true,
-      lang: found.code,
-      file: found.name,
-      available,
-      bytes: Buffer.byteLength(markdown, 'utf8'),
-      markdown,
+      doc: result.wanted,
+      lang: result.lang,
+      file: result.found.file,
+      title: result.found.title,
+      // The languages this *document* exists in: the Readmes in two, everything else in one. The panel's language
+      // switch is built from this, which is why a single-language document offers no switch rather than offering
+      // one that would silently show the other file.
+      available: Object.keys(requested.files),
+      documents: result.available,
+      bytes: Buffer.byteLength(result.found.markdown, 'utf8'),
+      markdown: result.found.markdown,
     });
   });
 

@@ -6,16 +6,149 @@
 //
 // Note: this path only talks over the local loopback (the control endpoint defaults to 127.0.0.1), and netFetch
 // always connects directly for loopback, so it can never be routed through the proxy we configured ourselves.
+//
+// ── why discovery was rewritten (measured on a real machine, 2026-10-15) ─────────────────────────────────────
+//
+// The first version probed six common ports and, finding nothing, said only that no local proxy control interface
+// had been found. On this machine that message was both true and useless: the running core is a client's bundled
+// mihomo, started with `-d "<the client's extra directory>"`, whose `config.yaml` has **no `external-controller`
+// at all** - so no port would ever answer, and nothing told the user that the core had been found, where it was,
+// or what to change. A client that manages its own core often ships with the controller off.
+//
+// So discovery now reads the running core's **own command line** (`-d <dir>`, `-f/--config <file>`), reads that
+// file, and reports what it found there - including the case that matters most here: a core was found and its
+// configuration does not expose a controller. The port scan stays as a fallback, and the diagnosis always says
+// which of these happened rather than "not found", with a machine-readable `code` the caller can branch on.
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import fs from 'node:fs';
+import path from 'node:path';
+import YAML from 'yaml';
 import { netFetch } from './net.js';
+
+const run = promisify(execFile);
 
 const COMMON_PORTS = [9090, 9790, 9097, 6170, 63333, 9091];
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
 
+/**
+ * Where a running core keeps its configuration, from its own command line.
+ *
+ * `-d <dir>` is mihomo's working directory and `-f`/`--config` its file; both quoting styles appear in the wild
+ * (`-d "C:\Program Files\..."`). With neither, mihomo's convention is that the working directory is the one the
+ * executable sits in - which is exactly how the client on this machine starts it, so the fallback is not a
+ * guess but the documented behaviour of the flag being absent.
+ *
+ * Exported because it is pure, and because the shape it parses is the part that goes wrong silently.
+ */
+export function coreConfigFromCommandLine(commandLine, executablePath = '') {
+  const cmd = String(commandLine ?? '');
+  const argOf = (flags) => {
+    for (const flag of flags) {
+      const m = new RegExp(`(?:^|\\s)${flag}\\s+(?:"([^"]+)"|'([^']+)'|([^\\s]+))`).exec(cmd);
+      const value = m?.[1] ?? m?.[2] ?? m?.[3];
+      if (value) return value;
+    }
+    return '';
+  };
+  const file = argOf(['--config', '-f']);
+  const dir = argOf(['-d', '--directory', '--dir']);
+  if (file) return { file, dir: dir || path.dirname(file) };
+  if (dir) return { file: path.join(dir, 'config.yaml'), dir };
+  if (executablePath) return { file: path.join(path.dirname(executablePath), 'config.yaml'), dir: path.dirname(executablePath) };
+  return { file: '', dir: '' };
+}
+
+/**
+ * The control endpoint a core's configuration declares, or the reason it declares none.
+ *
+ * `external-controller` is `host:port` (mihomo also accepts a bare port in some versions); `0.0.0.0`/`::` is
+ * mapped to loopback because that is the only address this app talks to. The secret is **reported as a boolean**:
+ * it is a credential, it never leaves the process, and the caller only needs to know whether to send it.
+ */
+export function controllerFromConfig(text) {
+  let doc = null;
+  try {
+    doc = YAML.parse(String(text ?? ''));
+  } catch (e) {
+    return { ok: false, reason: 'unparsable', detail: e.message.split('\n')[0] };
+  }
+  if (!doc || typeof doc !== 'object') return { ok: false, reason: 'empty' };
+  const raw = doc['external-controller'];
+  const hasSecret = typeof doc.secret === 'string' && doc.secret.trim() !== '';
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { ok: false, reason: 'no-external-controller', hasSecret };
+  }
+  const value = String(raw).trim();
+  const withPort = /^\d+$/.test(value) ? `127.0.0.1:${value}` : value;
+  const host = withPort.replace(/^\[([^\]]+)\]/, '$1').split(':')[0];
+  const port = withPort.split(':').pop();
+  const loopback = ['0.0.0.0', '::', '[::]', 'localhost', ''].includes(host) ? '127.0.0.1' : host;
+  return { ok: true, url: `http://${loopback}:${port}`, host: loopback, port, hasSecret, declared: value };
+}
+
+/**
+ * What to tell the user, given what discovery actually found, as `{ code, message }`.
+ *
+ * `code` is machine-readable and ASCII on purpose: the panel can branch on it later, and a test can assert the
+ * *branch* rather than a substring of a sentence - which is how the first version of these assertions ended up
+ * looking for Chinese text inside code (and being refused by the repository's English-only rule for the
+ * engineering layer, correctly).
+ */
+export function controlDiagnosis({ cores = [], config = null, probed = [] } = {}) {
+  const ports = probed.length ? probed.join(', ') : COMMON_PORTS.join(', ');
+  if (!cores.length) {
+    return {
+      code: 'no-core',
+      message:
+        `未发现正在运行的本机代理核心（mihomo / Clash），已探测端口 ${ports}。` +
+        '如果内核在别处运行，请在“设置 → 代理”里直接填控制接口地址（external-controller）与密钥。',
+    };
+  }
+  const core = cores[0];
+  if (config?.ok) {
+    return {
+      code: 'controller-silent',
+      message: `发现代理核心 ${core.name}（配置 ${config.file}），它声明了控制接口 ${config.declared}，但该接口没有应答（已探测端口 ${ports}）。`,
+    };
+  }
+  if (config?.reason === 'no-external-controller') {
+    return {
+      code: 'no-external-controller',
+      message:
+        `发现正在运行的代理核心 ${core.name}（配置 ${config.file}），但该配置里**没有 external-controller**，` +
+        '所以没有任何端口可以应答 - 这是客户端自带内核的常见配置。两种修法：在该客户端的配置/设置里启用 external-controller，' +
+        '或在“设置 → 代理”里手动填写控制接口地址与密钥。',
+    };
+  }
+  if (config?.reason === 'unparsable') {
+    return {
+      code: 'config-unparsable',
+      message: `发现代理核心 ${core.name}，配置文件 ${config.file} 无法解析（${config.detail}），无法从中读出控制接口。`,
+    };
+  }
+  if (config?.reason === 'empty') {
+    return {
+      code: 'config-empty',
+      message:
+        `发现正在运行的代理核心 ${core.name}，但它的配置文件 ${config.file} 读出来是空的 - ` +
+        '有些客户端把自己的配置存在别处（或加密保存），这个文件里没有 external-controller。' +
+        '请在“设置 → 代理”里手动填写控制接口地址与密钥。',
+    };
+  }
+  return {
+    code: 'config-unreadable',
+    message: `发现代理核心 ${core.name}，但读不到它的配置（${core.file || '未知路径'}）。请在“设置 → 代理”里手动填写控制接口地址与密钥。`,
+  };
+}
+
+/** The control endpoint the configuration names explicitly, trailing slashes removed. */
 function controlUrl(cfg) {
   const explicit = String(cfg?.proxy?.controlUrl ?? '').trim();
   return explicit.replace(/\/+$/, '');
 }
 
+/** The headers one control request carries; the secret is never logged and never leaves the process. */
 function headers(cfg) {
   const secret = String(cfg?.proxy?.controlSecret ?? '').trim();
   return secret ? { authorization: `Bearer ${secret}`, accept: 'application/json' } : { accept: 'application/json' };
@@ -26,6 +159,46 @@ async function jget(url, cfg, timeout = 8000) {
   const text = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status}${text ? ` — ${text.slice(0, 120)}` : ''}`);
   return JSON.parse(text);
+}
+
+/**
+ * The proxy cores running on this machine, with the configuration file each one was started against.
+ *
+ * Windows-only and deliberately tolerant: no PowerShell (or a non-Windows host) means "no cores found", which the
+ * diagnosis then reports as such. This is a user-triggered action (the panel's probe button), not a hot path, and
+ * the command is bounded by a timeout so a wedged host cannot hang the request.
+ */
+async function runningCores() {
+  if (process.platform !== 'win32') return [];
+  let out = '';
+  try {
+    const { stdout } = await run(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name LIKE '%mihomo%' OR Name LIKE '%clash%'\" | Select-Object Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress",
+      ],
+      { timeout: 6000, windowsHide: true, maxBuffer: 1024 * 1024 }
+    );
+    out = stdout;
+  } catch {
+    return [];
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(out || '[]');
+  } catch {
+    return [];
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  return list
+    .filter((p) => p && p.Name)
+    .map((p) => {
+      const where = coreConfigFromCommandLine(p.CommandLine, p.ExecutablePath ?? '');
+      return { name: p.Name, file: where.file, dir: where.dir };
+    });
 }
 
 /** Find a working control endpoint automatically */
@@ -49,8 +222,45 @@ export async function detectControl(cfg) {
       /* not a control port, keep going */
     }
   }
-  if (!found.length) return { ok: false, error: '未发现本机代理控制接口（mihomo / Clash 的 external-controller）', probed: COMMON_PORTS.length };
-  return { ok: true, ...found[0], alternatives: found.slice(1), probed: COMMON_PORTS.length };
+  if (found.length) return { ok: true, ...found[0], alternatives: found.slice(1), probed: COMMON_PORTS.length };
+
+  // Nothing answered on the usual ports. Before saying "not found", look at the cores that are actually running:
+  // their own configuration is the authoritative answer to "where would the controller be", and the case that
+  // produced this code is a core that runs perfectly well with **no** external-controller declared at all.
+  const cores = await runningCores();
+  const core = cores[0];
+  let config = null;
+  if (core?.file) {
+    let text = '';
+    try {
+      text = fs.readFileSync(core.file, 'utf8');
+    } catch (e) {
+      config = { ok: false, reason: 'unreadable', detail: e.message.split('\n')[0], file: core.file };
+    }
+    if (config === null) {
+      config = { ...controllerFromConfig(text), file: core.file };
+      // A declaration we can read is worth probing before giving up: the same core on a non-default port is the
+      // other common shape, and one request settles it.
+      if (config.ok) {
+        try {
+          const cfgWith = { ...(cfg ?? {}), proxy: { ...(cfg?.proxy ?? {}), controlUrl: config.url, controlSecret: config.hasSecret ? cfg?.proxy?.controlSecret : '' } };
+          const v = await jget(`${config.url}/version`, cfgWith, 2500);
+          return { ok: true, url: config.url, version: v.version ?? '?', meta: !!v.meta, probed: COMMON_PORTS.length, discoveredFrom: core.file };
+        } catch (e) {
+          config = { ...config, probeError: e.message };
+        }
+      }
+    }
+  }
+  const diagnosis = controlDiagnosis({ cores, config, probed: COMMON_PORTS });
+  return {
+    ok: false,
+    error: diagnosis.message,
+    code: diagnosis.code,
+    cores,
+    config,
+    probed: COMMON_PORTS.length,
+  };
 }
 
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);

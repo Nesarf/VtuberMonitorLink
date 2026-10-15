@@ -39,8 +39,16 @@ t('a known name picks its document, and any other name picks the Readme', () => 
 });
 
 t('every document resolves to a file from the allowlist and never to the name it was asked for', () => {
-  const allowed = new Set(DOCS.flatMap((d) => Object.values(d.files)));
-  for (const name of [...DOCS.map((d) => d.name), 'nonsense', '../README.md']) {
+  // The generated document has no file, so the file rule is about the file-backed ones. Skipping it explicitly
+  // (rather than by luck) keeps the rule honest: a dynamic entry that grew a `files` map would be a mistake,
+  // because `readDoc` never reads it for a dynamic document.
+  const fileDocs = DOCS.filter((d) => !d.dynamic);
+  assert.ok(fileDocs.length >= 3, 'the file-backed documents have gone missing');
+  for (const d of DOCS.filter((x) => x.dynamic)) {
+    assert.deepEqual(d.files, {}, `${d.name} is generated but declares files, which nothing would read`);
+  }
+  const allowed = new Set(fileDocs.flatMap((d) => Object.values(d.files)));
+  for (const name of [...fileDocs.map((d) => d.name), 'nonsense', '../README.md']) {
     for (const lang of ['en', 'zh', 'ja']) {
       const file = docFile(pickDoc(name), lang);
       assert.ok(allowed.has(file), `${JSON.stringify(name)} in ${lang} resolved to ${file}, which is not in the allowlist`);
@@ -80,8 +88,8 @@ t('the title is the document\'s own first heading, and a document without one fa
   assert.notEqual(docTitle('plain text only', 'FALLBACK.md'), '');
 });
 
-t('the three documents are readable from this checkout, with titles that come from the files', () => {
-  const r = readDocs('privacy', 'en', [ROOT]);
+t('the documents are readable from this checkout, with titles that come from the files', () => {
+  const r = readDocs('privacy', 'en', [ROOT], { machine: () => '# This machine\n\n(stub facts)\n' });
   assert.equal(r.wanted, 'privacy');
   assert.equal(r.available.length, DOCS.length, `expected ${DOCS.length} documents, got ${r.available.map((d) => d.name).join(', ')}`);
   for (const d of r.available) {
@@ -91,9 +99,32 @@ t('the three documents are readable from this checkout, with titles that come fr
   assert.ok(r.found && r.found.markdown.length > 1000, 'the privacy document has no text');
   assert.equal(r.found.file, 'docs/PRIVACY.md');
   // control: a different document really is a different file, so `found` is not simply the first thing read.
-  const sec = readDocs('security', 'en', [ROOT]);
+  const sec = readDocs('security', 'en', [ROOT], { machine: () => '# This machine\n\n(stub facts)\n' });
   assert.notEqual(sec.found.file, r.found.file, 'the control: the two documents are different files');
   assert.notEqual(sec.found.title, r.found.title, 'the control: and their titles differ');
+});
+
+t('a generated document is listed when it can be produced, and is missing when it cannot', () => {
+  const withGen = readDocs('machine', 'en', [ROOT], { machine: () => '# This machine\n\nfacts here\n' });
+  const entry = withGen.available.find((d) => d.name === 'machine');
+  assert.ok(entry, 'the generated document must be listed when its generator is provided');
+  assert.equal(entry.title, 'This machine', 'its title comes from the generated text, like every other document');
+  assert.equal(entry.file, 'machine (generated)', 'and it is marked as generated rather than as a file path');
+  assert.equal(withGen.found.name, 'machine', 'asking for it returns it');
+  // controls: no generator → not listed (rather than listed and empty); a generator that throws → not listed; a
+  // generator that produces nothing → not listed. A page that shows an empty document is worse than one that
+  // says it has nothing, because the reader cannot tell the difference from a document that is meant to be short.
+  assert.ok(!readDocs('machine', 'en', [ROOT], {}).available.some((d) => d.name === 'machine'), 'no generator, no document');
+  assert.ok(
+    !readDocs('machine', 'en', [ROOT], {
+      machine: () => {
+        throw new Error('generation failed');
+      },
+    }).available.some((d) => d.name === 'machine'),
+    'a generator that throws must not produce an empty document'
+  );
+  assert.ok(!readDocs('machine', 'en', [ROOT], { machine: () => '   ' }).available.some((d) => d.name === 'machine'), 'empty output is not a document');
+  assert.equal(readDocs('machine', 'en', [ROOT], {}).found, null, 'and asking for it answers null');
 });
 
 t('a root with no documents answers "nothing found" rather than throwing', () => {

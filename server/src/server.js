@@ -84,6 +84,9 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+// The live half of the privacy page: what this install contacts and where its data lives. See the module header
+// for the two rules it exists to keep (the field list is data; a webhook URL is a credential).
+import { DATA_DIRS, measureDir, privacyFacts, privacyMarkdown } from './privacy.js';
 import {
   accountsForTarget,
   applyShareSettings,
@@ -1898,7 +1901,17 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
   app.get('/api/readme', (req, res) => {
     const lang = docLang(req.query.lang);
     const roots = [APP_ROOT, path.join(APP_ROOT, '..'), process.cwd()];
-    const result = readDocs(req.query.doc, lang, roots);
+    // The one generated document: what *this* install is configured to contact and where its data lives. Measured
+    // per request (directory sizes are read-only and bounded) and never cached, because the answer changes the
+    // moment the user edits a setting - a stale privacy page would be worse than none.
+    const cfg = getConfig();
+    const sizes = {};
+    for (const d of DATA_DIRS) {
+      const m = measureDir(d.configured ? resolveDir(cfg, d.key) : '', { fs });
+      if (m) sizes[d.key] = m;
+    }
+    const generated = { machine: () => privacyMarkdown(privacyFacts(cfg), { sizes }) };
+    const result = readDocs(req.query.doc, lang, roots, generated);
     if (!result.found) {
       return res.status(404).json({
         ok: false,

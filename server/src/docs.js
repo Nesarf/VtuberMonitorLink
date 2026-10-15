@@ -23,6 +23,11 @@ export const DOCS = [
   { name: 'readme', label: 'Readme', files: { en: 'README.md', zh: 'README.zh-CN.md' } },
   { name: 'privacy', label: 'Privacy', files: { en: 'docs/PRIVACY.md' } },
   { name: 'security', label: 'Security', files: { en: 'SECURITY.md' } },
+  // Not a file: generated from the running configuration (server/src/privacy.js). It is in this list because the
+  // allowlist is the panel's table of contents, and because "which endpoints is *this* install talking to" is the
+  // question the policy documents cannot answer. Passing it through here rather than adding a second panel means
+  // the reader gets it in the same place, with the same renderer, and no new UI code or i18n key.
+  { name: 'machine', label: 'This machine', files: {}, dynamic: true },
 ];
 
 /** The document names a caller may ask for, in the order the panel lists them. */
@@ -67,13 +72,28 @@ export function docTitle(markdown, fallback = '') {
 }
 
 /**
- * Read one document out of the first directory that has it.
+ * Read one document out of the first directory that has it, or generate it when the document is dynamic.
  *
  * The roots are tried in order and the file name always comes from the allowlist above, so nothing here can read
  * a file the caller chose. A document that is missing from every root answers `null` rather than throwing: the
  * panel states which documents it could not find instead of failing the whole route over one file.
+ *
+ * `dynamic` is a map of name → () => markdown for the entries marked `dynamic` in the list. A dynamic document
+ * whose generator is missing or throws is reported as missing, not as an empty page.
  */
-export function readDoc(doc, lang, roots) {
+export function readDoc(doc, lang, roots, dynamic = {}) {
+  if (doc.dynamic) {
+    const make = dynamic[doc.name];
+    if (typeof make !== 'function') return null;
+    let markdown = '';
+    try {
+      markdown = String(make() ?? '');
+    } catch {
+      return null;
+    }
+    if (!markdown.trim()) return null;
+    return { name: doc.name, file: `${doc.name} (generated)`, title: docTitle(markdown, doc.label), markdown };
+  }
   const file = docFile(doc, lang);
   for (const root of roots) {
     const p = path.join(root, file);
@@ -85,12 +105,12 @@ export function readDoc(doc, lang, roots) {
 }
 
 /** Everything the panel needs: the documents that exist, each with its title, and the requested one's text. */
-export function readDocs(name, lang, roots) {
+export function readDocs(name, lang, roots, dynamic = {}) {
   const wanted = pickDoc(name);
   const available = [];
   let found = null;
   for (const doc of DOCS) {
-    const one = readDoc(doc, lang, roots);
+    const one = readDoc(doc, lang, roots, dynamic);
     if (!one) continue;
     available.push({ name: doc.name, label: doc.label, title: one.title, file: one.file });
     if (doc.name === wanted.name && !found) found = one;

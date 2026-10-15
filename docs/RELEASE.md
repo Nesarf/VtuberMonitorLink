@@ -1,5 +1,75 @@
 # Release notes
 
+## v1.0.7
+
+**A packaging round: the release no longer ships a second copy of Node, and the question of signing it was
+answered rather than assumed.** The user-visible change is the shape of the download - a launcher plus a bundled
+runtime instead of one 90 MB binary - and the rest of this entry is about what that did to the signature.
+
+The change itself was measured before it was made: `--no-exe` takes **104.9 s against 303.6 s**, because the SEA
+stage was about 220 s of the old build and what it produced was a Node runtime whose only job was to load
+`launcher/launch.cjs`, a file the package can simply carry. It also removes a whole class of failure - a locked or
+half-written exe, BUGS #13 and #27.
+
+### The signature question, and why the answer is "it is already signed"
+
+The old layout's launcher **could not be signed at all**, and this was worth finding out rather than working
+around. The SEA stage copies `node.exe` and appends the application blob with `postject`; `postject` appends
+without updating the certificate-table directory entry, and prints `warning: The signature seems corrupted!` while
+doing it. The released v1.0.6 launcher carried an entry naming offset 93564416 / length 15688, and the eight bytes
+at that offset declared a length of zero. Windows therefore reported it `NotSigned`.
+
+A file in that state cannot be signed: the signature attaches and then **no timestamp authority can be reached for
+it**. Measured on the 93 MB launcher - three attempts, two backends, two cooldowns, every one ending "no timestamp
+was obtained" - while a small file signed and timestamped fine in the same minute, which rules out rate limiting
+and connectivity and leaves the file. Clearing those eight bytes made the same launcher sign and timestamp
+normally, and the result verifies: chain to DigiCert, timestamp confirmed.
+
+**In the shipped layout there is nothing left to sign, and nothing that needs it.** The package now carries
+`runtime/node.exe`, which is the stock Node binary and already carries a valid Authenticode signature from the
+**OpenJS Foundation** - verified, not assumed: the file's sha256 is byte-identical to the Node on the build
+machine. The launcher itself is `launch.cmd`, `launch.cjs` and `launch.sh`, which are text and are not PE files.
+Re-signing a stock, validly signed runtime would replace a signature from the project that makes it with one from
+this project, which is worse, not better.
+
+### `--sign`, for the case where that changes
+
+`tools/sign-exe.cjs` is in the tree because a future layout may produce a single binary again, and because a
+release should not be able to ship a binary that only looks signed. It is off unless asked for:
+
+```
+node tools/build-portable.cjs --no-exe --sign <certificate thumbprint> \
+  --sign-tool <onlysign dir> --sign-ledger <ledger path>
+```
+
+Three deliberate refusals in it. The certificate is named by **thumbprint**, because a subject string is something
+any certificate can claim and a thumbprint is not. The **ledger path is required**, because without it the record
+of what was signed lands in whichever directory the build ran from - measured, a build started from `E:\DSH` left
+one at `E:\DSH\.onlysign\signings.ndjson`, which is not a record of anything. And **failure is fatal**: a release
+whose notes claim a signature while shipping an unsigned binary is worse than a build that stops, and omitting
+`--sign` is how you build without one.
+
+`node tools/sign-exe.cjs --check <exe>` reports what a binary actually carries without changing it, and exists
+because "a certificate table is present" and "the signature verifies" are different claims. It reads the verdict
+through `tools/verdict.py`, which writes a script file and runs PowerShell with `-File` - and hands the child a
+clean `PSModulePath`, without which `Get-AuthenticodeSignature` reports "the command was found in the module
+'Microsoft.PowerShell.Security', but the module could not be loaded" and answers nothing at all.
+
+### Verification evidence
+
+The layout that ships was built and exercised: `--doctor` through the launcher reports `mode spawn`, `runtime
+runtime/node.exe`, `appRoot` and `webDist` both resolved, **all checks passed**, in a 34.5 s build.
+`tools/verify-release.cjs --dir` reports **clean, no problems found**, including the 72 packaged dependencies
+matching the lock file. The bundled runtime was checked independently: `Get-AuthenticodeSignature` returns `Valid`
+with signer `CN=OpenJS Foundation`.
+
+### Not yet verified
+
+The signature path has been run end to end on the **old** layout and on throwaway fixtures, not on a shipped
+artifact of this layout, because this layout has no signable binary. If a future version brings one back, the
+first thing to do is build with `--sign` and confirm the release's `SHA256SUMS.txt` is generated from the signed
+file rather than before it.
+
 ## v1.0.6
 
 **A consistency round.** There is one new thing a user can see - a banner that closes a gap the v1.0.5 notes

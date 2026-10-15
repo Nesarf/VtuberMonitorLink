@@ -26,6 +26,7 @@
 //   empty table -- because in that case it is a wrong number and acting on it would cut into the file.
 //
 // usage: node tools/sign-exe.cjs <exe> --thumbprint <sha1> [--python <exe>] [--onlysign <dir>]
+//        node tools/sign-exe.cjs --check <exe>       report what the file carries; change nothing
 
 'use strict';
 
@@ -34,7 +35,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 function parseArgs(argv) {
-  const out = { exe: '', thumbprint: '', python: 'python', onlysign: '', ledger: '' };
+  const out = { exe: '', thumbprint: '', python: 'python', onlysign: '', ledger: '', check: false };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -42,13 +43,83 @@ function parseArgs(argv) {
     else if (a === '--python') out.python = String(argv[++i] || 'python');
     else if (a === '--onlysign') out.onlysign = path.resolve(String(argv[++i] || ''));
     else if (a === '--ledger') out.ledger = path.resolve(String(argv[++i] || ''));
+    else if (a === '--check') out.check = true;
     else rest.push(a);
   }
   out.exe = rest[0] || '';
   return out;
 }
 
+// ---------------------------------------------------------------------------- check mode
+// Read-only, and the only reason it exists is that a build can silently produce a binary that LOOKS
+// signed and is not. That is not hypothetical: the SEA stage copies node.exe -- which its vendor signed
+// -- and appends to it, and postject prints "warning: The signature seems corrupted!" while doing so.
+// The result reports NotSigned to Windows while the byte range that used to be a signature is still in
+// the file, so any check that only looks for the presence of a certificate table says yes.
+//
+// This asks Windows, which is the reader that matters, and reports what it says. The question is put
+// through tools/verdict.py, which writes a script file and runs PowerShell with -File.
+//
+// Composing the PowerShell here instead was measured producing an empty answer for three different files
+// -- including one that verifies perfectly -- and an empty answer read as "this file carries something
+// that does not verify" is a wrong conclusion delivered confidently by a quoting layer. Two fixes were
+// tried here first (a BOM, and escaping the path by hand) and neither was the problem: the invocation
+// itself was. A file that Python runs has no quoting layer at all, and that path was already proven.
+function windowsVerdict(file, python) {
+  const result = spawnSync(python, [path.join(__dirname, 'verdict.py'), file], { encoding: 'utf8' });
+  if (result.error || !String(result.stdout || '').trim()) {
+    const why = String(result.stderr || (result.error && result.error.message) || '').trim();
+    return { status: '', signer: '', error: why };
+  }
+  try {
+    return JSON.parse(String(result.stdout).trim());
+  } catch {
+    return { status: String(result.stdout).trim(), signer: '' };
+  }
+}
+
+function checkSignature(file) {
+  if (!fs.existsSync(file)) {
+    process.stderr.write('sign-exe --check: no such file: ' + file + '\n');
+    return 1;
+  }
+  const isPear = ['.exe', '.dll', '.node'].includes(path.extname(file).toLowerCase());
+  if (!isPear) {
+    process.stdout.write('check: ' + path.basename(file) + ' is not a PE image; nothing to sign\n');
+    return 0;
+  }
+  const got = windowsVerdict(file, args.python);
+  if (!got.status) {
+    process.stderr.write('sign-exe --check: no verdict for ' + file + ': ' + (got.error || 'empty answer') + '\n');
+    return 1;
+  }
+  process.stdout.write('check: ' + path.basename(file) + '\n');
+  process.stdout.write('  Windows says  : ' + got.status + '\n');
+  process.stdout.write('  signer        : ' + (got.signer || '(none)') + '\n');
+  if (got.status === 'Valid') {
+    process.stdout.write('  already carries a valid signature; a build should not append a second one\n');
+    return 0;
+  }
+  if (got.status === 'NotSigned') {
+    process.stdout.write('  carries no signature Windows will accept\n');
+    return 0;
+  }
+  // HashMismatch, NotTrusted, UnknownError and friends: something is attached and it does not verify.
+  // That is the postject case, and a release should not ship it without knowing.
+  process.stderr.write(
+    '  the file carries something that does not verify (' + got.status + ').\n' +
+      '  For a launcher built by appending to a signed base image this is expected, and it means the\n' +
+      '  file cannot be timestamped and therefore cannot be signed at all: the stale certificate-table\n' +
+      '  entry has to be cleared first. Pass --sign <thumbprint> to build-portable, which does that.\n'
+  );
+  return 3;
+}
+
 const args = parseArgs(process.argv.slice(2));
+
+if (args.check) {
+  process.exit(checkSignature(args.exe));
+}
 
 if (!args.exe) {
   process.stderr.write('sign-exe: no executable given\n  usage: node tools/sign-exe.cjs <exe> --thumbprint <sha1>\n');

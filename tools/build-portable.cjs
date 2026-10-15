@@ -93,9 +93,27 @@ function parseArgs(argv) {
   return out;
 }
 
+/**
+ * Every Node child this build starts gets a heap cap.
+ *
+ * Measured, and the reason is not a guess: Windows' Resource-Exhaustion-Detector logged four events between 04:39
+ * and 05:06 in which a **single short-lived node process committed about 40 GB** - created 21:05:36, reported at
+ * 21:06:06, 181 handles, so it was one burst of allocation rather than a leak. System commit reached 58.8 of a
+ * 59.0 GB limit, physical memory 16.7 of 17.0 GB, and Chrome was killed to keep the machine alive. A build is the
+ * heaviest thing this repository does, so the build caps what it starts: an OOM in a child is a failed build with
+ * a stack trace, which is a much better outcome than the whole desktop going down.
+ *
+ * This is a cap, not a diagnosis. The event gives a pid and a size and no command line, and the process is gone by
+ * the time anyone reads it - so naming the culprit still needs a watcher running while it happens.
+ */
+const NODE_HEAP_CAP_MB = 4096;
+
 function run(cmd, args, opts) {
   log('  $ ' + [cmd].concat(args).join(' '));
   const options = Object.assign({ stdio: 'inherit', cwd: ROOT }, opts || {});
+  if (cmd === process.execPath && !args.some((a) => String(a).startsWith('--max-old-space-size'))) {
+    args = ['--max-old-space-size=' + NODE_HEAP_CAP_MB].concat(args);
+  }
   // Node 20+ refuses to spawn .cmd/.bat without a shell (EINVAL), which is how
   // npx/npm/postject shims are exposed on Windows.
   if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd)) options.shell = true;

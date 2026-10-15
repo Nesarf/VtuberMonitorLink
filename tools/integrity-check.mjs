@@ -1568,6 +1568,63 @@ try {
   } else {
     problems.push('the workflow predicates do not tell the fixed file from the three ways of being wrong, so the check above proves nothing');
   }
+
+  // ── the declared Node floor has to be a version some job actually runs
+  //
+  // `package.json` states `engines.node`; the workflows state which majors the gate runs. Those are two
+  // independent claims about the same thing, and measured when this check was written they agreed with nothing:
+  // the declaration said ">=20" while the gate ran 22 and 24, so the floor was never exercised on any commit.
+  // A floor no job runs is a hope, and the matrix made the mismatch visible without making it false - so the
+  // check holds the two together, and the next change to either one has to face the other.
+  const floorCovered = (enginesNode, majors) => {
+    const floor = /(\d+)/.exec(String(enginesNode || ''))?.[1] || '';
+    return !!floor && majors.includes(floor);
+  };
+  // Two shapes carry a major in these files: a direct `node-version: '22'` and a matrix, where the version
+  // comes from `matrix.node` and the step reads `node-version: ${{ matrix.node }}` - a check that only read the
+  // first shape reported "the majors in the gate are 24" for a file whose matrix runs 22 and 24, which is how
+  // this comment came to exist. A matrix written as a YAML list (`- '22'` under `node:`) is not read here; that
+  // shape is not used in this repository, and guessing at it would be a check that passes on a pattern nobody
+  // writes.
+  const majorsOf = (text) => [
+    ...[...text.matchAll(/node-version:\s*'?"?(\d+)/g)].map((m) => m[1]),
+    ...[...text.matchAll(/^\s{4,}node:\s*\[([^\]]*)\]/gm)].flatMap((m) =>
+      [...m[1].matchAll(/'?"?(\d+)/g)].map((x) => x[1])
+    ),
+  ];
+  const gateMajors = [...new Set(runners.flatMap((w) => majorsOf(w.text)))];
+  const declared = (pkg.engines || {}).node || '';
+  if (!declared) {
+    problems.push('package.json declares no engines.node, so the Node floor is a claim nothing states');
+  } else if (!/(\d+)/.test(String(declared))) {
+    problems.push(`engines.node (${JSON.stringify(declared)}) names no major this check can read`);
+  } else if (gateMajors.length === 0) {
+    problems.push('no workflow that runs the gate states a node-version, so the declared Node floor cannot be exercised by anything');
+  } else if (!floorCovered(declared, gateMajors)) {
+    problems.push(
+      `the declared Node floor (${/(\d+)/.exec(String(declared))[1]}, from engines.node ${JSON.stringify(declared)}) is not run by any workflow that runs the gate: the majors in the gate are ${gateMajors.sort().join(', ')} - a floor no job exercises is a hope rather than a baseline`
+    );
+  } else {
+    const others = gateMajors.filter((m) => m !== /(\d+)/.exec(String(declared))[1]).sort();
+    process.stdout.write(
+      `   [ok]   the declared Node floor (${/(\d+)/.exec(String(declared))[1]}) is run by the gate${others.length ? `, which also runs ${others.join(', ')}` : ''}\n`
+    );
+  }
+
+  // The controls for that pair of predicates: a matrix that omits the floor, a missing declaration, and a
+  // declaration this check cannot read must each be rejected - otherwise the green line above would only mean
+  // the regexes never ran.
+  if (
+    floorCovered('>=22', ['22', '24']) &&
+    !floorCovered('>=20', ['22', '24']) &&
+    !floorCovered('', ['22']) &&
+    !floorCovered('lts/*', ['22', '24']) &&
+    !floorCovered('>=22', [])
+  ) {
+    process.stdout.write('   [ok]   (and the controls: a matrix without the declared floor, a missing declaration and an unreadable one are each rejected)\n');
+  } else {
+    problems.push('the Node-floor predicates accept a matrix that does not run the declared floor, or reject one that does, so the check above proves nothing');
+  }
 } catch (e) {
   problems.push(`could not read the workflow files: ${e.message}`);
 }

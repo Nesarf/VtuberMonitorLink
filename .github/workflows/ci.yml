@@ -72,19 +72,20 @@ jobs:
 
   fast:
     runs-on: windows-latest
-    # Two Node majors, because the product's floor is a claim like any other and this is the only job that runs
-    # the server's own code (`verify:fast` drives the real modules, not a build of them). Node 24 is what this
-    # repository develops on; 22 is the oldest major the code is meant to support, and running the same gate on
-    # it is what makes that a fact rather than a hope.
+    # Three Node majors: the declared floor, plus the two the repository develops and ships on. The floor comes
+    # from `package.json`'s `engines.node`, and a check in tools/integrity-check.mjs holds the two together -
+    # before that check existed the declaration said ">=20" while this matrix ran 22 and 24, so the floor was a
+    # claim no job exercised. Adding 20 here is what makes the declaration measurable: if this leg fails, the
+    # honest fix is to raise the floor to the oldest major that passes, not to delete the leg.
     #
-    # The engine is cached between the two legs. Without the cache the second leg would download 90 MB of
-    # Firefox to run checks that are identical on both majors, and a job that is slow for no measurement is a
+    # The engine is cached across the legs. Without the cache each extra leg would download 90 MB of Firefox to
+    # run checks that are identical on every major, and a job that is slow without producing a measurement is a
     # job people start skipping - which is how a gate dies. The key follows the lockfiles, so a Playwright
     # upgrade re-downloads and a Node upgrade does not.
     strategy:
       fail-fast: false
       matrix:
-        node: ['22', '24']
+        node: ['20', '22', '24']
     # The engine lives in the checkout, not in the platform default location, and it is set for the whole
     # job rather than for the install step alone: Playwright resolves PLAYWRIGHT_BROWSERS_PATH at module
     # load, so a variable that existed only while the download ran would be gone by the time the check

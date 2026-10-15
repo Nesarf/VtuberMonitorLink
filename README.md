@@ -299,6 +299,21 @@ reviewed. `npm run commit-msg` checks the whole history (`tools/commit-msg-check
 shallow clone can only judge its tip. Quoting another language as evidence — a Russian plural form,
 an Arabic date phrase — stays allowed: that is data about a translation, not Chinese prose.
 
+## Footprint
+
+`node tools/size-report.mjs` prints where this checkout's bytes are and states the verdict against its size band:
+**under 1 GB, and not below ~400 MB**. The floor is the part that matters for behaviour - a checkout that got
+much smaller than this did so by losing something, which is what happened once when the tree was tidied from
+253 MB to 153 MB, and the rule that came out of it is that only **regenerable** artifacts are ever removed (old
+packages, build intermediates, caches), never source, tests or features.
+
+The report counts two things separately, because a shared cache answers two different questions: the **checkout**
+itself (junctions reported, not followed), and this product's **footprint** - the checkout plus the browser engine
+it needs out of a shared Playwright cache. Measured on the machine this was written on: checkout 342 MB, footprint
+684 MB (Firefox 342 MB needed, the Chromium copies next to it 706 MB belong to other projects and are neither
+counted nor deleted - the repository's own check 5j in `tools/integrity-check.mjs` keeps this project on Firefox
+alone).
+
 ## License
 
 MIT

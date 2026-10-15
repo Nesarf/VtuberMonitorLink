@@ -72,11 +72,14 @@ jobs:
 
   fast:
     runs-on: windows-latest
-    # Three Node majors: the declared floor, plus the two the repository develops and ships on. The floor comes
-    # from `package.json`'s `engines.node`, and a check in tools/integrity-check.mjs holds the two together -
-    # before that check existed the declaration said ">=20" while this matrix ran 22 and 24, so the floor was a
-    # claim no job exercised. Adding 20 here is what makes the declaration measurable: if this leg fails, the
-    # honest fix is to raise the floor to the oldest major that passes, not to delete the leg.
+    # Two Node majors: the declared floor and the one the repository develops and ships on. The floor comes from
+    # `package.json`'s `engines.node`, and a check in tools/integrity-check.mjs holds the two together.
+    #
+    # 20 was tried here on purpose, because the declaration said ">=20" and a floor no job runs is a hope. It
+    # failed, and the failure is the measurement: `server/src/server.js` cannot even be imported on Node 20 -
+    # "No such built-in module: node:sqlite", which the archive and the browser-cookie reader both use. So the
+    # floor was wrong by two majors, the declaration now says ">=22", and this leg is the one that keeps it
+    # true. If a future major is added to the matrix, add it here too rather than replacing a leg.
     #
     # The engine is cached across the legs. Without the cache each extra leg would download 90 MB of Firefox to
     # run checks that are identical on every major, and a job that is slow without producing a measurement is a
@@ -85,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22', '24']
+        node: ['22', '24']
     # The engine lives in the checkout, not in the platform default location, and it is set for the whole
     # job rather than for the install step alone: Playwright resolves PLAYWRIGHT_BROWSERS_PATH at module
     # load, so a variable that existed only while the download ran would be gone by the time the check

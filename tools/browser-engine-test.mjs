@@ -480,6 +480,19 @@ const probeSentence = (p) => {
  */
 let noEngineProject = null;
 function projectWithoutEngines() {
+  // Sweep first: this directory is a copy of the server tree inside the repository, and a run that is
+  // interrupted (Ctrl-C, a crash, a killed job) leaves one behind. Before this sweep the comment below was
+  // the only cleanup and it was never called, so the copies simply accumulated - measured: one 1.1 MB
+  // directory left in the repository root, untracked and not ignored, which is one `git add -A` away from
+  // being committed (the mistake .gitignore already tells the story of twice).
+  for (const stale of fs.readdirSync(ROOT)) {
+    if (!stale.startsWith('.vml-no-engine-')) continue;
+    try {
+      fs.rmSync(path.join(ROOT, stale), { recursive: true, force: true });
+    } catch {
+      /* a leftover scratch directory is untidy; failing the run over it would be worse */
+    }
+  }
   noEngineProject = fs.mkdtempSync(path.join(ROOT, '.vml-no-engine-'));
   fs.cpSync(path.join(ROOT, 'server', 'src'), path.join(noEngineProject, 'server', 'src'), { recursive: true });
   fs.mkdirSync(path.join(noEngineProject, 'pw-browsers'), { recursive: true }); // present, and empty
@@ -494,6 +507,13 @@ function removeNoEngineProject() {
   }
   noEngineProject = null;
 }
+// The removal has to survive the paths that skip the end of this file - a failed check that exits, an
+// uncaught throw, a signal - so it runs on the way out rather than in one `finally` the reader has to find.
+process.on('exit', removeNoEngineProject);
+process.on('SIGINT', () => {
+  removeNoEngineProject();
+  process.exit(130);
+});
 
 const withEngine = probe();
 const withoutEngine = probe({ projectRoot: projectWithoutEngines() });

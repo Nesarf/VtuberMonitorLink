@@ -41,6 +41,14 @@ Desktop.ini
 pw-browsers/
 .pw-browsers/
 
+# throwaway project root of tools/browser-engine-test.mjs: a copy of the server sources with an empty
+# pw-browsers/ beside it, created inside the repository because node resolves `playwright` by walking up from
+# the importing file (a copy in the OS temp directory cannot load the module at all). It lives in the
+# repository for that reason and is removed on the way out, including on a signal - and ignored here anyway,
+# because "the run cleans up after itself" and "an interrupted run cannot be committed" are two different
+# promises and this repository has already learned which one holds.
+.vml-no-engine-*/
+
 # local private-name list for sanitize-check (never commit)
 .sanitize-names
 

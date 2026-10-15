@@ -298,7 +298,13 @@ t('the chart offers exactly the ranges the server knows', () => {
   // ignored rather than like a mistake.
   const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
   const chartSrc = fs.readFileSync(path.join(ROOT, 'web/src/pages/Charts.jsx'), 'utf8');
-  const serverBlock = /const RANGES = \{([\s\S]*?)\n\s*\};/.exec(serverSrc)?.[1] ?? '';
+  const serverBlock = /const RANGES = \{([\s\S]*?)\n\s*\};/.exec(serverSrc)?.[1];
+// A missing block must fail loudly rather than make the assertions below compare against an empty string: the
+// table lives in server/src/server.js today, and the route split has been moving things out of that file.
+if (serverBlock === undefined) {
+  process.stdout.write('  [FAIL] the RANGES table is no longer in server/src/server.js - this check read nothing, so it proves nothing\n');
+  process.exit(1);
+}
   const serverKeys = [...serverBlock.matchAll(/'([0-9]+[mhd])':\s*\{/g)].map((m) => m[1]).sort();
   const chartBlock = /const RANGES = \[([\s\S]*?)\n\s*\];/.exec(chartSrc)?.[1] ?? '';
   const chartKeys = [...chartBlock.matchAll(/key:\s*'([^']+)'/g)].map((m) => m[1]).sort();

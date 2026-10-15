@@ -123,16 +123,23 @@ the word form via `Intl.PluralRules` -- `21 элемент` rather than `21 эл
   Two consequences, and the first version of this rule got the second one wrong:
   - only a **proper noun or product name** belongs in the glossary, where one spelling really is the
     convention everywhere (`Feishu`, `Moegirlpedia`, `VTuber`, `ServerChan`); the tool's own allowlist of
-    Latin defaults is `ServerChan` / `DingTalk` / `WeCom` / `Feishu` / `Moegirlpedia` / `VTuber`, and a term
-    that leaves the product takes its entry with it rather than staying as a vocabulary nobody reads;
+    Latin defaults is `ServerChan` / `DingTalk` / `WeCom` / `Feishu` / `Moegirlpedia` / `VTuber` /
+    `Nijisanji` / `VSPO!`, and a term that leaves the product takes its entry with it rather than staying
+    as a vocabulary nobody reads;
   - a **common noun must not be pinned at all**. An English default shows English to twelve locales
     (that was the shipped defect: 385 rows); setting the default to the source term instead shows
     *Chinese* to every locale without an override, which is worse - that was the first attempt at
     fixing this, made and reverted the same afternoon.
   A term that genuinely needs the same wording everywhere gets an **override for every locale**, not a
-  default. `tools/i18n-proofread.mjs` now fails the build when a Han term carries a Latin default that
-  is not in its documented brand list, and it counts a locale showing an English default as a suspect,
-  so the next contributor meets the rule before the defect instead of after it.
+  default. The guard's invariant is not "a default must not be Latin" but **"a default that can be
+  displayed must not be a translation"**: with an override in every locale the default is unreachable and
+  its wording cannot matter, which is why the fifteen common nouns that carry English defaults today are
+  left alone - they have an override in all 29 locales, so nothing can display them. What
+  `tools/i18n-proofread.mjs` refuses is a Latin default on a term that is **not pure ASCII** (that
+  predicate replaced "contains a Han character" after BUGS #75, because it was silently skipping kana
+  terms like `にじさんじ` and `ぶいすぽっ！`, which had three overrides each), on a term outside its
+  documented brand list, for a locale that has no override. It counts a locale showing an English default
+  as a suspect too, so the next contributor meets the rule before the defect instead of after it.
 
 ## 8. Commit messages are English too (added 2026-09-14)
 

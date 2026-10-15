@@ -6,7 +6,7 @@
 // metadata when the provider states it, a documented id pattern when it does not, and "unknown" - never "text
 // only" - when neither says anything.
 import assert from 'node:assert/strict';
-import { entryVision, visionFilter } from '../server/src/llm.js';
+import { PRESETS, entryVision, visionFilter, visionNameSays } from '../server/src/llm.js';
 
 let pass = 0;
 let fail = 0;
@@ -83,6 +83,29 @@ t('only stated capabilities can deny a model; a pattern that matches nothing say
   const byNameOnly = visionFilter(['deepseek-chat']);
   assert.deepEqual(byNameOnly.dropped, [], 'an id the patterns do not know is not called text-only');
   assert.deepEqual(byNameOnly.unknown, ['deepseek-chat']);
+});
+
+t('the DeepSeek preset names a model this provider serves, and the name tier cannot see that', () => {
+  const deepseek = PRESETS.find((p) => p.id === 'deepseek');
+  assert.ok(deepseek, 'the DeepSeek preset is gone');
+  // Measured rather than recalled: GET https://api.deepseek.com/models answers with exactly two entries,
+  // `deepseek-flash` and `deepseek-v4-pro`, and the second states itself text-only in its own metadata. The
+  // list used to name `deepseek-chat` / `deepseek-reasoner`, which that endpoint does not serve at all - so
+  // the fallback named two models that could not be used *and* could not see.
+  assert.deepEqual(deepseek.models, ['deepseek-flash']);
+  // And here is the trap that keeps PRESETS unfiltered. The one model that can see is one the id pattern does
+  // not recognise, because the provider states the capability in metadata instead of in the name. Filtering
+  // the presets with the name tier would therefore delete the correct entry and keep the doubtful ones - so
+  // this assertion exists to make that "simplification" fail loudly rather than quietly empty the fallback.
+  assert.equal(visionNameSays('deepseek-flash'), false, 'if this ever becomes true, revisit the note on PRESETS');
+  assert.equal(entryVision('deepseek-flash').why, 'unknown');
+});
+
+t('control: the predicate is not vacuously false - the OpenAI preset ids are recognised by name', () => {
+  const openai = PRESETS.find((p) => p.id === 'openai');
+  assert.ok(openai, 'the OpenAI preset is gone');
+  const recognised = openai.models.filter((id) => visionNameSays(id));
+  assert.equal(recognised.length, openai.models.length, 'every OpenAI preset id should be recognised: ' + openai.models.join(', '));
 });
 
 process.stdout.write(`\nvision models: ${pass} ok, ${fail} failed\n`);

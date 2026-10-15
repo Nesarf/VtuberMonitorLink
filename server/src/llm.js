@@ -26,12 +26,31 @@ const VISION_ID = new RegExp(
   'i'
 );
 
+/**
+ * The name tier on its own: true when an id is recognisably a multimodal family.
+ *
+ * One predicate, two callers (the filter below and the metadata check above it), so "the name says it sees" can
+ * never mean two different things.
+ *
+ * Not used to filter `PRESETS`, and that is deliberate: measured against this provider, `deepseek-flash` is the
+ * one model that can see and the name tier does **not** recognise it - the provider states the capability in
+ * metadata instead. Filtering the presets with this predicate would delete the correct entry and keep the
+ * doubtful ones, so the fallback lists stay as data and the pull path stays the place the rule is applied.
+ */
+export function visionNameSays(id) {
+  return VISION_ID.test(String(id ?? ''));
+}
+
 export const PRESETS = [
   {
     id: 'deepseek',
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    // Measured against this provider rather than recalled: `GET https://api.deepseek.com/models` answers with
+    // exactly two entries, `deepseek-flash` and `deepseek-v4-pro`, and the second states itself text-only in its
+    // own metadata. The list used to read `deepseek-chat` / `deepseek-reasoner`, which this endpoint does not
+    // serve at all - so the fallback named two models that could not be used *and* could not see.
+    models: ['deepseek-flash'],
   },
   {
     id: 'openai',
@@ -226,7 +245,8 @@ export function entryVision(entry) {
     const sees = lists.some((v) => v.includes('image') || v === 'vision' || v.includes('multimodal'));
     return { id, vision: sees, why: 'metadata' };
   }
-  return { id, vision: VISION_ID.test(id) ? true : null, why: VISION_ID.test(id) ? 'name' : 'unknown' };
+  const sees = visionNameSays(id);
+  return { id, vision: sees ? true : null, why: sees ? 'name' : 'unknown' };
 }
 
 /**

@@ -462,6 +462,13 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     const cfg = getConfig();
     const p = activeProvider(cfg);
     res.json({
+      // The model lists go out as they are, and that is a decision with a measurement behind it rather than an
+      // omission. A preset list is a **fallback for a provider that cannot be queried**, and the only predicate
+      // available offline is the id pattern - which does not recognise `deepseek-flash`, the one model this
+      // provider actually serves that can see (its capability is stated in metadata, not in its name). Filtering
+      // these lists with that predicate would therefore delete the correct entry and keep the doubtful ones.
+      // The pull path is where the rule belongs, and there the answer comes from the provider: listModels()
+      // keeps only what the metadata or the id can show to be multimodal.
       presets: PRESETS,
       // The masked profile list, not `cfg.llm.providers` verbatim: masking only `active` (which this route
       // did at first) left every *other* profile's apiKey in the response — the same leak as /api/config,

@@ -40,6 +40,14 @@ const lines = src.split('\n');
 // `import fs from 'node:fs'` is a module-link error at load time ("does not provide an export named 'fs'"), and
 // the first version of this script did exactly that.
 const importMap = new Map();
+// `import * as ns from '...'` is a third shape, and this scan did not know it. A body calling `scheduler.get()`
+// therefore got no import at all, and the route answered 500 with "scheduler is not defined" - while
+// `node --check` passed, importing the factory passed, and every static check was happy, because the reference
+// sits inside a handler body and only runs when the route is called. Measured on `/api/state` and `/api/schedule`.
+const namespaceRe = /^import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+'([^']+)';/gm;
+for (const m of src.matchAll(namespaceRe)) {
+  importMap.set(m[1], { kind: 'namespace', local: m[1], source: m[2] });
+}
 const importBlockRe = /^import\s+(?:([A-Za-z_$][\w$]*)\s*,\s*)?(?:\{([\s\S]*?)\}|([A-Za-z_$][\w$]*))?\s*from\s*'([^']+)';/gm;
 for (const m of src.matchAll(importBlockRe)) {
   const source = m[4];
@@ -115,7 +123,19 @@ if (trimmedAt >= 0) {
   console.log(`  usage-based trim: the block stops before line ${trimmedAt + 1}, whose declaration the rest of the file also uses`);
 }
 
-const body = lines.slice(start, end);
+// Sibling specifiers inside a **dynamic** import need the same `../` a static one gets, and this scan did not touch
+// them: the cookies route calls a dynamic import of its own group name, which inside
+// `server/src/routes/cookies.js` resolves to **itself** - a module that does not export what the caller expects. It
+// surfaced as `TypeError: readBrowserCookies is not a function` on an unhandled rejection, which took the whole app
+// down in the middle of a walk, so the traversal reported "fetch failed" rather than naming a route. Static imports
+// were rewritten from the start; dynamic ones were simply invisible to that code.
+//
+// The specifiers are written without the literal path text on purpose: the repository's integrity check scans for
+// import specifiers in every shipped file, comments included, and a path in a comment here was reported as an import
+// pointing at a file that does not exist.
+const body = lines.slice(start, end).map((l) =>
+  l.replace(/(import\s*\(\s*)(['"])\.\/([^'"]+)\2/g, (_all, head, quote, spec) => `${head}${quote}../${spec}${quote}`),
+);
 const bodyText = body.join('\n');
 
 const usedOther = FACTORY_PROVIDED.filter((n) => !ALLOWED_CTX.includes(n) && new RegExp(`\\b${n}\\b`).test(bodyText));
@@ -165,9 +185,33 @@ for (let i = start; i < end; i++) {
   const m = declFactoryRe.exec(lines[i]);
   if (m) declInside.add(m[1]);
 }
+// Names the block binds *itself*, including as parameters, and a floor on what counts as a helper name.
+//
+// Both are here because the plausible-looking version of this net reported `e` and stopped nine groups at once:
+// createApp has `const e = cluster?.evidence;` in its own scope, so every block containing a `catch (e)` or an
+// `e => ...` looked like it was reaching back for that local. A name that the block itself binds is not a
+// reference to the factory's, and a helper left behind in the factory is a *word* (`preserveSecretsIn`,
+// `sanitizeCustomSource`) - never a one- or two-letter binding, which in this file is always a parameter.
+const boundInBlock = new Set();
+const addParams = (list) => {
+  for (const part of String(list).split(',')) {
+    const name = part.split('=')[0].trim().replace(/^\.\.\./, '');
+    if (/^[A-Za-z_$][\w$]*$/.test(name)) boundInBlock.add(name);
+  }
+};
+for (const line of body) {
+  for (const m of line.matchAll(/\(([^()]*)\)\s*=>/g)) addParams(m[1]);
+  for (const m of line.matchAll(/\bcatch\s*\(([^()]*)\)/g)) addParams(m[1]);
+  for (const m of line.matchAll(/\bfunction\s*[A-Za-z_$\w]*\s*\(([^()]*)\)/g)) addParams(m[1]);
+  const arrow = /^\s*([A-Za-z_$][\w$]*)\s*=>/.exec(line);
+  if (arrow) boundInBlock.add(arrow[1]);
+}
+const HELPER_NAME_MIN = 3;
 const stuck = [...declFactory].filter(
   (n) =>
+    n.length >= HELPER_NAME_MIN &&
     !declInside.has(n) &&
+    !boundInBlock.has(n) &&
     !GIVEN.has(n) &&
     !importMap.has(n) &&
     new RegExp(`\\b${n}\\b`).test(bodyText),
@@ -184,9 +228,10 @@ if (stuck.length) {
 const needed = new Map();
 for (const [local, info] of importMap) {
   if (!new RegExp(`\\b${local}\\b`).test(bodyText)) continue;
-  if (!needed.has(info.source)) needed.set(info.source, { defaults: [], named: [] });
+  if (!needed.has(info.source)) needed.set(info.source, { defaults: [], named: [], namespaces: [] });
   const bucket = needed.get(info.source);
   if (info.kind === 'default') bucket.defaults.push(local);
+  else if (info.kind === 'namespace') bucket.namespaces.push(local);
   else bucket.named.push(info.imported === local ? local : `${info.imported} as ${local}`);
 }
 const importLines = [...needed.entries()]
@@ -194,15 +239,28 @@ const importLines = [...needed.entries()]
   // A module in server/src/routes/ is one directory deeper than server.js, so a sibling specifier needs the
   // extra `../`. Copying it verbatim starts the app with ERR_MODULE_NOT_FOUND - which `node --check` cannot see
   // and only the traversal catches, because the failure happens when the app is actually launched.
-  .map(([source, { defaults, named }]) => {
+  .flatMap(([source, { defaults, named, namespaces }]) => {
     const fixed = source.startsWith('./') ? `../${source.slice(2)}` : source;
     const parts = [];
     if (defaults.length) parts.push([...new Set(defaults)].sort().join(', '));
     if (named.length) parts.push(`{ ${[...new Set(named)].sort().join(', ')} }`);
-    return `import ${parts.join(', ')} from '${fixed}';`;
+    const lines = [];
+    if (parts.length) lines.push(`import ${parts.join(', ')} from '${fixed}';`);
+    for (const ns of [...new Set(namespaces)].sort()) lines.push(`import * as ${ns} from '${fixed}';`);
+    return lines;
   });
 
-const fnName = `register${GROUP[0].toUpperCase()}${GROUP.slice(1)}Routes`;
+// A group name is a URL path segment, not an identifier: `/api/client-log` would have produced
+// `registerClient-logRoutes`, which is a syntax error at module load - measured, and it stopped the packaged app
+// from starting at all while `node --check` on each individual module still passed, because the damaged line is in
+// the factory. Split on whatever is not a letter or digit and camel-case the pieces.
+const fnName =
+  'register' +
+  GROUP.split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join('') +
+  'Routes';
 const header = [
   `// routes/${GROUP}.js — the ${GROUP} endpoints, moved out of the factory.`,
   '//',
@@ -220,6 +278,19 @@ const header = [
 ].join('\n');
 const out = header + body.map((l) => (l.trim() === '' ? '' : '  ' + l)).join('\n') + '\n}\n';
 const outPath = path.join(ROUTES_DIR, `${GROUP}.js`);
+// Never overwrite a module that is already there. A group can be split across several clusters in the factory
+// (that is what "first contiguous cluster" means), so a second run for the same group would replace the module
+// holding the first cluster's routes - and the registration call it adds points at a module that no longer
+// contains them. Measured: `proxy`, `sources` and `archive` had each been partly moved already, and one batch run
+// silently dropped what was in them. The refusal costs a second filename; the silent version cost the routes.
+if (fs.existsSync(outPath)) {
+  console.log(
+    `STOP: ${path.relative(ROOT, outPath).split(path.sep).join('/')} already exists - this group was partly moved ` +
+      'before. Move the remaining cluster into its own module (and register it separately), or fold it in by hand; ' +
+      'overwriting here would drop the routes the existing module carries.'
+  );
+  process.exit(1);
+}
 fs.mkdirSync(ROUTES_DIR, { recursive: true });
 fs.writeFileSync(outPath, out);
 console.log(`wrote ${path.relative(ROOT, outPath).split(path.sep).join('/')} — ${body.length} handler lines, imports: ${importLines.length ? importLines.join(' ').slice(0, 160) : '(none)'}`);

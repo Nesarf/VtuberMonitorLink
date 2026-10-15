@@ -404,13 +404,30 @@ try {
 // retries; the server has to. So: every expensive POST carries an in-flight guard, and the nodes probe
 // button keeps the disabled state that makes the ordinary case impossible.
 try {
-  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  // The factory AND the route modules, because the property is "this route carries an in-flight guard", not "that
+  // text lives in server.js". Two of the four routes below moved out with their groups (`/api/probe`,
+  // `/api/features/extract`), so a check reading one file reported guarded routes as unguarded - the fifth instance
+  // of this pattern in this repository, and the reason the widening is now the default rather than the exception.
+  const routeDir = path.join(ROOT, 'server/src/routes');
+  const serverSources = [fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8')].concat(
+    fs.existsSync(routeDir)
+      ? fs
+          .readdirSync(routeDir)
+          .filter((f) => f.endsWith('.js'))
+          .map((f) => fs.readFileSync(path.join(routeDir, f), 'utf8'))
+      : [],
+  );
   const guarded = [
     "/api/sources/:id/diagnose",
     "/api/probe",
     "/api/proxy/nodes/test",
     "/api/features/extract",
-  ].filter((route) => !new RegExp(`app\\.post\\('${route.replace(/[/:]/g, (c) => '\\' + c)}', busyGuard\\(`).test(serverSrc));
+  ].filter(
+    (route) =>
+      !serverSources.some((src) =>
+        new RegExp(`app\\.post\\('${route.replace(/[/:]/g, (c) => '\\' + c)}', busyGuard\\(`).test(src),
+      ),
+  );
   if (guarded.length) problems.push(`expensive route(s) with no in-flight guard: ${guarded.join(', ')}`);
   else process.stdout.write(`   [ok]   ${4} long operation(s) refuse to run twice at once\n`);
 

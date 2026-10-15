@@ -85,6 +85,29 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerCostRoutes } from './routes/cost.js';
+import { registerSilenceRoutes } from './routes/silence.js';
+import { registerGroupsRoutes } from './routes/groups.js';
+import { registerRunRoutes } from './routes/run.js';
+import { registerOpenRoutes } from './routes/open.js';
+import { registerScheduleRoutes } from './routes/schedule.js';
+import { registerStateRoutes } from './routes/state.js';
+import { registerBrowserRoutes } from './routes/browser.js';
+import { registerBrowsersRoutes } from './routes/browsers.js';
+import { registerReadmeRoutes } from './routes/readme.js';
+import { registerHealthRoutes } from './routes/health.js';
+import { registerPreflightRoutes } from './routes/preflight.js';
+import { registerCookiesRoutes } from './routes/cookies.js';
+import { registerVisionRoutes } from './routes/vision.js';
+import { registerEntitiesRoutes } from './routes/entities.js';
+import { registerClientLogRoutes } from './routes/client-log.js';
+import { registerFeaturesRoutes } from './routes/features.js';
+import { registerProbeRoutes } from './routes/probe.js';
+import { registerNotifyRoutes } from './routes/notify.js';
+import { registerLlmRoutes } from './routes/llm.js';
+import { registerThumbRoutes } from './routes/thumb.js';
+import { registerIntelRoutes } from './routes/intel.js';
+import { registerReportsRoutes } from './routes/reports.js';
 import { registerSourcesRoutes } from './routes/sources.js';
 import { registerWatchRoutes } from './routes/watch.js';
 import { registerArchiveRoutes } from './routes/archive.js';
@@ -303,189 +326,55 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, removed: before - cfg.customSources.length, sources: effectiveSources(cfg) });
   });
 
-  // ── browser / profile targeting ──────────────────────────────────
-  //
-  // The page that owns the browser setting (web/src/pages/Browser.jsx) is rendered from this one answer:
-  // the installed executables, the **discovered profiles** (so nobody hand-writes a path), what the setting
-  // currently resolves to (through the same function every feature uses, see server/src/browser-target.js),
-  // and one status row per feature that depends on it (server/src/browser-consumers.js).
-  //
-  // `profiles: false` skips the discovery for callers that only want the detected browsers; the discovery
-  // itself is a directory listing and reads no cookie.
-  app.get('/api/browser/target', (req, res) => {
-    const cfg = getConfig();
-    const discovered = listProfiles();
-    const picker = pickerFor(discovered, cfg);
-    res.json({
-      // `paths.browsersDir` is handed in as an extra root: it is the setting that decides where engines live
-      // when PLAYWRIGHT_BROWSERS_PATH was not already set at startup, and an engine the page cannot see is an
-      // engine the user cannot pick.
-      detected: detectBrowsers({ extraRoots: [cfg?.paths?.browsersDir] }),
-      target: resolveProfileTarget(cfg),
-      report: browserTargetReport(cfg),
-      profiles: picker.options,
-      // Entries the discovery refused (a row with no usable path) and rows the picker could not offer: the
-      // page shows the count rather than quietly presenting a shorter list.
-      unusableProfiles: picker.unusable,
-      selected: picker.selected,
-    });
-  });
+  // Moved to server/src/routes/browser.js (see its header for the shape the remaining groups follow).
+  registerBrowserRoutes(app, { getConfig, patchConfig, log });
 
-  // The older name of the route above, kept because a page may still ask for it: same detection, and the
-  // browser config it used to return (the target answers everything it did, and more).
-  app.get('/api/browsers', (_req, res) => {
-    const cfg = getConfig();
-    res.json({ detected: detectBrowsers({ extraRoots: [cfg?.paths?.browsersDir] }), config: cfg.browser });
-  });
 
-  // ── login availability ───────────────────────────────────────────
-  // Only reports "which cookie names were read", and **never sends back any value**.
-  //
-  // The profile is resolved exactly like every feature's own read (server/src/browser-target.js): a request
-  // that names one is an explicit hand-in, anything else follows the shared setting. This route used to read
-  // `cfg.browser.profileDir` on its own, which is how the settings page and the share page could answer
-  // differently about the same machine.
-  app.post('/api/cookies/check', async (req, res) => {
-    const cfg = getConfig();
-    const profile = resolveProfileTarget(cfg, { profileDir: req.body?.profileDir });
-    const domains = Array.isArray(req.body?.domains) && req.body.domains.length ? req.body.domains : ['reddit.com'];
-    const { readBrowserCookies, hasSessionCookie } = await import('./cookies.js');
-    const r = await readBrowserCookies(profile.dir, domains);
-    res.json({
-      ok: r.ok,
-      error: r.error ?? null,
-      warning: r.warning ?? null,
-      profile: r.profile ?? null,
-      profileDir: profile.dir || null,
-      profileSource: profile.source,
-      profileReason: profile.dir ? null : 'no-profile-configured',
-      domains,
-      cookieCount: (r.names ?? []).length,
-      // The same predicate every other login check uses (server/src/cookies.js), so this route cannot answer
-      // "signed in" while the share page answers "probably not" about the same store.
-      hasSession: hasSessionCookie(r.names),
-      names: r.names ?? [],
-    });
-  });
 
-  // "Open this file in an editor" -- the app is local, so the person who generated a report can look at it
-  // in the tool they actually use.
-  //
-  // This is the one endpoint in the app whose request names a file that is then handed to an external
-  // program, so the request carries a **kind and an id** and the path is resolved here, from the app's own
-  // output roots (see server/src/openfile.js for the three defences: a plain file name, a resolved-prefix
-  // test, and a symlink test). The invocation is an argv array handed to execFile with `shell: false`, so no
-  // file name can ever become command syntax. It is not a long operation and needs no in-flight guard: it
-  // starts a program and returns.
-  app.post('/api/open', (req, res) => {
-    const cfg = getConfig();
-    const kind = String(req.body?.kind ?? '');
-    // A request that carries a path is refused by name rather than quietly ignored -- resolveOpenPath says so.
-    const id = String(req.body?.id ?? req.body?.file ?? '');
-    const r = resolveOpenPath(cfg, kind, id);
-    if (!r.ok) return res.status(400).json({ ok: false, code: r.code, error: r.error });
-    const editor = resolveEditorCommand(cfg.open?.editor);
-    if (!editor.program) {
-      return res.status(400).json({
-        ok: false,
-        code: 'no-editor',
-        error: 'no editor found: install VS Code (the `code` command) or set an editor command in Settings',
-        editor,
-      });
-    }
-    const name = path.basename(r.path);
-    openResolvedPath({ file: r.path, editor, displayName: name, platform: process.platform })
-      .then((out) => {
-        const note = openResultNote(out, editor);
-        log?.[out.ok ? 'info' : 'warn'](`open ${kind}/${name}: ${note.en}`);
-        res.status(out.ok ? 200 : 500).json({ ok: out.ok, code: out.code ?? null, error: out.error ?? null, kind, name, editor: { program: editor.program, source: editor.source }, command: out.command ?? editor.program, args: out.args ?? null, note });
-      })
-      .catch((e) => res.status(500).json({ ok: false, code: 'launch-failed', error: e.message }));
-  });
+  // Moved to server/src/routes/browsers.js (see its header for the shape the remaining groups follow).
+  registerBrowsersRoutes(app, { getConfig, patchConfig, log });
+
+
+
+  // Moved to server/src/routes/cookies.js (see its header for the shape the remaining groups follow).
+  registerCookiesRoutes(app, { getConfig, patchConfig, log });
+
+
+
+  // Moved to server/src/routes/open.js (see its header for the shape the remaining groups follow).
+  registerOpenRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // Moved to server/src/routes/proxy.js (see its header for the shape the remaining groups follow).
   registerProxyRoutes(app, { getConfig, patchConfig, log });
 
 
 
-  // ── LLM providers ────────────────────────────────────────────────
-  app.get('/api/llm/presets', (_req, res) => {
-    const cfg = getConfig();
-    const p = activeProvider(cfg);
-    res.json({
-      // The model lists go out as they are, and that is a decision with a measurement behind it rather than an
-      // omission. A preset list is a **fallback for a provider that cannot be queried**, and the only predicate
-      // available offline is the id pattern - which does not recognise `deepseek-flash`, the one model this
-      // provider actually serves that can see (its capability is stated in metadata, not in its name). Filtering
-      // these lists with that predicate would therefore delete the correct entry and keep the doubtful ones.
-      // The pull path is where the rule belongs, and there the answer comes from the provider: listModels()
-      // keeps only what the metadata or the id can show to be multimodal.
-      presets: PRESETS,
-      // The masked profile list, not `cfg.llm.providers` verbatim: masking only `active` (which this route
-      // did at first) left every *other* profile's apiKey in the response — the same leak as /api/config,
-      // one endpoint over. `publicConfig` is the one place the rule lives; the masker here is the same
-      // function applied to the single active profile, so the two can never disagree.
-      providers: publicConfig({ providers: cfg.llm?.providers ?? [] }).providers,
-      activeId: cfg.llm?.activeId ?? '',
-      // Never send the plaintext key back. `active` is wrapped in a one-key object so the walk has a field
-      // *name* to judge (the rule is name-based, see config.js) instead of treating the profile itself as
-      // the value under a nameless root.
-      active: publicConfig({ provider: p }).provider,
-      hasKey: !!p.apiKey,
-    });
-  });
+  // Moved to server/src/routes/llm.js (see its header for the shape the remaining groups follow).
+  registerLlmRoutes(app, { getConfig, patchConfig, log, persist });
 
-  app.post('/api/llm/new', (req, res) => {
-    let cfg = getConfig();
-    const p = newProvider(req.body?.preset ?? 'deepseek', req.body?.overrides ?? {});
-    cfg.llm = cfg.llm ?? {};
-    cfg.llm.providers = [...(cfg.llm.providers ?? []), p];
-    cfg.llm.activeId = p.id;
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, provider: p });
-  });
 
-  // test connectivity with a "not yet saved provider": the body carries the provider directly
-  app.post('/api/llm/test', async (req, res) => {
-    const cfg = getConfig();
-    const saved = activeProvider(cfg);
-    const wanted = req.body?.provider ?? {};
-    // what the frontend sends back is a mask, so never test with ***
-    const provider = { ...saved, ...wanted, apiKey: wanted.apiKey && wanted.apiKey !== '***' ? wanted.apiKey : saved.apiKey };
-    const r = await preflight(cfg, provider);
-    res.json(r);
-  });
-
-  app.post('/api/llm/models', async (req, res) => {
-    const cfg = getConfig();
-    const saved = activeProvider(cfg);
-    const wanted = req.body?.provider ?? {};
-    const provider = { ...saved, ...wanted, apiKey: wanted.apiKey && wanted.apiKey !== '***' ? wanted.apiKey : saved.apiKey };
-    res.json(await listModels(cfg, provider));
-  });
 
   // Moved to server/src/routes/watch.js (see its header for the shape the remaining groups follow).
   registerWatchRoutes(app, { getConfig, patchConfig, log, persist, busyGuard, preserveSecretsIn });
 
 
 
-  // ── run ──────────────────────────────────────────────────────────
-  app.post('/api/run', async (req, res) => {
-    const mode = ['merch', 'watch'].includes(req.body?.mode) ? req.body.mode : 'daily';
-    if (runState.running) return res.status(409).json({ error: 'a run is already in progress' });
-    // return immediately, the run keeps going in the background; the UI polls /api/state
-    res.json({ ok: true, started: mode });
-    runOnce({ cfg: getConfig(), mode }).catch((e) => log?.error(`run failed — ${e.message}`));
-  });
+  // Moved to server/src/routes/run.js (see its header for the shape the remaining groups follow).
+  registerRunRoutes(app, { getConfig, patchConfig, log });
 
-  app.get('/api/state', (_req, res) =>
-    res.json({ ...runState, nextFire: scheduler.nextFire(), schedule: getConfig().schedule })
-  );
 
-  // ── preflight ────────────────────────────────────────────────────
-  app.post('/api/preflight', async (_req, res) => {
-    res.json(await preflight(getConfig()));
-  });
+
+  // Moved to server/src/routes/state.js (see its header for the shape the remaining groups follow).
+  registerStateRoutes(app, { getConfig, patchConfig, log });
+
+
+
+  // Moved to server/src/routes/preflight.js (see its header for the shape the remaining groups follow).
+  registerPreflightRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // ── diagnostics for a user-added source ──────────────────────────
   // A healthy connection produces no file at all; only a clear anomaly generates a human-readable diagnostic markdown.
@@ -538,303 +427,35 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── intel items ──────────────────────────────────────────────────
-  app.get('/api/intel', (req, res) => {
-    const cfg = getConfig();
-    const data = latestIntel(cfg, Number(req.query.limit ?? 400));
-    const flags = loadFlags(cfg);
-    const source = String(req.query.source ?? '').trim();
-    const q = String(req.query.q ?? '').trim().toLowerCase();
-    const onlyAlerts = req.query.alerts === '1';
-    let items = (data.items ?? []).map((i) => ({ ...i, flag: flags[i.id] ?? null }));
-    // attribution to a "person": local matching, every hit carries evidence (the UI must be able to explain why an item is attributed to them)
-    const peopleCfg = cfg.people ?? [];
-    const annotated = annotateItems(items, peopleCfg);
-    items = annotated.items;
-    // image tags (from the cache, merged at read time) — when present they also join keywords, so search can match them too
-    let visionTagged = 0;
-    try {
-      if (cfg.vision?.enabled) {
-        const vision = applyVisionTags(items, loadVisionCache(cfg));
-        items = vision.items;
-        visionTagged = items.filter((i) => (i.imageTags ?? []).length).length;
-      }
-    } catch {
-      // a broken tagging cache must not affect the intel stream
-    }
-    const person = String(req.query.person ?? '').trim();
-    if (person) items = items.filter((i) => (i.people ?? []).includes(person));
-    if (req.query.followed === '1' || (cfg.peopleOptions?.onlyFollowed && !person)) {
-      items = items.filter((i) => (i.people ?? []).length > 0);
-    }
-    if (source) items = items.filter((i) => i.sourceId === source);
-    if (onlyAlerts) items = items.filter((i) => i.keywords?.length);
-    if (req.query.starred === '1') items = items.filter((i) => i.flag?.starred);
-    if (req.query.unread === '1') items = items.filter((i) => !i.flag?.read);
-    if (q) items = items.filter((i) => `${i.title ?? ''} ${i.text ?? ''}`.toLowerCase().includes(q));
-    res.json({
-      generatedAt: data.generatedAt ?? null,
-      date: data.date ?? null,
-      watch: data.watch ?? [],
-      sources: data.sources ?? [],
-      total: (data.items ?? []).length,
-      count: items.length,
-      // per-person hit stats: the UI uses them to show "how many items matched a followed person in this run"
-      peopleMatched: annotated.matched,
-      followed: (items ?? []).filter((i) => (i.people ?? []).length > 0).length,
-      visionTagged,
-      runs: data.runs ?? [],
-      starred: (data.items ?? []).filter((i) => flags[i.id]?.starred).length,
-      items,
-    });
-  });
+  // Moved to server/src/routes/intel.js (see its header for the shape the remaining groups follow).
+  registerIntelRoutes(app, { getConfig, patchConfig, log });
 
-  // star / read / custom tags
-  app.patch('/api/intel/:id', (req, res) => {
-    const cfg = getConfig();
-    const { starred, read, note, tags } = req.body ?? {};
-    const flag = setFlag(cfg, req.params.id, {
-      ...(starred === undefined ? {} : { starred: !!starred }),
-      ...(read === undefined ? {} : { read: !!read }),
-      ...(note === undefined ? {} : { note: String(note).slice(0, 500) }),
-      // custom tags: search uses them (search.js buildIndex reads flags[id].tags)
-      ...(tags === undefined
-        ? {}
-        : {
-            tags: (Array.isArray(tags) ? tags : [])
-              .map((t) => String(t).trim().slice(0, 40))
-              .filter(Boolean)
-              .slice(0, 20),
-          }),
-    });
-    res.json({ ok: true, id: req.params.id, flag });
-  });
 
-  // this round vs the previous one
-  app.get('/api/intel/diff', (_req, res) => res.json(diffIntel(getConfig())));
 
-  // ── reachability ─────────────────────────────────────────────────
-  app.get('/api/probe', (_req, res) => {
-    const cfg = getConfig();
-    res.json({ cache: loadCache(cfg), ttlMinutes: cfg.ui?.probeTtlMinutes ?? 30 });
-  });
+  // Moved to server/src/routes/probe.js (see its header for the shape the remaining groups follow).
+  registerProbeRoutes(app, { getConfig, patchConfig, log, busyGuard });
 
-  app.post('/api/probe', busyGuard('probe'), async (req, res) => {
-    const cfg = getConfig();
-    const samples = Math.max(1, Math.min(10, Number(req.body?.samples) || cfg.ui?.probeSamples || DEFAULT_SAMPLES));
-    const modes = Array.isArray(req.body?.modes) && req.body.modes.length ? req.body.modes : ['direct', 'proxy'];
-    const ids = Array.isArray(req.body?.ids) && req.body.ids.length ? req.body.ids : req.body?.id ? [req.body.id] : null;
-    const oneUrl = String(req.body?.url ?? '').trim();
 
-    const targets = [];
-    if (oneUrl) {
-      targets.push({ id: oneUrl, url: oneUrl, label: oneUrl });
-    } else {
-      const all = effectiveSources(cfg);
-      const picked = ids ? all.filter((s) => ids.includes(s.id)) : all.filter((s) => s.enabled);
-      for (const s of picked) if (s.url) targets.push({ id: s.id, url: s.url, label: s.name?.zh ?? s.id, source: s });
-    }
-    if (!targets.length) return res.status(400).json({ error: '没有可测的目标 / nothing to probe' });
-    if (targets.length > 40) targets.length = 40;
 
-    // When no egress is specified, probe over **the egress these sources actually use**: when a source is set to
-    // Tor, "test the network" has to test Tor — otherwise judging whether a Tor-routed source should use Tor
-    // from a direct-connection latency produces the wrong conclusion (this trap really existed: the UI had a
-    // Tor option while the probe did not recognize it).
-    let effectiveModes = modes;
-    const perTarget = new Map();
-    if (!Array.isArray(req.body?.modes) || !req.body.modes.length) {
-      for (const t of targets) {
-        const want = String(t.source?.proxy ?? ''); // that dropdown on the sources page: '' = auto / direct / proxy / tor
-        const list = ['direct'];
-        if (want === 'proxy' || want === 'tor') list.push(want);
-        else {
-          if (cfg.proxy?.enabled) list.push('proxy');
-          // Tor is probed only when it **is genuinely going to be used**: otherwise "probe everything" makes
-          // every source pay one extra round of about 2.5s (bringing up a Tor circuit is slow to begin with),
-          // which is pure waste — and that time is better kept for the entries that really need Tor.
-          const torInPlay =
-            cfg?.observation?.enabled === true || cfg?.proxy?.mode === 'tor' || cfg?.proxy?.enableTor === true;
-          if (torInPlay && cfg.proxy?.torSocks) list.push('tor');
-        }
-        perTarget.set(t.id, list);
-      }
-      effectiveModes = null; // decided target by target
-    }
+  // Moved to server/src/routes/health.js (see its header for the shape the remaining groups follow).
+  registerHealthRoutes(app, { getConfig, patchConfig, log });
 
-    const out = [];
-    for (const t of targets) {
-      try {
-        // The allowance travels from the entry being probed (a custom source or a watch target carries it);
-        // nothing is probed with an allowance it did not itself declare.
-        const r = await probeUrl(t.url, {
-          cfg,
-          samples,
-          modes: perTarget.get(t.id) ?? effectiveModes ?? modes,
-          subject: t.source ?? null,
-        });
-        out.push({ id: t.id, label: t.label, sourceId: t.source?.id ?? null, ...r });
-      } catch (e) {
-        out.push({ id: t.id, label: t.label, url: t.url, error: e.message, at: new Date().toISOString() });
-      }
-    }
-    updateCache(cfg, out);
-    res.json({ ok: true, probed: out.length, samples, results: out });
-  });
 
-  // ── source health board ──────────────────────────────────────────
-  app.get('/api/health', (_req, res) => {
-    const cfg = getConfig();
-    const cache = loadCache(cfg);
-    const ttl = cfg.ui?.probeTtlMinutes ?? 30;
-    const intel = latestIntel(cfg, 1);
-    const lastRun = new Map((intel.sources ?? []).map((s) => [s.id, s]));
-    const sources = effectiveSources(cfg)
-      .filter((s) => s.enabled)
-      .map((s) => {
-        const p = cache[s.id];
-        const run = lastRun.get(s.id);
-        return {
-          id: s.id,
-          label: s.name?.zh ?? s.id,
-          category: s.category,
-          url: s.url,
-          egress: s.proxy ?? (cfg.proxy?.enabled ? 'proxy' : 'direct'),
-          direct: p?.modes?.direct ?? null,
-          proxy: p?.modes?.proxy ?? null,
-          verdict: p?.verdict ?? null,
-          hint: p?.hint ?? null,
-          probeAt: p?.at ?? null,
-          probeFresh: isFresh(p, ttl),
-          lastRunOk: run ? run.ok : null,
-          lastRunBytes: run?.bytes ?? null,
-        };
-      });
-    const problems = sources.filter(
-      (s) => (!s.probeAt || s.probeFresh === false) === false && (s.verdict === 'none' || s.lastRunOk === false)
-    );
-    res.json({
-      at: new Date().toISOString(),
-      probed: sources.filter((s) => s.probeAt).length,
-      total: sources.length,
-      problems,
-      sources,
-    });
-  });
 
-  // ── site thumbnails ──────────────────────────────────────────────
-  app.get('/api/thumb', async (req, res) => {
-    const cfg = getConfig();
-    const url = String(req.query.url ?? '').trim();
-    if (!url) return res.status(400).json({ error: 'url is required' });
-    const source = effectiveSources(cfg).find((s) => s.id === req.query.sourceId);
-    const mode = req.query.mode === 'screenshot' ? 'screenshot' : req.query.mode === 'icon' ? 'icon' : 'auto';
-    const r = await getThumbnail(url, {
-      cfg,
-      subject: source,
-      refresh: req.query.refresh === '1',
-      mode,
-      log,
-    });
-    if (req.query.json === '1') return res.json(r);
-    // "this site has no usable thumbnail" is a normal result, not an error — do not answer 404, which would make the frontend treat it as a failed request
-    if (!r.ok) return res.json({ ok: false, error: r.error, site: url });
-    res.json({ ok: true, ...r, image: `/api/thumb/file/${encodeURIComponent(r.file)}` });
-  });
+  // Moved to server/src/routes/thumb.js (see its header for the shape the remaining groups follow).
+  registerThumbRoutes(app, { getConfig, patchConfig, log });
 
-  app.get('/api/thumb/file/:file', (req, res) => {
-    const got = readThumb(getConfig(), req.params.file);
-    if (!got) return res.status(404).json({ error: 'not found' });
-    res.setHeader('cache-control', 'public, max-age=86400');
-    res.type(got.type).send(got.buf);
-  });
 
-  app.get('/api/thumb/list', (_req, res) => {
-    const cfg = getConfig();
-    res.json({ dir: 'thumbs/', files: listThumbs(cfg) });
-  });
 
-  // ── schedules ────────────────────────────────────────────────────
-  app.get('/api/schedule', (_req, res) => {
-    const cfg = getConfig();
-    const tasks = (cfg.schedule?.tasks ?? []).map((t) => ({
-      ...t,
-      nextFire: scheduler.computeTaskNextFire(t)?.toISOString() ?? null,
-      preview: scheduler.previewTask(t, 5),
-      lastFire: scheduler.readHistory(cfg, 200).find((h) => h.taskId === t.id)?.at ?? null,
-    }));
-    res.json({
-      tasks,
-      nextFire: scheduler.nextFire(),
-      running: scheduler.runningTasks(),
-      history: scheduler.readHistory(cfg, 30),
-      merchEveryDays: cfg.schedule?.merchEveryDays ?? 14,
-    });
-  });
+  // Moved to server/src/routes/schedule.js (see its header for the shape the remaining groups follow).
+  registerScheduleRoutes(app, { getConfig, patchConfig, log });
 
-  app.post('/api/schedule/run', async (req, res) => {
-    const cfg = getConfig();
-    const id = String(req.body?.id ?? '');
-    const task = (cfg.schedule?.tasks ?? []).find((t) => t.id === id);
-    if (!task) return res.status(404).json({ error: `unknown task: ${id}` });
-    if (runState.running) return res.status(409).json({ error: 'a run is already in progress' });
-    res.json({ ok: true, started: task.mode, task: task.id });
-    runOnce({ cfg: getConfig(), mode: task.mode })
-      .then((r) => scheduler.appendHistory(cfg, { taskId: task.id, name: task.name, manual: true, ok: !!r?.ok, error: r?.error ?? null }))
-      .catch((e) => log?.error(`manual scheduled run failed — ${e.message}`));
-  });
 
-  // ── alert destinations ───────────────────────────────────────────
-  app.get('/api/notify', (_req, res) => {
-    const cfg = getConfig();
-    res.json({
-      kinds: NOTIFY_KINDS,
-      desktop: cfg.notify?.desktop !== false,
-      targets: (cfg.notify?.targets ?? []).map(maskTarget),
-      count: (cfg.notify?.targets ?? []).length,
-      // quiet state and the backlog queue: the UI must see at a glance "are we quiet right now, and how many are queued"
-      quiet: inQuietHours(cfg, { level: 'info' }),
-      queue: readQueue(cfg),
-      dedupeMinutes: cfg.notify?.dedupeMinutes ?? 0,
-    });
-  });
 
-  // manually flush the queued notifications (force ignores the quiet hours)
-  app.post('/api/notify/flush', async (req, res) => {
-    const cfg = getConfig();
-    const r = await flushNotifyQueue(cfg, log, { force: req.body?.force === true });
-    res.json({ ok: true, ...r, queue: readQueue(cfg) });
-  });
+  // Moved to server/src/routes/notify.js (see its header for the shape the remaining groups follow).
+  registerNotifyRoutes(app, { getConfig, patchConfig, log, persist });
 
-  app.post('/api/notify/new', (req, res) => {
-    let cfg = getConfig();
-    const t = newTarget(req.body?.kind ?? 'bark', req.body?.overrides ?? {});
-    cfg.notify = cfg.notify ?? {};
-    cfg.notify.targets = [...(cfg.notify.targets ?? []), t];
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, target: maskTarget(t) });
-  });
 
-  // try one push with a "not yet saved target"
-  app.post('/api/notify/test', async (req, res) => {
-    const cfg = getConfig();
-    const wanted = sanitizeNotifyTarget(req.body?.target ?? {}, 0);
-    const saved = (cfg.notify?.targets ?? []).find((t) => t.id === wanted.id);
-    // what the frontend sends back is a mask, so never send with ***
-    const merged = { ...(saved ?? {}), ...wanted, enabled: true, on: 'always' };
-    for (const k of ['key', 'token', 'chatId', 'webhookUrl']) {
-      // Same rule as everywhere else, now through the one shared predicate: a masked field means "the saved
-      // one". The local regex it replaces only recognised a run of asterisks, so the partial mask the
-      // notifier sends for a webhook URL ('https://host/***') was pushed as a live URL.
-      if (!wanted[k] || isMaskedSecret(wanted[k])) merged[k] = saved?.[k] ?? wanted[k] ?? '';
-    }
-    const r = await notify({ ...cfg, notify: { targets: [merged] } }, log, {
-      title: "Vtuber's Monitor Link 测试通知",
-      body: '这条是测试消息。看到它就说明推送通道是通的。',
-      level: 'info',
-    });
-    res.json({ ok: r.results[0]?.ok === true, result: r.results[0] ?? null });
-  });
 
   // ── proxy control (mihomo / Clash) ───────────────────────────────
   app.get('/api/proxy/control', async (_req, res) => {
@@ -985,21 +606,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
   });
 
-  // ── feature extraction (needs an LLM) ────────────────────────────
-  app.get('/api/features', (_req, res) => res.json(featureStats(getConfig())));
+  // Moved to server/src/routes/features.js (see its header for the shape the remaining groups follow).
+  registerFeaturesRoutes(app, { getConfig, patchConfig, log, busyGuard });
 
-  app.post('/api/features/extract', busyGuard('feature extraction'), async (req, res) => {
-    const cfg = getConfig();
-    const items = applyFeatures(latestIntel(cfg, 400).items ?? [], loadFeatureCache(cfg));
-    const r = await extractFeatures(cfg, items, log);
-    res.json({
-      ok: !r.error,
-      error: r.error ?? null,
-      extracted: r.extracted,
-      cached: r.skipped,
-      stats: featureStats(cfg),
-    });
-  });
+
 
   // ── Tor egress ───────────────────────────────────────────────────
   app.post('/api/proxy/tor', async (req, res) => {
@@ -1035,76 +645,15 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  // ── client error beacon ──────────────────────────────────────────
-  // When a page throws, the whole tree gets unmounted and the page turns blank, while the server knew nothing about it.
-  // The frontend already installs the listener in index.html; this side only persists to disk + writes the server log.
-  app.post('/api/client-log', (req, res) => {
-    const cfg = getConfig();
-    const b = req.body ?? {};
-    const entry = {
-      at: b.at ?? new Date().toISOString(),
-      kind: String(b.kind ?? 'unknown').slice(0, 24),
-      message: String(b.message ?? '').slice(0, 800),
-      source: b.source ? String(b.source).slice(0, 200) : null,
-      line: b.line ?? null,
-      col: b.col ?? null,
-      stack: b.stack ? String(b.stack).slice(0, 1200) : null,
-      href: b.href ? String(b.href).slice(0, 200) : null,
-      ua: b.ua ? String(b.ua).slice(0, 160) : null,
-    };
-    try {
-      const f = path.join(resolveDir(cfg, 'logsDir'), 'client-errors.jsonl');
-      fs.mkdirSync(path.dirname(f), { recursive: true });
-      fs.appendFileSync(f, JSON.stringify(entry) + '\n', 'utf8');
-    } catch {
-      /* keep going even when the write to disk fails */
-    }
-    log?.warn(`client ${entry.kind}: ${entry.message}${entry.source ? ` @ ${entry.source}:${entry.line}` : ''}`);
-    res.json({ ok: true });
-  });
+  // Moved to server/src/routes/client-log.js (see its header for the shape the remaining groups follow).
+  registerClientLogRoutes(app, { getConfig, patchConfig, log });
 
-  // read back the recorded frontend errors (handy for troubleshooting)
-  app.get('/api/client-log', (_req, res) => {
-    const cfg = getConfig();
-    const f = path.join(resolveDir(cfg, 'logsDir'), 'client-errors.jsonl');
-    let entries = [];
-    try {
-      if (fs.existsSync(f)) {
-        entries = fs
-          .readFileSync(f, 'utf8')
-          .trim()
-          .split('\n')
-          .filter(Boolean)
-          .slice(-100)
-          .map((l) => {
-            try {
-              return JSON.parse(l);
-            } catch {
-              return null;
-            }
-          })
-          .filter(Boolean)
-          .reverse();
-      }
-    } catch {
-      /* ignore */
-    }
-    res.json({ count: entries.length, entries });
-  });
 
-  // ── entities ─────────────────────────────────────────────────────
-  // Aggregate the names pulled out by feature extraction into objects: which items, which games, which events they showed up in.
-  app.get('/api/entities', (req, res) => {
-    const cfg = getConfig();
-    res.json(entityStats(cfg, loadFlags(cfg)));
-  });
 
-  app.get('/api/entities/:name', (req, res) => {
-    const cfg = getConfig();
-    const detail = entityDetail(cfg, req.params.name, { flags: loadFlags(cfg) });
-    if (!detail) return res.status(404).json({ error: `no entity named ${req.params.name}` });
-    res.json(detail);
-  });
+  // Moved to server/src/routes/entities.js (see its header for the shape the remaining groups follow).
+  registerEntitiesRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // ── bulk source toggles ──────────────────────────────────────────
   // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature exists because of exactly that trap)
@@ -1125,80 +674,20 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, changed: picked.length, action, sources: effectiveSources(cfg) });
   });
 
-  // ── reports ──────────────────────────────────────────────────────
-  app.get('/api/reports', (_req, res) => res.json(listReports(getConfig())));
+  // Moved to server/src/routes/reports.js (see its header for the shape the remaining groups follow).
+  registerReportsRoutes(app, { getConfig, patchConfig, log });
 
-  // note: this has to be registered before /api/reports/:name, otherwise "search" is treated as a file name
-  app.get('/api/reports/search', (req, res) => {
-    res.json({ query: req.query.q ?? '', hits: searchReports(getConfig(), req.query.q) });
-  });
 
-  app.get('/api/reports/:name/export', (req, res) => {
-    const format = ['json', 'docx'].includes(String(req.query.format)) ? String(req.query.format) : 'html';
-    const out = exportReport(getConfig(), req.params.name, format);
-    if (!out) return res.status(404).json({ error: 'not found' });
-    res.setHeader('content-disposition', `attachment; filename="${out.file}"`);
-    // the body may be a string (html/json) or a Buffer (docx)
-    res.type(out.mime).send(out.buffer ?? out.body);
-  });
-
-  // line-by-line comparison of two reports
-  app.get('/api/reports/diff', (req, res) => {
-    const cfg = getConfig();
-    const a = String(req.query.from ?? '');
-    const b = String(req.query.to ?? '');
-    // compare via the markdown source: that lines up no matter whether the report's main file is html/adoc/json
-    const left = a ? markdownSource(cfg, a) : null;
-    const right = b ? markdownSource(cfg, b) : null;
-    if (left === null || right === null) return res.status(404).json({ error: 'one of the reports was not found' });
-    const lines = diffLines(left, right);
-    const stats = diffStats(lines);
-    res.json({ from: a, to: b, stats, hunks: diffHunks(lines, 4) });
-  });
-
-  // The report's main file may be .html / .adoc / .md / .json; give the right MIME by extension so the
-  // frontend can drop a .html straight into an iframe preview (the same kind of file you would open in VSCode).
-  const REPORT_MIME = {
-    html: 'text/html; charset=utf-8',
-    json: 'application/json; charset=utf-8',
-    md: 'text/markdown; charset=utf-8',
-    adoc: 'text/plain; charset=utf-8',
-  };
-  app.get('/api/reports/:name', (req, res) => {
-    const name = String(req.params.name ?? '');
-    const body = readReport(getConfig(), name);
-    if (body === null) return res.status(404).json({ error: 'not found' });
-    const ext = path.extname(name).slice(1).toLowerCase();
-    res.type(REPORT_MIME[ext] ?? 'text/plain; charset=utf-8').send(body);
-  });
 
   // Moved to server/src/routes/egress.js (see its header for the shape the remaining groups follow).
   registerEgressRoutes(app, { getConfig, patchConfig, log });
 
 
 
-  // ── image tagging ────────────────────────────────────────────────
-  // The core lives in vision.js (cache keyed by image URL, tolerant parsing, bounded concurrency),
-  // and tools/vision-test.mjs verifies the whole path end to end against a local fake vision model (no Key spent, no image sent out).
-  app.get('/api/vision/stats', (_req, res) => {
-    const cfg = getConfig();
-    res.json({ ok: true, ...visionStats(cfg), ready: visionReady(cfg) });
-  });
+  // Moved to server/src/routes/vision.js (see its header for the shape the remaining groups follow).
+  registerVisionRoutes(app, { getConfig, patchConfig, log });
 
-  // tag the images attached to the latest intel (with the feature off it refuses outright and never quietly sends an image out)
-  app.post('/api/vision/tag', async (req, res) => {
-    const cfg = getConfig();
-    const ready = visionReady(cfg);
-    if (!ready.ok) return res.status(400).json({ ok: false, error: ready.reason });
-    const data = latestIntel(cfg, Number(req.body?.scan ?? 300));
-    const r = await tagItems(cfg, {
-      items: data.items ?? [],
-      limit: Number(req.body?.limit ?? cfg.vision?.runLimit ?? 40),
-      force: req.body?.force === true,
-      log,
-    });
-    res.json({ ...r, ...visionStats(cfg) });
-  });
+
 
   // Moved to server/src/routes/share.js (see its header for the shape the remaining groups follow).
   registerShareRoutes(app, { getConfig, patchConfig, log, busyGuard });
@@ -1210,140 +699,30 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── README (shown inside the app) ────────────────────────────────
-  // The UI has an "About" panel that renders these files and switches language instantly, so a
-  // reader never has to leave the app (and never has to find the file on disk).
-  //
-  // Which documents it may show, and what each one is called, is `server/src/docs.js`: a fixed allowlist, so the
-  // caller picks a *key* in it and never a path. `privacy` and `security` joined the Readme there, which is what
-  // makes the privacy posture readable inside the app rather than only in the package folder. The document's
-  // title is its own first heading, so the panel needs no new i18n key and the label cannot drift from the file.
-  // In a packaged build the files sit next to app/ (build-portable copies them); from a source checkout they are
-  // at the repo root. Both candidates are tried, nothing else.
-  app.get('/api/readme', (req, res) => {
-    const lang = docLang(req.query.lang);
-    const roots = [APP_ROOT, path.join(APP_ROOT, '..'), process.cwd()];
-    // The one generated document: what *this* install is configured to contact and where its data lives. Measured
-    // per request (directory sizes are read-only and bounded) and never cached, because the answer changes the
-    // moment the user edits a setting - a stale privacy page would be worse than none.
-    const cfg = getConfig();
-    const sizes = {};
-    for (const d of DATA_DIRS) {
-      const m = measureDir(d.configured ? resolveDir(cfg, d.key) : '', { fs });
-      if (m) sizes[d.key] = m;
-    }
-    const generated = { machine: () => privacyMarkdown(privacyFacts(cfg), { sizes }) };
-    const result = readDocs(req.query.doc, lang, roots, generated);
-    if (!result.found) {
-      return res.status(404).json({
-        ok: false,
-        error: `no ${result.wanted} document next to the app`,
-        documents: result.available,
-      });
-    }
-    const requested = pickDoc(req.query.doc);
-    res.json({
-      ok: true,
-      doc: result.wanted,
-      lang: result.lang,
-      file: result.found.file,
-      title: result.found.title,
-      // The languages this *document* exists in: the Readmes in two, everything else in one. The panel's language
-      // switch is built from this, which is why a single-language document offers no switch rather than offering
-      // one that would silently show the other file.
-      available: Object.keys(requested.files),
-      documents: result.available,
-      bytes: Buffer.byteLength(result.found.markdown, 'utf8'),
-      markdown: result.found.markdown,
-    });
-  });
+  // Moved to server/src/routes/readme.js (see its header for the shape the remaining groups follow).
+  registerReadmeRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // Moved to server/src/routes/vdb.js (see its header for the shape the remaining groups will follow).
   registerVdbRoutes(app, { getConfig, patchConfig, log });
 
 
 
-  // ── LLM usage & budget ───────────────────────────────────────────
-  // Before this no usage was visible in the UI at all (the usage was being fetched but nobody aggregated it), yet this is where the money goes.
-  // Report only **what is visible**: a call whose usage cannot be read is counted separately, never guessed at.
-  app.get('/api/cost', (req, res) => {
-    const cfg = getConfig();
-    const days = Math.max(1, Math.min(90, Number(req.query.days ?? 14)));
-    try {
-      const { rows, badLines } = loadUsage(cfg);
-      const summary = summarizeUsage(rows, { days, cfg });
-      const budget = budgetStatus(cfg, summary);
-      res.json({ ok: true, ...summary, budget, badLines, summary: costSummary(summary, budget) });
-    } catch (e) {
-      res.json({ ok: false, error: e.message, today: { tokens: 0, calls: 0 }, total: { tokens: 0, calls: 0 }, days: [], models: [] });
-    }
-  });
+  // Moved to server/src/routes/cost.js (see its header for the shape the remaining groups follow).
+  registerCostRoutes(app, { getConfig, patchConfig, log });
 
-  // ── group view ───────────────────────────────────────────────────
-  // "how is this agency doing right now" — group the followed people by agency into one block: a daily heat map,
-  // simultaneous appearances, shared silence, and each person's anomaly relative to their own rhythm. A flat item
-  // stream simply cannot answer that question.
-  app.get('/api/groups', (req, res) => {
-    const cfg = getConfig();
-    const days = Math.max(7, Math.min(180, Number(req.query.days ?? 30)));
-    let db = null;
-    try {
-      db = openArchive(cfg);
-      const series = peopleSeries(db, { days, cfg });
-      const view = groupView({
-        byDay: series.byDay,
-        people: cfg.people ?? [],
-        days,
-        rules: cfg.silence ?? {},
-        now: new Date(),
-        cfg,
-      });
-      res.json({ ok: true, ...view, hasAgency: view.groups.length > 0 });
-    } catch (e) {
-      res.json({ ok: false, error: e.message, groups: [], ungrouped: null, people: (cfg.people ?? []).length });
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  });
 
-  // ── silence ──────────────────────────────────────────────────────
-  // "no activity" is intel too: this lays out "who stopped, for how long, and whether the whole agency stopped together".
-  // The criteria are in silence.js (relative to each person's own rhythm); this side only fetches, computes and returns.
-  app.get('/api/silence', (req, res) => {
-    const cfg = getConfig();
-    const days = Math.max(7, Math.min(365, Number(req.query.days ?? cfg?.silence?.basisDays ?? 60)));
-    let db = null;
-    try {
-      db = openArchive(cfg);
-      const series = peopleSeries(db, { days, cfg });
-      const result = detectSilence({
-        byDay: series.byDay,
-        people: cfg.people ?? [],
-        rules: cfg.silence ?? {},
-        now: new Date(),
-        cfg,
-      });
-      res.json({
-        ok: true,
-        days,
-        people: (cfg.people ?? []).length,
-        ...result,
-        summary: silenceSummary(result),
-      });
-    } catch (e) {
-      res.json({ ok: false, error: e.message, people: (cfg.people ?? []).length, person: [], group: [], checked: 0, skippedNoBaseline: 0 });
-    } finally {
-      try {
-        db?.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  });
+
+  // Moved to server/src/routes/groups.js (see its header for the shape the remaining groups follow).
+  registerGroupsRoutes(app, { getConfig, patchConfig, log });
+
+
+
+  // Moved to server/src/routes/silence.js (see its header for the shape the remaining groups follow).
+  registerSilenceRoutes(app, { getConfig, patchConfig, log });
+
+
 
   app.get('/api/archive/series', (req, res) => {
     const cfg = getConfig();

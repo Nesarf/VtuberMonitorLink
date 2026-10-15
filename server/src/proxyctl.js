@@ -67,13 +67,24 @@ export function coreConfigFromCommandLine(commandLine, executablePath = '') {
  * it is a credential, it never leaves the process, and the caller only needs to know whether to send it.
  */
 export function controllerFromConfig(text) {
+  const source = String(text ?? '');
+  if (source.trim() === '') return { ok: false, reason: 'empty' };
   let doc = null;
   try {
-    doc = YAML.parse(String(text ?? ''));
+    doc = YAML.parse(source);
   } catch (e) {
     return { ok: false, reason: 'unparsable', detail: e.message.split('\n')[0] };
   }
-  if (!doc || typeof doc !== 'object') return { ok: false, reason: 'empty' };
+  if (doc === null || doc === undefined) return { ok: false, reason: 'empty' };
+  if (typeof doc !== 'object') {
+    // A document that parses into a scalar has content this function cannot read a controller out of, and that is
+    // not the same thing as an empty file. Measured on this machine: MAOMAOYUN keeps `config.yaml` as **340928
+    // bytes of base64** - every byte printable, no newlines - and YAML reads that as one long string. Reporting it
+    // as "empty" sends the user looking for a file that is not empty and cannot be edited as YAML, instead of at
+    // the two things that would actually help: the client's own controller setting, or filling the address in by
+    // hand. The byte count travels with the verdict so the message can say how much content there was.
+    return { ok: false, reason: 'not-a-mapping', kind: typeof doc, bytes: source.length };
+  }
   const raw = doc['external-controller'];
   const hasSecret = typeof doc.secret === 'string' && doc.secret.trim() !== '';
   if (raw === undefined || raw === null || String(raw).trim() === '') {
@@ -127,13 +138,21 @@ export function controlDiagnosis({ cores = [], config = null, probed = [] } = {}
       message: `发现代理核心 ${core.name}，配置文件 ${config.file} 无法解析（${config.detail}），无法从中读出控制接口。`,
     };
   }
+  if (config?.reason === 'not-a-mapping') {
+    return {
+      code: 'config-not-yaml',
+      message:
+        `发现正在运行的代理核心 ${core.name}，配置文件 ${config.file} 里有 ${config.bytes} 字节内容，但它不是 YAML 配置` +
+        `（解析出来是 ${config.kind}）—— 有些客户端把这个文件加密或编码保存，所以从里面读不到 external-controller。` +
+        '两种修法：在该客户端自己的设置里查看/启用控制接口（external-controller），或在“设置 → 代理”里手动填写控制接口地址与密钥。',
+    };
+  }
   if (config?.reason === 'empty') {
     return {
       code: 'config-empty',
       message:
-        `发现正在运行的代理核心 ${core.name}，但它的配置文件 ${config.file} 读出来是空的 - ` +
-        '有些客户端把自己的配置存在别处（或加密保存），这个文件里没有 external-controller。' +
-        '请在“设置 → 代理”里手动填写控制接口地址与密钥。',
+        `发现正在运行的代理核心 ${core.name}，但它的配置文件 ${config.file} 是空的（0 字节或只有空白）—— ` +
+        '内核还没写出配置，或客户端把真正的配置存在别处。请在“设置 → 代理”里手动填写控制接口地址与密钥。',
     };
   }
   return {

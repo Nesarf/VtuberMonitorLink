@@ -88,6 +88,21 @@ t('a configuration without a controller says so, and says whether it had a secre
   assert.equal(controllerFromConfig('external-controller: ""\n').reason, 'no-external-controller');
 });
 
+t('a file with content that is not a YAML mapping is not called empty', () => {
+  // The measurement this exists for: 340928 bytes of base64 parse into one long string, and the first version of
+  // this function called that "empty" - which sends the user looking for an empty file that is not there, and
+  // hides the one fact that matters (the client encodes its configuration).
+  const blob = 'j86WF8GtqoPvP7+pRUhcnNQzOrcxkZCJ0ZVUjr4I'.repeat(40);
+  const verdict = controllerFromConfig(blob);
+  assert.equal(verdict.reason, 'not-a-mapping', JSON.stringify(verdict));
+  assert.equal(verdict.bytes, blob.length, 'the byte count travels with the verdict, so the message can say it');
+  assert.equal(verdict.kind, 'string');
+  // controls: a genuinely empty file is still empty, and a real mapping still yields its controller
+  assert.equal(controllerFromConfig('').reason, 'empty');
+  assert.equal(controllerFromConfig('   \n  ').reason, 'empty');
+  assert.equal(controllerFromConfig('external-controller: 127.0.0.1:9090').ok, true);
+});
+
 t('the diagnosis names the branch, the core and the fix, for every way discovery can fail', () => {
   // Asserted by `code` and by ASCII fragments (the core's name, its configuration file, the ports). The message
   // itself is Chinese like the rest of this feature's API errors, and an assertion that looks for Chinese text
@@ -140,9 +155,19 @@ t('the diagnosis names the branch, the core and the fix, for every way discovery
   });
   assert.equal(empty.code, 'config-empty', 'an empty parse must not be reported as an unreadable file');
 
+  // Content that is not a YAML mapping is its own branch with its own advice, and the byte count is what keeps
+  // "empty" from being a plausible reading of it.
+  const notYaml = controlDiagnosis({
+    cores: [{ name: 'mihomo-windows-386.exe', file: '<drive>:\\c\\config.yaml' }],
+    config: { ok: false, reason: 'not-a-mapping', kind: 'string', bytes: 340928, file: '<drive>:\\c\\config.yaml' },
+  });
+  assert.equal(notYaml.code, 'config-not-yaml', 'content that is not YAML must not be reported as an empty file');
+  assert.match(notYaml.message, /340928/, 'and it says how much content there was');
+  assert.notEqual(notYaml.code, empty.code, 'the two cases must not share one branch');
+
   // every branch is distinct, so a test can tell them apart rather than matching one sentence
-  const codes = new Set([noCore.code, noController.code, silent.code, unparsable.code, unreadable.code, empty.code]);
-  assert.equal(codes.size, 6, 'the six ways discovery can fail must carry six codes: ' + [...codes].join(', '));
+  const codes = new Set([noCore.code, noController.code, silent.code, unparsable.code, unreadable.code, empty.code, notYaml.code]);
+  assert.equal(codes.size, 7, 'the seven ways discovery can fail must carry seven codes: ' + [...codes].join(', '));
 });
 
 process.stdout.write(`\nproxyctl: ${pass} ok, ${fail} failed\n`);

@@ -85,6 +85,9 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerEgressRoutes } from './routes/egress.js';
+import { registerAdviceRoutes } from './routes/advice.js';
+import { registerSearchRoutes } from './routes/search.js';
 import { registerPeopleRoutes } from './routes/people.js';
 import { registerVdbRoutes } from './routes/vdb.js';
 // The live half of the privacy page: what this install contacts and where its data lives. See the module header
@@ -722,26 +725,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     }
   });
 
-  app.get('/api/advice', (_req, res) => res.json({ files: listAdvice(getConfig()) }));
+  // Moved to server/src/routes/advice.js (see its header for the shape the remaining groups follow).
+  registerAdviceRoutes(app, { getConfig, patchConfig, log });
 
-  // clicking it opens a readable web page (?raw=1 fetches the raw markdown)
-  app.get('/api/advice/:file', (req, res) => {
-    const raw = req.query.raw === '1';
-    const got = readAdvice(getConfig(), req.params.file, !raw);
-    if (!got) return res.status(404).json({ error: 'not found' });
-    res.type(got.mime).send(raw ? got.markdown : got.html);
-  });
 
-  app.delete('/api/advice/:file', (req, res) => {
-    const cfg = getConfig();
-    const p = path.join(adviceDir(cfg), path.basename(req.params.file));
-    try {
-      fs.rmSync(p, { force: true });
-    } catch {
-      /* ignore */
-    }
-    res.json({ ok: true, removed: path.basename(req.params.file) });
-  });
 
   // ── intel items ──────────────────────────────────────────────────
   app.get('/api/intel', (req, res) => {
@@ -1159,88 +1146,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.json({ ok: true, config: publicConfig(next) });
   });
 
-  // ── search ───────────────────────────────────────────────────────
-  // Purely local matching: no LLM and no network required. The LLM is only used by the optional "help me recognise this person" assistant.
-  app.post('/api/search', (req, res) => {
-    const cfg = getConfig();
-    const flags = loadFlags(cfg);
-    res.json(search(cfg, req.body ?? {}, flags));
-  });
+  // Moved to server/src/routes/search.js (see its header for the shape the remaining groups follow).
+  registerSearchRoutes(app, { getConfig, patchConfig, log });
 
-  app.get('/api/search/tags', (_req, res) => {
-    const cfg = getConfig();
-    res.json(tagCloud(cfg, loadFlags(cfg)));
-  });
 
-  app.put('/api/search/tags', (req, res) => {
-    const cfg = getConfig();
-    const tags = req.body?.tags ?? {};
-    if (!tags || typeof tags !== 'object') return res.status(400).json({ error: 'tags must be an object' });
-    const clean = {};
-    for (const [k, v] of Object.entries(tags)) {
-      const key = String(k).slice(0, 40);
-      if (!key) continue;
-      clean[key] = (Array.isArray(v) ? v : []).map((x) => String(x).slice(0, 40)).slice(0, 20);
-    }
-    saveVocab(cfg, clean);
-    res.json({ ok: true, tags: loadVocab(cfg) });
-  });
-
-  // optional assistant: for when only the traits are remembered and the name is forgotten. With no LLM configured it tells the frontend plainly that it is unusable.
-  app.post('/api/search/assist', async (req, res) => {
-    const cfg = getConfig();
-    const p = activeProvider(cfg);
-    if (!p.apiKey) {
-      return res.json({
-        ok: false,
-        needsLlm: true,
-        error: '「帮我认人」需要配置 LLM；普通检索不需要，直接用关键词和标签就行',
-      });
-    }
-    const description = String(req.body?.description ?? '').slice(0, 2000);
-    if (!description.trim()) return res.status(400).json({ error: 'description is required' });
-
-    const sample = corpusSample(cfg, 150);
-    const req2 = await checkedChatRequest(p, [
-      {
-        role: 'system',
-        content:
-          '你是 VTuber 情报检索助手。用户只记得一些特征（外貌/声音/直播内容/名场面/所属关系），忘了名字。' +
-          '请给出候选，并给出**可直接用于检索的关键词**。只输出 JSON，不要别的话。',
-      },
-      {
-        role: 'user',
-        content:
-          `用户描述：${description}\n\n` +
-          `本地已收集的条目样本（可能相关，也可能无关）：\n${sample.join('\n')}\n\n` +
-          '请输出：{"candidates":[{"name":"可能的名字","reason":"为什么这么猜","confidence":0-1}],' +
-          '"searchTerms":["可直接检索的词"],"tags":["可能的标签"]}',
-      },
-    ], {}, cfg);
-    // The refusal is the answer here too: this route talks to a provider profile that arrived in the request
-    // body, so the endpoint is exactly as user-supplied as the one the settings page tests.
-    if (!req2.ok) return res.json({ ok: false, error: req2.error });
-    try {
-      const r = await netFetch(
-        req2.url,
-        { method: 'POST', headers: req2.headers, body: JSON.stringify(req2.body), signal: AbortSignal.timeout(120000) },
-        { cfg, policy: providerPolicy(p, cfg) }
-      );
-      const text = await r.text();
-      if (!r.ok) return res.json({ ok: false, error: `LLM HTTP ${r.status} — ${text.slice(0, 200)}` });
-      const content = JSON.parse(text)?.choices?.[0]?.message?.content ?? '';
-      const m = /\{[\s\S]*\}/.exec(content);
-      let parsed = null;
-      try {
-        parsed = m ? JSON.parse(m[0]) : null;
-      } catch {
-        /* the model did not hand back clean JSON */
-      }
-      res.json({ ok: true, provider: { name: p.name, model: req2.body.model }, raw: content, ...(parsed ?? {}) });
-    } catch (e) {
-      res.json({ ok: false, error: e.message });
-    }
-  });
 
   // ── Office export / Word & Excel ─────────────────────────────────
   // OOXML hand-written in pure Node, with no dependency on Office / COM / Python — a portable exe cannot assume what the target machine has installed.
@@ -1455,40 +1364,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type(REPORT_MIME[ext] ?? 'text/plain; charset=utf-8').send(body);
   });
 
-  // ── automatic per-site egress ────────────────────────────────────
-  // Every site picks direct or proxy automatically by "equivalent latency = avg × (1 + loss × 4)",
-  // with hysteresis (no switch unless the advantage is over 20%, to avoid flapping). The verdict + reason + scores live here.
-  app.get('/api/egress', (_req, res) => {
-    const cfg = getConfig();
-    const snap = egressSnapshot(cfg);
-    const byKey = {};
-    for (const d of snap.decisions) byKey[d.key] = d;
-    res.json({ ...snap, byKey });
-  });
+  // Moved to server/src/routes/egress.js (see its header for the shape the remaining groups follow).
+  registerEgressRoutes(app, { getConfig, patchConfig, log });
 
-  app.post('/api/egress/decide', async (req, res) => {
-    const cfg = getConfig();
-    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-    const sources = effectiveSources(cfg).filter((s) => !ids.length || ids.includes(s.id));
-    const results = [];
-    for (const s of sources) {
-      try {
-        const p = await probeUrl(s.url, { cfg, samples: Number(req.body?.samples ?? 3), subject: s });
-        updateCache(cfg, [{ id: s.id, label: s.name?.zh ?? s.id, sourceId: s.id, ...p }]);
-        const d = egressDecision(cfg, s);
-        results.push({ id: s.id, mode: d?.mode ?? null, reason: d?.reason ?? '', confidence: d?.confidence ?? 'none' });
-      } catch (e) {
-        results.push({ id: s.id, mode: null, reason: e.message, confidence: 'none' });
-      }
-    }
-    res.json({ ok: true, results, ...egressSnapshot(cfg) });
-  });
 
-  app.post('/api/egress/clear', (_req, res) => {
-    const cfg = getConfig();
-    egressClear(cfg);
-    res.json({ ok: true });
-  });
 
   // ── image tagging ────────────────────────────────────────────────
   // The core lives in vision.js (cache keyed by image URL, tolerant parsing, bounded concurrency),

@@ -529,6 +529,10 @@ export const URL_POLICY_CALLERS = [
   { file: 'server/src/llm.js', what: 'the LLM endpoint (every profile, every mode)', via: 'direct' },
   { file: 'server/src/vdb.js', what: 'the VDB roster endpoint', via: 'direct' },
   { file: 'server/src/probe.js', what: 'the egress probes (TCP connect and the HTTP TTFB tier)', via: 'direct' },
+  // Moved out of the factory in the route split (server/src/routes/). It reaches the user-supplied LLM endpoint
+  // through llm.js's checkedChatRequest, which is where the policy runs, so it is inventoried like its neighbours -
+  // and the inventory is what said so: the move left it unlisted and integrity-check refused it by name.
+  { file: 'server/src/routes/search.js', what: 'the natural-language search route (LLM-assisted)', via: 'net.js' },
   { file: 'server/src/thumbs.js', what: 'the homepage / icon / og:image fetches, and the screenshot', via: 'direct' },
   // The four below send an address that a *shared* builder assembled, which is why the policy is not called
   // inside them: one check in one place (llm.js's checkedChatRequest, net.js's fetch) is what makes "every one

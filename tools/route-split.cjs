@@ -176,7 +176,15 @@ if (usedOther.length) {
 // there is the thing a moved block has to reach back for; anything declared deeper than that is local to some
 // other handler and cannot be the problem. `app` itself lives at that level too and is what the registrar is
 // handed, so it is named as given rather than reported.
-const declFactoryRe = /^ {2}(?:export\s+)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/;
+// (?: {2})? accepts column 0 as well as the factory's own two-space scope, and accepts nothing else - three
+// spaces match neither, so this does not widen into the "any indentation" version that drowned in false stops.
+//
+// Column 0 matters because server.js keeps module-scope helpers OUTSIDE createApp: unction eventWhy(cluster)
+// sits at line 184 with no indentation at all, and that was the whole of BUGS #107. A moved /api/events called
+// ventWhy from inside clusters.map(...), so nothing threw until a cluster existed - which is why the endpoint
+// traversal passed (no history, empty clusters, the call never happens) and the UI walk failed (it really runs a
+// report first). The net simply could not see a name that is declared at column 0.
+const declFactoryRe = /^(?: {2})?(?:export\s+)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/;
 const destructureRe = /^ {2}(?:const|let|var)\s*\{([^}]*)\}/;
 const GIVEN = new Set(['app', ...ALLOWED_CTX]);
 const declFactory = new Set();

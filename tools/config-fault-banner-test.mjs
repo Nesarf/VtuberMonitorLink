@@ -66,6 +66,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -119,9 +120,15 @@ const enginePresent = !!enginePath && fs.existsSync(enginePath);
 
 const APP_DIR = path.join(ROOT, 'dist', 'VtuberMonitorLink');
 const EXE = path.join(APP_DIR, process.platform === 'win32' ? 'VtuberMonitorLink.exe' : 'VtuberMonitorLink');
-// Scratch goes to the machine's cache drive, never the system one: the app writes logs and reports beside
-// itself, and this fixture is deliberately short-lived.
-const TMP_ROOT = process.env.VML_TEST_TMP || 'E:\\DaShaoHuo\\cache\\tmp';
+// Scratch goes under the OS temp directory, and `VML_TEST_TMP` overrides it.
+//
+// This line used to hard-code one machine's cache drive, which the repository's own sanitize check refused
+// (correctly: a hard-coded `E:\...` in a published tool is a machine path in a public repository, and it was
+// the only thing that made `npm run sanitize-check` fail - the check job of CI was red on it while the two
+// matrix legs passed). The location policy for *my* machine is "scratch under the cache drive, never the
+// system one", and that is what the environment variable is for: the policy belongs to the machine that runs
+// it, not to the file that ships. The fixture itself is a config file and a log, kilobytes, short-lived.
+const TMP_ROOT = process.env.VML_TEST_TMP || path.join(os.tmpdir(), 'vml-config-fault');
 const TMP_PREFIX = 'vml-config-fault-';
 
 /**

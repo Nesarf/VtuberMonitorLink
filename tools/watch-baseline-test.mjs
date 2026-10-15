@@ -530,8 +530,20 @@ async function caseSurface() {
   await ta('the condition is exposed, not only logged', async () => {
     assert.equal(typeof W.baselineHealthSnapshot, 'function');
     assert.equal(typeof W.setBaselineHealthLogger, 'function');
-    const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
-    assert.match(serverSrc, /baselineHealth: baselineHealthSnapshot\(\)/, 'the watch route does not serve the condition');
+    // Read the factory AND the route modules, because the property here is "the watch route serves the condition",
+    // not "that text lives in server.js". The route group moved to server/src/routes/watch.js, and a check that
+    // named one file would report a moved route as a missing one - which is what it did, after a rebuild.
+    // Same widening as integrity-check's check-login guard and tools/login-check-test.mjs.
+    const routeDir = path.join(ROOT, 'server/src/routes');
+    const sources = [path.join(ROOT, 'server/src/server.js')].concat(
+      fs.existsSync(routeDir)
+        ? fs.readdirSync(routeDir).filter((f) => f.endsWith('.js')).map((f) => path.join(routeDir, f))
+        : [],
+    );
+    const served = sources.some((f) =>
+      /baselineHealth: baselineHealthSnapshot\(\)/.test(fs.readFileSync(f, 'utf8')),
+    );
+    assert.ok(served, 'the watch route does not serve the condition (searched server.js and ' + sources.length + ' file(s))');
   });
 }
 

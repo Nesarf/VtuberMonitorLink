@@ -303,6 +303,12 @@ async function main() {
 
     // This one really has to connect out (example.com). The network wobbles, so retry twice;
     // if it is still unreachable, skip it explicitly.
+    // Establish the precondition in this run instead of inheriting it. "The first pass" has to mean the first pass
+    // *of this walk*: the baseline lives in app/watch/history, the build deliberately keeps that directory, and a
+    // previous run therefore left `traverse-url.baseline.json` behind - after which this check asked for
+    // `first === true` on a second pass and failed, looking exactly like a regression in the watch routes.
+    // Measured, and it cost a rebuild-and-traverse cycle to find. Deleting the baseline is what the check means.
+    await api('DELETE', '/api/watch/traverse-url/baseline');
     let wc = await api('POST', '/api/watch/check', { id: 'traverse-url' });
     for (let i = 0; i < 2 && wc.json.results?.[0]?.ok !== true; i++) {
       await sleep(1500);

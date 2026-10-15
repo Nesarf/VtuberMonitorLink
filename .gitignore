@@ -9,6 +9,13 @@ dist/
 # writes it into the repository root one day, and `git add -A` commits it (it really happened with
 # advice/ and with mock-vision-port.txt).
 config.json
+# The previous good copy the config writes beside itself (`config.json.bak`) and the damaged copies it preserves
+# (`config.json.broken-<stamp>`). `config.json` was listed and these were not - the same near-miss this block
+# already records twice: the backup holds the same API key as the file it protects, so one `git add -A` would
+# publish exactly the credential the masking work exists to keep inside the process. Found by noticing an
+# untracked `config.json.bak` in `git status` after a local run.
+config.json.bak
+config.json.broken-*
 reports/
 feeds/
 logs/

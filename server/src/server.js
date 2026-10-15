@@ -85,6 +85,7 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerProxyRoutes } from './routes/proxy.js';
 import { registerEgressRoutes } from './routes/egress.js';
 import { registerAdviceRoutes } from './routes/advice.js';
 import { registerSearchRoutes } from './routes/search.js';
@@ -449,27 +450,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
       .catch((e) => res.status(500).json({ ok: false, code: 'launch-failed', error: e.message }));
   });
 
-  // ── proxy detection ──────────────────────────────────────────────
-  // Tries the common local proxy ports one by one and returns the addresses that actually get through
-  // (no port is hard-coded as the one true answer)
-  app.get('/api/proxy/detect', async (_req, res) => {
-    const ports = [7890, 7891, 7897, 1080, 1081, 8118, 10809, 10808, 10090, 2080, 8889, 8888, 20171];
-    const found = [];
-    for (const port of ports) {
-      const url = `http://127.0.0.1:${port}`;
-      try {
-        const agent = makeProxyAgent(url);
-        const r = await fetch('https://api.ipify.org?format=json', {
-          dispatcher: agent,
-          signal: AbortSignal.timeout(3500),
-        });
-        if (r.ok) found.push(url);
-      } catch {
-        /* not a usable proxy, keep probing */
-      }
-    }
-    res.json({ found, probed: ports.length });
-  });
+  // Moved to server/src/routes/proxy.js (see its header for the shape the remaining groups follow).
+  registerProxyRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // ── LLM providers ────────────────────────────────────────────────
   app.get('/api/llm/presets', (_req, res) => {

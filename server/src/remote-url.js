@@ -554,6 +554,7 @@ export const URL_POLICY_EXEMPT = [
   { file: 'server/src/probe.js', what: 'TRACE_URL, a fixed constant (cloudflare.com/cdn-cgi/trace) used to learn an exit country', why: 'not user input' },
   { file: 'server/src/socks.js', what: 'check.torproject.org/api/ip, the fixed Tor reachability check', why: 'not user input' },
   { file: 'server/src/server.js', what: 'api.ipify.org in the local-proxy detection route', why: 'a fixed constant; the addresses probed are local proxy ports, not this URL' },
+  { file: 'server/src/routes/proxy.js', what: 'the proxy-control discovery, moved out of the factory', why: 'it fetches nothing itself: the loopback control requests live in proxyctl.js, which is inventoried' },
 ];
 
 /**

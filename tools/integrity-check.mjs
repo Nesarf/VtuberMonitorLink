@@ -17,7 +17,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const problems = [];
+
+/**
+ * Every shipped server source: the factory plus the route modules.
+ *
+ * Two checks in this file ask whether a route exists, and both used to read server.js alone. Route groups keep
+ * moving out of the factory, so those checks kept reporting moved routes as missing ones - seven times now, four
+ * of them here, and each one turned main red. The question they mean to ask is "can this be reached from
+ * outside", which is a property of the shipped tree rather than of one file.
+ */
+function allServerText() {
+  const dir = path.join(ROOT, 'server/src/routes');
+  return [fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8')]
+    .concat(
+      fs.existsSync(dir)
+        ? fs.readdirSync(dir).filter((n) => n.endsWith('.js')).map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))
+        : [],
+    )
+    .join('\n');
+}const problems = [];
 const notes = [];
 
 const rel = (p) => path.relative(ROOT, p).replace(/\\/g, '/');
@@ -1080,8 +1098,8 @@ try {
   for (const name of ['CONFIG_STATES', 'configHealthSnapshot', 'recoverConfigFromBackup', 'verifyBackup']) {
     if (!new RegExp(`export (function|const) ${name}\\b`).test(configSrc)) problems.push(`config.js no longer exports ${name}`);
   }
-  if (!/app\.get\('\/api\/config\/health'/.test(serverSrc)) problems.push('the config health route is gone, so the condition cannot be reported');
-  if (!/app\.post\('\/api\/config\/recover'/.test(serverSrc)) problems.push('the config recovery route is gone, so a damaged config cannot be repaired');
+  if (!/app\.get\('\/api\/config\/health'/.test(allServerText())) problems.push('the config health route is gone, so the condition cannot be reported');
+  if (!/app\.post\('\/api\/config\/recover'/.test(allServerText())) problems.push('the config recovery route is gone, so a damaged config cannot be repaired');
   if (!problems.length) process.stdout.write('   [ok]   the states are exported and both routes are registered\n');
 
   // The startup line: the load result has to be stated once, or a damaged file and a first run look alike.

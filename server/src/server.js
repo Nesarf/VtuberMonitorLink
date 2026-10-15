@@ -85,6 +85,8 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerConfigTransferRoutes } from './routes/config-transfer.js';
+import { registerConfigHealthRoutes } from './routes/config-health.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerEventsRoutes } from './routes/events.js';
 import { registerSourcesDiagnoseRoutes } from './routes/sources-diagnose.js';
@@ -271,31 +273,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── config integrity ─────────────────────────────────────────────
-  //
-  // Why this is a route of its own rather than three extra fields on /api/state: "is my config file
-  // damaged" and "is a run in progress" are different questions with different lifetimes, and a page
-  // that greys out a settings form should not have to read the run state to find out. It is also the
-  // answer a support conversation starts from, and it stays readable when the config itself is the
-  // thing that is broken — the payload describes the file, never a value from it.
-  //
-  // The state is a property of the running process (see the durability section of config.js for why),
-  // so it is read from the module rather than through getConfig(): a damaged file is exactly the case
-  // where getConfig() is an in-memory default that says nothing about the disk.
-  app.get('/api/config/health', (_req, res) => {
-    const backup = verifyBackup();
-    res.json({ ...configHealthSnapshot(), backupUsable: backup.ok, backupError: backup.ok ? null : backup.error });
-  });
+  // Moved to server/src/routes/config-health.js (see its header for the shape the remaining groups follow).
+  registerConfigHealthRoutes(app, { getConfig, patchConfig, log, onConfigChanged, persist, preserveSecretsIn });
 
-  // The deliberate half of "never silently": the app runs on defaults after a damaged config and does
-  // **not** put the backup back on its own, because a config that changes itself is the failure this
-  // release is about. This is the one call that restores it, and the answer states what happened.
-  app.post('/api/config/recover', (_req, res) => {
-    const result = recoverConfigFromBackup();
-    const { config, ...rest } = result;
-    res.status(result.ok ? 200 : 409).json({ ...rest, health: configHealthSnapshot() });
-    if (result.ok) onConfigChanged?.(config);
-  });
+
 
   // Moved to server/src/routes/sources.js (see its header for the shape the remaining groups follow).
   registerSourcesRoutes(app, { getConfig, patchConfig, log, persist, preserveSecretsIn });
@@ -436,81 +417,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── config import & export ───────────────────────────────────────
-  // This route keeps its own blank-the-fields redaction on purpose, and it is the precedent the read-side
-  // rule was built to match: an export is a *file*, `?secrets=1` is the deliberate "give me the backup with
-  // keys" switch, and the blank form is what `/api/config/import` documents ("apiKey:'' must not overwrite a
-  // stored value") — a masked '***' in a file would read as a value to anyone opening it in an editor.
-  // The blanket `publicConfig` pass afterwards is not decoration: the hand-kept list below covered the LLM key
-  // and the wiki password but **not** `proxy.controlSecret`, so a redacted export still carried a live
-  // credential for the mihomo/Clash control API (found by tools/config-secrets-test.mjs). Layering the
-  // serializer over the blanking covers every secret the rule knows about, while the fields the list does
-  // blank keep their '' shape — which is what the import path and its traversal check depend on.
-  app.get('/api/config/export', (req, res) => {
-    const cfg = getConfig();
-    const withSecrets = req.query.secrets === '1';
-    const clone = JSON.parse(JSON.stringify(cfg));
-    if (!withSecrets) {
-      for (const p of clone.llm?.providers ?? []) p.apiKey = '';
-      for (const t of clone.watch?.targets ?? []) if (t.botPassword) t.botPassword = '';
-      for (const t of clone.notify?.targets ?? []) {
-        for (const k of ['key', 'token', 'chatId', 'webhookUrl']) if (t[k]) t[k] = '';
-      }
-    }
-    const body = JSON.stringify(
-      {
-        app: "Vtuber's Monitor Link",
-        version: 2,
-        exportedAt: new Date().toISOString(),
-        secrets: withSecrets,
-        // ?secrets=1 is the deliberate "back up everything" switch and stays verbatim.
-        config: withSecrets ? clone : publicConfig(clone),
-      },
-      null,
-      2
-    );
-    res.setHeader('content-disposition', `attachment; filename="vml-config-${todayIn(cfg)}.json"`);
-    res.type('application/json; charset=utf-8').send(body);
-  });
+  // Moved to server/src/routes/config-recover.js (see its header for the shape the remaining groups follow).
+  registerConfigTransferRoutes(app, { getConfig, patchConfig, log, onConfigChanged, persist, preserveSecretsIn });
 
-  app.post('/api/config/import', (req, res) => {
-    const raw = req.body?.config ?? req.body;
-    if (!raw || typeof raw !== 'object') return res.status(400).json({ error: 'expected a config object' });
-    const cur = getConfig();
-    // A masked import (the UI can post back what /api/config just handed it) means "unchanged" for every
-    // secret, the same rule the '':''-does-not-overwrite behaviour below expresses.
-    const incoming = preserveSecretsIn(raw);
 
-    // Merge the objects inside arrays by id (providers / targets / customSources / tasks …).
-    // A plain "replace the whole array" would not work — the apiKey:'' of a redacted export would wipe the Key
-    // already on this machine, and importing a config you just exported is the most common use case of all.
-    const mergeArray = (a, b) => {
-      const aList = Array.isArray(a) ? a : [];
-      const hasIds = b.every((x) => x && typeof x === 'object' && typeof x.id === 'string');
-      if (!hasIds || !aList.every((x) => x && typeof x === 'object')) return b;
-      const byId = new Map(aList.filter((x) => typeof x.id === 'string').map((x) => [x.id, x]));
-      return b.map((item) => (byId.has(item.id) ? merge(byId.get(item.id), item) : item));
-    };
-
-    const merge = (a, b) => {
-      if (Array.isArray(b)) return mergeArray(a, b);
-      if (b && typeof b === 'object') {
-        const out = { ...(a ?? {}) };
-        for (const [k, v] of Object.entries(b)) {
-          // an empty string does not overwrite an existing non-empty value: importing a redacted export must not wipe secrets
-          if (v === '' && typeof out[k] === 'string' && out[k]) continue;
-          out[k] = merge(out[k], v);
-        }
-        return out;
-      }
-      return b;
-    };
-    const next = persist(merge(cur, incoming));
-    onConfigChanged?.(next);
-    // The merged config is answered masked: an import is usually fed back by the UI, and this response is a
-    // config object like any other. The import itself still stores the real values (`persist` restored them).
-    res.json({ ok: true, config: publicConfig(next) });
-  });
 
   // Moved to server/src/routes/search.js (see its header for the shape the remaining groups follow).
   registerSearchRoutes(app, { getConfig, patchConfig, log });

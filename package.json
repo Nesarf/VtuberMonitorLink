@@ -95,6 +95,6 @@
     "postject": "^1.0.0-alpha.6"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   }
 }

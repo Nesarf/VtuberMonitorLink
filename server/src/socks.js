@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import tls from 'node:tls';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 const SOCKS_VERSION = 0x05;
 const AUTH_NONE = 0x00;
@@ -166,7 +166,17 @@ const agents = new Map();
 /** Get (and cache) an undici Agent that goes through SOCKS */
 export function socksAgent(socksUrl) {
   const key = String(socksUrl);
-  if (!agents.has(key)) agents.set(key, new Agent({ connect: socksConnector({ url: key }) }));
+  if (!agents.has(key)) {
+    agents.set(
+      key,
+      // `allowH2: false` keeps the behaviour this project had on undici 7. undici 8 negotiates HTTP/2 over
+      // TLS through ALPN by default, and this connector performs its own TLS handshake on the tunnelled
+      // socket (the `wantsTls` branch above), so it has no ALPN story to tell. The upgrade is meant to change
+      // which library does the work, not which protocol goes on the wire - and a protocol change is exactly
+      // the kind of difference that would reach Tor's exit as a new fingerprint rather than as an error.
+      new Agent({ connect: socksConnector({ url: key }), allowH2: false }),
+    );
+  }
   return agents.get(key);
 }
 
@@ -265,7 +275,15 @@ export async function probeTor(cfg, socksUrl, { timeout = 12000 } = {}) {
     return { ok: false, socks: `${p.host}:${p.port}`, error: `SOCKS 端口不可用（${reachable.err}）—— Tor 没在跑？（${p.host}:${p.port}）` };
   }
   try {
-    const res = await fetch('https://check.torproject.org/api/ip', {
+    // ⚠️ undici's own `fetch`, **not** the global one. `socksAgent` below is built from the npm undici
+    // (`new Agent({ connect })`), and a dispatcher may only be handed to the fetch of the generation it
+    // came from. Measured, same connector and same fixture, npm undici 8.12.2 against 7.30.1: the global
+    // fetch with a npm-undici-8 Agent never reaches the proxy at all - the CONNECT is never sent, so the
+    // proxy sees nothing and the request dies - while undici's own fetch works on both versions. The
+    // reason is that Node's built-in fetch consumes the v1 dispatcher handler API while undici 8's Agent
+    // implements v2, and only the *global dispatcher* path is still mirrored back to v1 for legacy
+    // consumers. On undici 7 the two generations happened to match, which is why this was invisible.
+    const res = await undiciFetch('https://check.torproject.org/api/ip', {
       dispatcher: socksAgent(url),
       signal: AbortSignal.timeout(timeout),
     });

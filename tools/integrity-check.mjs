@@ -1690,6 +1690,85 @@ try {
   problems.push(`could not read the workflow files: ${e.message}`);
 }
 
+// ───────────────────────────────────────────── 5n. a dispatcher and the fetch that receives it
+
+/**
+ * Does this source pass a `dispatcher` to something other than undici's own fetch?
+ *
+ * Node's built-in `fetch` consumes the **v1** dispatcher handler API while a npm undici 8 Agent implements
+ * **v2**, and only the `setGlobalDispatcher` path is mirrored back to v1 for legacy consumers. Measured under
+ * npm undici 8.12.2 vs 7.30.1, same connector and fixture (BUGS #106): the global fetch handed an npm-undici
+ * Agent sends **no CONNECT at all** - the proxy sees nothing and the request dies - while undici 7 tolerated
+ * the mixture, which is exactly why this stayed invisible until an upgrade was attempted. So the rule is not
+ * "use undici's fetch"; it is "a dispatcher may only be given to the fetch of its own generation".
+ */
+/** Comments out of the way: this file's own prose quotes `fetch(url)` while explaining the fetch rules. */
+const codeOnly = (t) =>
+  t
+    .split(/\r?\n/)
+    .map((l) => {
+      const s = l.trim();
+      if (s.startsWith('//') || s.startsWith('*') || s.startsWith('/*')) return '';
+      return l.replace(/\/\/.*$/, '');
+    })
+    .join('\n');
+
+function dispatcherFetchProblem(src) {
+  const code = codeOnly(src);
+  if (!/\bdispatcher\s*[:,}]/.test(code)) return null; // no dispatcher here: not this rule's business
+  const imp = /import\s*\{([^}]*)\}\s*from\s*'undici'/.exec(code);
+  const list = imp ? imp[1] : '';
+  const aliasM = /(?:^|,)\s*fetch\s+as\s+([A-Za-z_$][\w$]*)/.exec(list);
+  const alias = aliasM ? aliasM[1] : null;
+  const bare = [...code.matchAll(/(^|[^.\w$])fetch\s*\(/g)].filter((m) => {
+    if (!alias) return true;
+    const at = m.index + m[1].length;
+    return code.slice(at, at + alias.length + 1) !== alias + '(';
+  });
+  if (bare.length) return `${bare.length} call(s) to the global fetch receive a dispatcher`;
+  if (!alias) return "undici's fetch is not imported, so its dispatcher has no fetch of the same generation";
+  return null;
+}
+
+try {
+  const candidates = walk(path.join(ROOT, 'server/src'))
+    .concat(walk(path.join(ROOT, 'tools')))
+    .filter((f) => /\.(js|mjs|cjs)$/.test(f))
+    // This file is skipped because its own controls below quote both the broken and the repaired shapes as
+    // source text, so scanning it would report the fixtures. The exclusion is safe rather than a loophole:
+    // a checker sends no requests, so there is no dispatcher here for the rule to protect.
+    .filter((f) => rel(f) !== 'tools/integrity-check.mjs');
+  let paired = 0;
+  for (const f of candidates) {
+    const src = fs.readFileSync(f, 'utf8');
+    const problem = dispatcherFetchProblem(src);
+    if (problem) problems.push(`mixed undici generations in ${rel(f)}: ${problem}`);
+    else if (/\bdispatcher\s*[:,}]/.test(codeOnly(src))) paired++;
+  }
+
+  // The controls: the detector must reject each shape it exists for and accept the repaired shape, or the
+  // green line below would only mean the regexes never matched anything.
+  const controls = [
+    ["import { Agent } from 'undici';\nawait fetch(url, { dispatcher: agent });", true, 'the global fetch with a npm-undici Agent'],
+    ["import { Agent, fetch as uf } from 'undici';\nawait uf(url, { dispatcher: new Agent() });", false, 'undici\'s own fetch, aliased'],
+    ["import { fetch as uf } from 'undici';\nawait uf(url, { dispatcher: agent });", false, 'undici\'s own fetch, aliased, no Agent imported'],
+    ["import { Agent } from 'undici';\nawait fetch(url, { signal, dispatcher });", true, 'a dispatcher passed by shorthand property'],
+    ["await fetch(url, { dispatcher: agent });", true, 'a dispatcher with no undici import at all'],
+    ["import { Agent } from 'undici';\nconst agent = new Agent();\nawait fetch(url);", false, 'a bare fetch with no dispatcher (none of this rule\'s business)'],
+  ];
+  const wrong = controls.filter(([src, shouldFlag]) => !!dispatcherFetchProblem(src) !== shouldFlag);
+  if (wrong.length) {
+    problems.push(`the dispatcher/fetch detector disagrees with ${wrong.length} of its own controls: ${wrong.map((c) => c[2]).join('; ')}`);
+  } else {
+    process.stdout.write(
+      `   [ok]   every file that passes a \`dispatcher\` gets it from undici and hands it to undici's own fetch (${paired} file(s))\n`,
+    );
+    process.stdout.write('   [ok]   (and the controls: the global fetch with an npm Agent, a dispatcher with no undici import, undici\'s own aliased fetch and an unproxied bare fetch are each judged correctly)\n');
+  }
+} catch (e) {
+  problems.push(`could not check the dispatcher/fetch pairing: ${e.message}`);
+}
+
 // ───────────────────────────────────────────── result
 
 process.stdout.write('\n6. result\n');

@@ -14,6 +14,12 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+// The Agent under test is built from the **npm** undici (see server/src/socks.js), so the requests below go
+// through that same undici's fetch. Handing a npm-undici Agent to Node's built-in fetch is a mixed-generation
+// pairing, and it is not the pairing the product uses: measured on npm undici 8.12.2, the global fetch with
+// such an Agent sends no CONNECT at all (the fake proxy below sees nothing) while undici 7 happened to
+// tolerate it. A suite using the global fetch would have been asserting a combination no caller here has.
+import { fetch as undiciFetch } from 'undici';
 import { socksAgent, torLaunchPlan } from '../server/src/socks.js';
 
 let pass = 0;
@@ -110,7 +116,7 @@ const agent = socksAgent(`socks5://127.0.0.1:${socksPort}`);
 process.stdout.write('\nsocks: SOCKS5 connector\n');
 
 await t('the handshake hands the **hostname** to the proxy for resolution (DNS never leaves this machine)', async () => {
-  await fetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
+  await undiciFetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
   const last = socks.seen.at(-1);
   assert.ok(last, 'the fake SOCKS service received no CONNECT');
   assert.equal(last.atyp, 3, 'atyp should be 3 (domain), got ' + last.atyp);
@@ -121,7 +127,7 @@ await t('the handshake hands the **hostname** to the proxy for resolution (DNS n
 await t('http:// target: the tunnel carries plain HTTP', async () => {
   origin.state.first = null;
   let err = null;
-  await fetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch((e) => {
+  await undiciFetch(`http://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch((e) => {
     err = e;
   });
   assert.equal(origin.state.first, 0x47, 'should start with "G" (GET), got byte ' + origin.state.first + ' · fetch error: ' + (err ? err.message : 'none'));
@@ -130,7 +136,7 @@ await t('http:// target: the tunnel carries plain HTTP', async () => {
 await t('https:// target: the tunnel must carry a TLS ClientHello (0x16), not plain HTTP', async () => {
   origin.state.first = null;
   origin.state.raw = Buffer.alloc(0);
-  await fetch(`https://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
+  await undiciFetch(`https://vml-test-host.invalid:${originPort}/x`, { dispatcher: agent, signal: AbortSignal.timeout(4000) }).catch(() => {});
   assert.ok(origin.state.first !== null, 'the origin received no bytes at all');
   assert.equal(
     origin.state.first,
@@ -152,7 +158,7 @@ const torUp = await new Promise((resolve) => {
 
 if (torUp) {
   await t('real Tor: goes out through SOCKS and check.torproject.org reports a Tor exit', async () => {
-    const res = await fetch('https://check.torproject.org/api/ip', {
+    const res = await undiciFetch('https://check.torproject.org/api/ip', {
       dispatcher: socksAgent('socks5://127.0.0.1:9150'),
       signal: AbortSignal.timeout(45000),
     });

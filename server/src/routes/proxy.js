@@ -3,6 +3,7 @@
 // Same shape as routes/calendar.js: a registrar that receives the live configuration, the one place that
 // persists a patch of it and the logger, and imports everything else from the module that owns it. The handlers
 // are moved verbatim - the commit that added this file carries the traversals that prove it, not the diff size.
+import { fetch as undiciFetch } from 'undici';
 import { makeProxyAgent } from '../net.js';
 
 /**
@@ -20,7 +21,11 @@ export function registerProxyRoutes(app, { getConfig, patchConfig }) {
         const url = `http://127.0.0.1:${port}`;
         try {
           const agent = makeProxyAgent(url);
-          const r = await fetch('https://api.ipify.org?format=json', {
+          // undici's own fetch, not the global one: `makeProxyAgent` builds an npm-undici ProxyAgent,
+          // and a dispatcher only works with the fetch of its own generation. Measured under npm undici
+          // 8.12.2, the global fetch with such an Agent never reaches the proxy (no CONNECT is sent at
+          // all), while undici's own fetch works on 7 and 8 alike. See the longer note in socks.js.
+          const r = await undiciFetch('https://api.ipify.org?format=json', {
             dispatcher: agent,
             signal: AbortSignal.timeout(3500),
           });

@@ -576,16 +576,23 @@ runAsyncCase('the allowance is what lets the shipped preset through: a real requ
   // The end-to-end half of assertion 1 — a local OpenAI-compatible server is what Ollama is — paired with the
   // unflagged control against the same server. That pair is what makes "the flag is load-bearing" an
   // observation instead of a claim.
+  //
+  // The fixture answers with a **vision-capable** id on purpose. `listModels` offers only the models it can show
+  // to be multimodal, so a text-only fixture id comes back as an empty list and this check would then be
+  // reporting that filter instead of the address policy it exists for - which is how it went red: the fixture
+  // predates the filter, and CI and this machine both said so. The drop itself is asserted below, on its own
+  // server response, which is where it belongs.
   hits.length = 0;
+  let payload = [{ id: 'qwen2.5-vl:7b' }];
   const s = await serve((req, res) => {
     hits.push(req.url);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ object: 'list', data: [{ id: 'qwen2.5:14b' }] }));
+    res.end(JSON.stringify({ object: 'list', data: payload }));
   });
   const presetProfile = { ...newProvider('ollama'), baseUrl: `${s.url}/v1`, apiKey: 'k' };
   const listed = await listModels({ llm: { providers: [presetProfile] } }, presetProfile);
   assert.equal(listed.ok, true, JSON.stringify(listed));
-  assert.deepEqual(listed.models, ['qwen2.5:14b']);
+  assert.deepEqual(listed.models, ['qwen2.5-vl:7b']);
   assert.deepEqual(hits, ['/v1/models'], 'the flagged profile reached the local server');
 
   hits.length = 0;
@@ -594,6 +601,19 @@ runAsyncCase('the allowance is what lets the shipped preset through: a real requ
   assert.equal(refused.ok, false);
   assert.equal(refused.code, 'loopback', JSON.stringify(refused));
   assert.deepEqual(hits, [], 'the unflagged profile never reached it');
+
+  // And the same server answering with a text-only id: the request still reaches it (that is the allowance
+  // working) but nothing is offered, and the counts say which bucket it went into. Both halves in one check
+  // because "it reached the server" and "it showed the model" are different statements, and only the first one
+  // is what this suite is about.
+  hits.length = 0;
+  payload = [{ id: 'qwen2.5:14b' }];
+  const textProfile = { ...newProvider('ollama'), baseUrl: `${s.url}/v1`, apiKey: 'k' };
+  const textOnly = await listModels({ llm: { providers: [textProfile] } }, textProfile);
+  assert.equal(textOnly.ok, true, JSON.stringify(textOnly));
+  assert.deepEqual(hits, ['/v1/models'], 'the request went out; it was the filter that removed the model');
+  assert.deepEqual(textOnly.models, [], 'a text-only id is not offered');
+  assert.equal(textOnly.vision.unknown.length, 1, 'and it is counted as unknown rather than silently gone: ' + JSON.stringify(textOnly.vision));
 });
 
 // ───────────────────────────────────────────── F. redirects, hop by hop

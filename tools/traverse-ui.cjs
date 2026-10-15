@@ -1658,9 +1658,12 @@ async function main() {
     check('the About button opens the panel without leaving the page', await page.locator('.about-modal').isVisible(), 'panel visible');
     // The panel fetches the document over HTTP *after* it opens, so "the modal exists" is not "the document is
     // there". Measured: with the read happening straight after the modal appeared, this pair of checks failed
-    // with the loading placeholder ("加载中…", 0 headings) in a run that overlapped a build and a second browser
-    // harness, while the same walk passed 242 of 242 alone - a gate asserting how busy the machine is, which is
-    // the same defect `data-vml-ready` was introduced to remove elsewhere. The wait is on the content the checks
+    // with the panel's own loading placeholder and 0 headings in a run that overlapped a build and a second
+    // browser harness, while the same walk passed 242 of 242 alone - a gate asserting how busy the machine is,
+    // which is the same defect `data-vml-ready` was introduced to remove elsewhere. (The placeholder is a UI
+    // string and is not quoted here: the engineering layer is English-only, and a Chinese literal in a comment
+    // is exactly what tools/english-logic.mjs refuses - measured, this line did, on CI, on both Node legs.)
+    // The wait is on the content the checks
     // below assert rather than on a duration, and it is deliberately not fatal: a document that never arrives
     // still fails, at the checks, with their own specific messages instead of a bare timeout here.
     await page

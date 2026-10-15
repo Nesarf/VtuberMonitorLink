@@ -1,4 +1,6 @@
 {
+  "escaped-drive|docs/BUGS.md": 1,
+  "escaped-drive|tools/config-fault-banner-test.mjs": 2,
   "cookie-blob|tools/browser-config-test.mjs": 1,
   "escaped-drive|tools/socks-test.mjs": 22,
   "escaped-drive|tools/observe-test.mjs": 4,

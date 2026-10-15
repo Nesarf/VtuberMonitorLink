@@ -403,11 +403,25 @@ function main() {
     try {
       const man = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
       const bad = (man.files ?? []).filter((f) => RUNTIME_RELS.some((r) => f === 'app/' + r || f.startsWith('app/' + r + '/')));
+      const excluded = man.excluded ?? [];
       if (bad.length) {
         problems.push('release zip includes runtime state: ' + bad.slice(0, 5).join(', ') + (bad.length > 5 ? ` (+${bad.length - 5})` : ''));
+      } else if (excluded.length === 0) {
+        // Say what was *not* proved. This check exists to prove that make-zip's exclusion rule kept the
+        // developer's own runtime state out of the release; with nothing in the package to exclude it passes
+        // vacuously, and "0 runtime paths excluded" reads like a clean result when it is really an unexercised
+        // rule. Measured on a fresh build of the shipped layout: `excluded` was empty because dist/app carried no
+        // config.json and no history at all, so that run proved nothing about the rule.
+        process.stdout.write(
+          '   [note] release zip holds no runtime state (' +
+            (man.files ?? []).length +
+            ' files), but nothing was excludable either - the exclusion rule was NOT exercised by this build  -- ' +
+            rel +
+            '\n',
+        );
       } else {
         process.stdout.write(
-          '   [ok]   release zip is clean (' + (man.files ?? []).length + ' files, ' + (man.excluded ?? []).length + ' runtime paths excluded)  -- ' + rel + '\n',
+          '   [ok]   release zip is clean (' + (man.files ?? []).length + ' files, ' + excluded.length + ' runtime paths excluded)  -- ' + rel + '\n',
         );
       }
     } catch (e) {

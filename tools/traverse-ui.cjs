@@ -55,6 +55,50 @@ function check(name, ok, detail) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Is the page still answering? A fact for the failure path, not a guess.
+ *
+ * A 30 s locator timeout reads the same whether the element vanished, the element stopped being actionable, or
+ * the renderer stopped running script altogether - and those need completely different follow-ups (a product bug,
+ * a harness race, or a machine that has run out of room). What separates them is whether the page still executes
+ * JavaScript, and only a probe with a clock on it can say.
+ *
+ * `page.evaluate` against a wedged renderer never settles, so it is raced against a short budget: the answer is
+ * then "it did not answer within the budget" rather than a second timeout that explains nothing. Measured on a
+ * machine where this was the difference between "the renderer stalled" and "the app is broken": two runs of the
+ * same walk failed at different checks, with no page errors, no console errors and no failed requests, while the
+ * app stayed alive and answered every API call.
+ *
+ * The budget is 10 s, and that number is measured too: on the same machine a **healthy** page took 2841 ms to
+ * answer a three-field evaluate, so a 3 s budget would have mislabelled a working page as a stall - which is the
+ * one way this probe could make things worse instead of clearer. The cost of the larger budget is paid only on a
+ * run that has already failed.
+ */
+async function probeResponsiveness(page) {
+  if (!page) return 'no page was ever created';
+  try {
+    if (page.isClosed()) return 'the page is closed';
+  } catch {
+    /* isClosed() on a torn-down page throws; fall through to the probe, which will say so more usefully */
+  }
+  const started = Date.now();
+  const probe = page
+    .evaluate(() => ({
+      title: document.title,
+      elements: document.querySelectorAll('*').length,
+      lang: document.documentElement.lang || '',
+    }))
+    .then((v) => ({ ok: true, v }))
+    .catch((e) => ({ ok: false, e: String((e && e.message) || e).split('\n')[0] }));
+  const raced = await Promise.race([probe, sleep(10000).then(() => ({ slow: true }))]);
+  const ms = Date.now() - started;
+  if (raced.slow) {
+    return 'NO ANSWER within 10000ms - the renderer is not running script (a stall, not a missing element)';
+  }
+  if (!raced.ok) return 'the script channel answered with an error: ' + raced.e;
+  return 'answered in ' + ms + 'ms: ' + JSON.stringify(raced.v);
+}
+
 // What "the app is up" means, and why it is not `networkidle` any more: see tools/lib/app-ready.cjs.
 // It lives in the shared lib so the walk and tools/readiness-test.mjs cannot drift apart about the signal.
 const { waitForAppReady } = require('./lib/app-ready.cjs');
@@ -287,6 +331,9 @@ async function main() {
   };
 
   let browser = null;
+  // Hoisted out of the try below on purpose: the failure path has to be able to ask the page whether it is still
+  // answering, and a `page` scoped to the try block is gone exactly when that question matters (see the catch).
+  let page = null;
   const consoleErrors = [];
   const pageErrors = [];
   const badApi = [];
@@ -331,7 +378,7 @@ async function main() {
 
     browser = await firefox.launch(launchOpts);
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const page = await context.newPage();
+    page = await context.newPage();
 
     page.on('console', (m) => {
       if (m.type() === 'error') consoleErrors.push(m.text());
@@ -1779,8 +1826,12 @@ async function main() {
 
     await context.close();
   } catch (err) {
-    check('UI traversal completed', false, err && err.message);
+    // Ask the page first, and put the answer where the failing check is named: a timeout and a stalled renderer
+    // are the same sentence in the error message, and only one of them is about the product.
+    const responsive = await probeResponsiveness(page);
+    check('UI traversal completed', false, (err && err.message) + '  ||  page responsiveness: ' + responsive);
     process.stdout.write('\n  ' + (err && err.stack ? err.stack : err) + '\n');
+    process.stdout.write('\n  page responsiveness: ' + responsive + '\n');
     // On failure, print the page-side errors as well, otherwise all you see is "some assertion failed"
     if (pageErrors.length) process.stdout.write('\n  page errors:\n' + pageErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');
     if (consoleErrors.length) process.stdout.write('\n  console errors:\n' + consoleErrors.slice(0, 8).map((e) => '    ' + e).join('\n') + '\n');

@@ -162,10 +162,15 @@ const SHIPPED_LOCALES = Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, '
 // per-locale override. This list is by **default wording**, not by platform: 'bilibili' used to be here for
 // the glossary's Han entry for that platform, and both went together with the product's link to the site --
 // comes back, this list has to be told again, which is the intended friction.
-const LATIN_DEFAULT_ALLOWED = new Set(['ServerChan', 'DingTalk', 'WeCom', 'Feishu', 'Moegirlpedia', 'VTuber']);
+const LATIN_DEFAULT_ALLOWED = new Set(['ServerChan', 'DingTalk', 'WeCom', 'Feishu', 'Moegirlpedia', 'VTuber', 'Nijisanji', 'VSPO!']);
 for (const [term, spec] of Object.entries(GLOSSARY)) {
   if (term.startsWith('_') || !spec || typeof spec.default !== 'string') continue;
-  if (!/[\u4e00-\u9fff]/.test(term)) continue; // a Latin term: keeping it is the point
+  // The predicate is "is the term not pure ASCII" rather than "does the term contain Han": a kana term has
+  // exactly the same problem, and requiring Han meant the two kana brand terms were never examined at all.
+  // Both carry a Latin default and only three overrides each, so 26 shipped locales would show the English
+  // spelling if that were not the convention; the allowed list above is where that judgement belongs.
+  // The terms are にじさんじ and ぶいすぽっ！ - quoted because naming them is the point of the sentence.  // english-logic:allow
+  if (!/[^\x00-\x7F]/.test(term)) continue; // a Latin term: keeping it is the point
   if (/[\u4e00-\u9fff]/.test(spec.default)) continue; // default is the source term: "keep as-is"
   if (LATIN_DEFAULT_ALLOWED.has(spec.default)) continue;
   const uncovered = SHIPPED_LOCALES.filter((code) => !spec[code]);

@@ -85,6 +85,10 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerSourcesDiagnoseRoutes } from './routes/sources-diagnose.js';
+import { registerSourcesExtraRoutes } from './routes/sources-extra.js';
+import { registerProxyExtraRoutes } from './routes/proxy-extra.js';
+import { registerIntelRestRoutes } from './routes/intel-rest.js';
 import { registerProxyRestRoutes } from './routes/proxy-rest.js';
 import { registerArchiveRestRoutes } from './routes/archive-rest.js';
 import { registerSourcesCustomRoutes } from './routes/sources-custom.js';
@@ -393,17 +397,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     };
   }
 
-  app.post('/api/sources/:id/diagnose', busyGuard('source diagnose'), async (req, res) => {
-    const cfg = getConfig();
-    const source = effectiveSources(cfg).find((s) => s.id === req.params.id);
-    if (!source) return res.status(404).json({ error: `unknown source: ${req.params.id}` });
-    try {
-      const r = await diagnoseSource(source, cfg, log);
-      res.json({ ok: true, sourceId: source.id, ...r });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+  // Moved to server/src/routes/sources-extra.js (see its header for the shape the remaining groups follow).
+  registerSourcesExtraRoutes(app, { getConfig, patchConfig, log, persist, preserveSecretsIn, busyGuard });
+
+
 
   // Moved to server/src/routes/advice.js (see its header for the shape the remaining groups follow).
   registerAdviceRoutes(app, { getConfig, patchConfig, log });
@@ -526,70 +523,20 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── Office export / Word & Excel ─────────────────────────────────
-  // OOXML hand-written in pure Node, with no dependency on Office / COM / Python — a portable exe cannot assume what the target machine has installed.
-  app.get('/api/intel/export', (req, res) => {
-    const cfg = getConfig();
-    const format = ['xlsx', 'docx', 'md', 'html'].includes(String(req.query.format)) ? String(req.query.format) : 'xlsx';
-    const data = latestIntel(cfg, Number(req.query.limit ?? 500));
-    const items = applyFeatures(data.items ?? [], loadFeatureCache(cfg));
-    const stamp = todayIn(cfg);
-    if (format === 'html') {
-      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.html"`);
-      return res.type('text/html; charset=utf-8').send(htmlShell(`情报集 ${stamp}`, itemsToMarkdown(items, { title: '情报集' })));
-    }
-    if (format === 'md') {
-      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.md"`);
-      return res.type('text/markdown; charset=utf-8').send(itemsToMarkdown(items, { title: '情报集' }));
-    }
-    if (format === 'docx') {
-      const buf = buildDocx({ title: `情报集 ${stamp}`, markdown: itemsToMarkdown(items, { title: `情报集 ${stamp}` }) });
-      res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.docx"`);
-      return res.type('application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(buf);
-    }
-    const buf = buildXlsx([{ name: stamp, rows: itemsToSheet(items) }]);
-    res.setHeader('content-disposition', `attachment; filename="vml-intel-${stamp}.xlsx"`);
-    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').send(buf);
-  });
+  // Moved to server/src/routes/intel-rest.js (see its header for the shape the remaining groups follow).
+  registerIntelRestRoutes(app, { getConfig, patchConfig, log });
+
+
 
   // Moved to server/src/routes/features.js (see its header for the shape the remaining groups follow).
   registerFeaturesRoutes(app, { getConfig, patchConfig, log, busyGuard });
 
 
 
-  // ── Tor egress ───────────────────────────────────────────────────
-  app.post('/api/proxy/tor', async (req, res) => {
-    const cfg = getConfig();
-    const socks = req.body?.socks ?? cfg.proxy?.torSocks;
-    res.json(await probeTor(cfg, socks));
-  });
+  // Moved to server/src/routes/proxy-extra.js (see its header for the shape the remaining groups follow).
+  registerProxyExtraRoutes(app, { getConfig, patchConfig, log, persist, busyGuard, preserveSecretsIn });
 
-  // If torExe is configured, one click can bring it up (tor is not bundled, this just clicks for you).
-  // The arguments are not a bare spawn — see the comment on torLaunchPlan: Tor Browser's tor needs its own
-  // torrc (otherwise there are no bridges and the port is wrong), and a standalone tor's data directory has
-  // to point inside the app directory (never write to the C: drive).
-  app.post('/api/proxy/tor/start', (req, res) => {
-    const cfg = getConfig();
-    const exe = String(req.body?.exe ?? cfg.proxy?.torExe ?? '').trim();
-    if (!exe) return res.status(400).json({ error: '未配置 torExe，请填 Tor 的 tor.exe 路径（例如 Tor Browser 里的 Browser\\TorBrowser\\Tor\\tor.exe）' });
-    if (!fs.existsSync(exe)) return res.status(400).json({ error: `找不到文件：${exe}` });
-    const plan = torLaunchPlan({ exe, socksUrl: cfg.proxy?.torSocks, appRoot: APP_ROOT });
-    if (!plan.ok) return res.status(400).json({ error: plan.error });
-    try {
-      const child = spawn(exe, plan.args, { cwd: plan.cwd, detached: true, stdio: 'ignore', windowsHide: true });
-      child.unref();
-      res.json({
-        ok: true,
-        started: exe,
-        kind: plan.kind,
-        command: plan.command,
-        note: plan.note,
-        hint: 'Tor 启动需要时间（走网桥会更久，通常 10~40 秒），稍后点「检测 Tor」确认；日志里看到 Bootstrapped 100% 就是通了',
-      });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+
 
   // Moved to server/src/routes/client-log.js (see its header for the shape the remaining groups follow).
   registerClientLogRoutes(app, { getConfig, patchConfig, log });
@@ -601,24 +548,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
 
 
 
-  // ── bulk source toggles ──────────────────────────────────────────
-  // Clicking 30 sources one by one is tiring, and it is very easy to forget to turn them back off in tests (this feature exists because of exactly that trap)
-  app.post('/api/sources/bulk', (req, res) => {
-    let cfg = getConfig();
-    const { action, category, ids } = req.body ?? {};
-    const all = effectiveSources(cfg);
-    const picked = all.filter((s) => (ids?.length ? ids.includes(s.id) : category ? s.category === category : true));
-    if (!picked.length) return res.status(400).json({ error: 'no matching sources' });
-    cfg.sources = cfg.sources ?? {};
-    for (const s of picked) {
-      if (action === 'enable') cfg.sources[s.id] = { ...(cfg.sources[s.id] ?? {}), enabled: true };
-      else if (action === 'disable') cfg.sources[s.id] = { ...(cfg.sources[s.id] ?? {}), enabled: false };
-      else if (action === 'reset') delete cfg.sources[s.id];
-      else return res.status(400).json({ error: 'action must be enable | disable | reset' });
-    }
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, changed: picked.length, action, sources: effectiveSources(cfg) });
-  });
+  // Moved to server/src/routes/sources-diagnose.js (see its header for the shape the remaining groups follow).
+  registerSourcesDiagnoseRoutes(app, { getConfig, patchConfig, log, persist, preserveSecretsIn, busyGuard });
+
+
 
   // Moved to server/src/routes/reports.js (see its header for the shape the remaining groups follow).
   registerReportsRoutes(app, { getConfig, patchConfig, log });

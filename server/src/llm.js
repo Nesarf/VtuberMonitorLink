@@ -8,6 +8,24 @@ import { netFetch } from './net.js';
 import { markUrlCleared, validateRemoteUrl } from './remote-url.js';
 
 /** Common provider presets (every baseUrl can be edited, and the model list is fetched live in the UI) */
+/**
+ * The id patterns that mean "this model can see", as a fallback for providers whose /models says nothing but ids.
+ * Kept in one place, deliberately narrow on the families that exist today, and never used to *deny* anything - an
+ * id that matches nothing is 'unknown', not 'text-only'.
+ */
+const VISION_ID = new RegExp(
+  [
+    'gpt-4o', 'gpt-4\\.1', 'gpt-5', 'o3', 'o4-mini', // OpenAI multimodal families
+    'claude-3', 'claude-4', 'claude-sonnet-4', 'claude-opus-4',
+    'gemini', // every current Gemini accepts images
+    'qwen\\d*\\.?\\d*-?vl', 'qwen-vl', 'glm-\\d+v', 'internvl', 'llava', 'pixtral',
+    'minicpm-v', 'moondream', 'cogvlm', 'yi-vision', 'step-1v', 'deepseek-vl',
+    'llama-3\\.[23].*-vision', 'phi-\\d+-multimodal', 'mistral-small-3',
+    '-vl-', '-vision', 'vision-',
+  ].join('|'),
+  'i'
+);
+
 export const PRESETS = [
   {
     id: 'deepseek',
@@ -176,6 +194,64 @@ function endpoint(baseUrl, suffix) {
   return `${String(baseUrl ?? '').trim().replace(/\/+$/, '')}${suffix}`;
 }
 
+/**
+ * Whether one entry from a provider's /models response can see.
+ *
+ * Two tiers, and the second one is a heuristic that says so:
+ *
+ *   1. **metadata** - an OpenAI-compatible response sometimes carries the modalities (OpenRouter-style
+ *      `architecture.input_modalities`, or a `capabilities`/`modalities`/`input_modalities` field). Where it
+ *      does, that is the answer and nothing else is consulted.
+ *   2. **the id** - most providers return nothing but ids, so a documented pattern list decides. It is a guess, so
+ *      it never claims more than it is: an id no pattern matches is reported as **unknown**, not as "no vision".
+ *
+ * `vision: null` therefore means "nobody told us", which is a different statement from "this model is text-only" -
+ * and the caller is the one that decides whether unknown ids are shown.
+ */
+export function entryVision(entry) {
+  const id = typeof entry === 'string' ? entry : (entry?.id ?? entry?.name ?? '');
+  const raw = typeof entry === 'string' ? {} : (entry ?? {});
+  const lists = [
+    raw.capabilities,
+    raw.modalities,
+    raw.input_modalities,
+    raw?.architecture?.input_modalities,
+    raw?.architecture?.modality,
+    raw?.architecture?.modalities,
+  ]
+    .filter(Boolean)
+    .flatMap((v) => (Array.isArray(v) ? v : [v]))
+    .map((v) => String(v).toLowerCase());
+  if (lists.length) {
+    const sees = lists.some((v) => v.includes('image') || v === 'vision' || v.includes('multimodal'));
+    return { id, vision: sees, why: 'metadata' };
+  }
+  return { id, vision: VISION_ID.test(id) ? true : null, why: VISION_ID.test(id) ? 'name' : 'unknown' };
+}
+
+/**
+ * The vision-only view of a /models response.
+ *
+ * Only `vision === true` survives: the instruction is that only models that can see may be pulled, so an id whose
+ * capabilities nobody stated is **not** offered (it is listed in `unknown` instead, so the count a user sees and
+ * the count that were hidden are both on the record). Ids are returned exactly as the provider wrote them - this
+ * product does not rename a model, because the name is what the user has to type into the provider's own console.
+ */
+export function visionFilter(entries) {
+  const seen = new Map();
+  for (const entry of entries ?? []) {
+    const { id, vision, why } = entryVision(entry);
+    if (!id) continue;
+    if (!seen.has(id)) seen.set(id, { id, vision, why });
+  }
+  const all = [...seen.values()].sort((a, b) => a.id.localeCompare(b.id));
+  return {
+    models: all.filter((m) => m.vision === true).map((m) => m.id),
+    dropped: all.filter((m) => m.vision === false).map((m) => m.id),
+    unknown: all.filter((m) => m.vision === null || m.vision === undefined).map((m) => m.id),
+  };
+}
+
 /** List models from an OpenAI-compatible endpoint */
 export async function listModels(cfg, provider) {
   const p = provider ?? activeProvider(cfg);
@@ -195,11 +271,15 @@ export async function listModels(cfg, provider) {
     const text = await r.text();
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}${text ? ` — ${text.slice(0, 160)}` : ''}`, models: [] };
     const j = JSON.parse(text);
-    const models = (j?.data ?? j?.models ?? [])
-      .map((m) => (typeof m === 'string' ? m : m?.id ?? m?.name))
-      .filter(Boolean)
-      .sort();
-    return { ok: true, models };
+    const raw = j?.data ?? j?.models ?? [];
+    const { models, dropped, unknown } = visionFilter(raw);
+    return {
+      ok: true,
+      models,
+      // What the filter did, so the UI can say "12 vision models, 28 hidden" instead of quietly showing a short
+      // list: dropped = stated text-only, unknown = the provider said nothing about its capabilities.
+      vision: { total: models.length + dropped.length + unknown.length, dropped, unknown },
+    };
   } catch (err) {
     return { ok: false, error: err.message, models: [] };
   }

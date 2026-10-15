@@ -787,7 +787,16 @@ t('every page that renders a login setting also renders the check affordance', (
 });
 
 t('the routes those affordances call exist on the server', () => {
-  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  // The routes an affordance calls may live in the factory or in the route modules (server/src/routes/*.js, added
+// by the route split). This check is about the route existing at all, so the whole backend is read - otherwise
+// moving a group makes a route that is still there read as missing.
+const routeDir = path.join(ROOT, 'server', 'src', 'routes');
+const serverSrc = [
+  fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8'),
+  ...(fs.existsSync(routeDir)
+    ? fs.readdirSync(routeDir).filter((f) => f.endsWith('.js')).map((f) => fs.readFileSync(path.join(routeDir, f), 'utf8'))
+    : []),
+].join('\n');
   for (const route of ["'/api/cookies/check'", "'/api/watch/login-check'", "'/api/share/check-login'", "'/api/open'"]) {
     assert.ok(serverSrc.includes(route), `the server does not define ${route}`);
   }

@@ -34,6 +34,13 @@ export default function Search({ layout }) {
   const [category, setCategory] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  // The **index window** - how many run directories the server reads - is a separate argument from the
+  // item range above, and it used to be missing from the request entirely: `run()` never sent `days`, so
+  // the server applied its 60-day default however wide the range was. Choosing "365 days" therefore
+  // searched 365 days of items inside at most 60 days of collected directories, and "all" was not all
+  // either (BUGS #108). 0 means "no bound", which is what the "all" option sends, and it is the default
+  // here because that is what the closed dropdown displays.
+  const [rangeDays, setRangeDays] = useState(0);
   const [sort, setSort] = useState('relevance');
   const [starred, setStarred] = useState(false);
   const [res, setRes] = useState(null);
@@ -56,6 +63,9 @@ export default function Search({ layout }) {
         category,
         from,
         to,
+        // Sent on every request, including after a tag click rebuilds the body: the window is part of
+        // the question, not a detail of the control that last changed it.
+        days: rangeDays,
         sort,
         starred: starred || undefined,
         ...(override ?? {}),
@@ -81,13 +91,17 @@ export default function Search({ layout }) {
     if (!days) {
       setFrom('');
       setTo('');
-      return run({ from: '', to: '' });
+      setRangeDays(0);
+      return run({ from: '', to: '', days: 0 });
     }
     const end = new Date();
     const start = new Date(end.getTime() - days * 86400000);
     setFrom(iso(start));
     setTo(iso(end));
-    run({ from: iso(start), to: iso(end) });
+    // Widening the range has to widen the window the server reads too, or the extra days cannot be found
+    // at all: the two were unrelated before, and the range was the half that lost (BUGS #108).
+    setRangeDays(days);
+    run({ from: iso(start), to: iso(end), days });
   };
 
   const toggleTag = (tag) => {
@@ -168,11 +182,28 @@ export default function Search({ layout }) {
           </div>
           <div className="field" style={{ flex: '0 0 170px' }}>
             <label>{t('from')}</label>
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                // A typed date is a range the presets cannot describe, so the window goes unbounded
+                // rather than guessed at: reading a few directories too many costs milliseconds, while
+                // missing the items inside them is the whole defect (BUGS #108).
+                setRangeDays(0);
+              }}
+            />
           </div>
           <div className="field" style={{ flex: '0 0 170px' }}>
             <label>{t('to')}</label>
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setRangeDays(0);
+              }}
+            />
           </div>
           <div className="field" style={{ flex: '0 0 150px' }}>
             <label>{t('onlyStarred')}</label>

@@ -279,6 +279,10 @@ export const DAY_KEY_CALLERS = [
   { file: 'server/src/groups.js', via: 'day.js' },
   { file: 'server/src/reports.js', via: 'day.js' },
   { file: 'server/src/runner.js', via: 'day.js' },
+  // search.js asks for "today" to turn its `days` window into a date range to compare run-directory names
+  // against (BUGS #108). It derives a day and it derives it through this rule, which is exactly why it is
+  // listed here rather than left looking like a file that only handles strings.
+  { file: 'server/src/search.js', via: 'day.js' },
   { file: 'server/src/server.js', via: 'day.js' },
   // A `strings` row is a stronger claim than it looks: it says the file treats a day as an opaque value
   // it received and never derives one. integrity-check.mjs §5m checks exactly that (a `strings` file

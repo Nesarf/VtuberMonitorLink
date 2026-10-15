@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDir } from './config.js';
+import { DAY_RE, dayStamp, todayIn } from './day.js';
 
 const DAY_MS = 86_400_000;
 
@@ -108,15 +109,52 @@ export function expandTerm(vocab, term) {
 
 // ───────────────────────────────────────── index
 
+/**
+ * Resolve the `days` argument of one call into the number the rest of this module uses.
+ *
+ * Three inputs, three answers, and the distinction is the whole point:
+ *   - omitted (`undefined` / `null` / `''`) -> the 60-day default, unchanged;
+ *   - an explicit zero or negative number -> **no bound at all**;
+ *   - anything else -> that many days.
+ *
+ * Zero meaning "no bound" is not a convenience: it is what the search page sends for its "all"
+ * option. Read as a count it was falsy, so `Number(x) || 60` turned "all" into "the newest 60 runs"
+ * without telling anyone (BUGS #108).
+ */
+export function resolveDays(raw, fallback = 60) {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * The run directories to index, newest first.
+ *
+ * `days` is a **calendar window ending today**, not a count of directories. A run directory is named
+ * by `reports.js` with `todayIn(cfg)`, so "the last 7 days" means exactly the directories whose own
+ * day falls inside that window; this asks `day.js` for today rather than deriving a second opinion
+ * about which day it is.
+ *
+ * Why it changed (BUGS #108, measured): the previous version was `slice(0, days)` over the
+ * name-sorted list, which is a different statement - **the newest N directories**. On a machine dated
+ * 2026-10-15, a request for 3 days was answered with 2026-08-20 through 2026-08-22, i.e. the newest
+ * three directories, two months old, while the honest answer for "the last 3 days" was the empty set.
+ * It fails silently and it fails worst exactly when the product is used least.
+ */
 function listRunDirs(cfg, days) {
   const root = resolveDir(cfg, 'feedsDir');
   if (!fs.existsSync(root)) return [];
-  return fs
-    .readdirSync(root)
-    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
-    .sort()
-    .reverse()
-    .slice(0, days);
+  const all = fs.readdirSync(root).filter((d) => DAY_RE.test(d)).sort().reverse();
+  const n = resolveDays(days);
+  if (n <= 0) return all;
+  const today = dayStamp(todayIn(cfg));
+  const cutoff = today - (n - 1) * DAY_MS;
+  // A directory dated in the future is not part of "the last N days" either, so the window has two
+  // ends rather than one.
+  return all.filter((d) => {
+    const t = dayStamp(d);
+    return t >= cutoff && t <= today;
+  });
 }
 
 /** Automatic tags: source / category / keyword hits / #topic# and bracketed name markers in the body */
@@ -203,7 +241,11 @@ function tokenize(q) {
  */
 export function search(cfg, query = {}, flags = {}) {
   const t0 = Date.now();
-  const idx = buildIndex(cfg, { days: Number(query.days) || 60, flags });
+  // Resolved once and reported as resolved. `Number(query.days) || 60` used to turn an explicit 0 -
+  // the search page's "all" - into 60 without a word, so the answer carried the wrong number of days
+  // while looking authoritative (BUGS #108).
+  const days = resolveDays(query.days);
+  const idx = buildIndex(cfg, { days, flags });
   const vocab = loadVocab(cfg);
   const field = FIELD_SETS[query.field] ? query.field : 'any';
   const pick = FIELD_SETS[field];
@@ -296,7 +338,7 @@ export function search(cfg, query = {}, flags = {}) {
     field,
     terms: tokens,
     expanded: groups,
-    corpus: { items: idx.items.length, runs: idx.runs.length, days: Number(query.days) || 60 },
+    corpus: { items: idx.items.length, runs: idx.runs.length, days, unbounded: days <= 0 },
     // Items that have a time but fall outside the range - so the user knows "it is not that
     // nothing was found, it was filtered out by the time condition"
     outsideTimeRange: timeFiltered,

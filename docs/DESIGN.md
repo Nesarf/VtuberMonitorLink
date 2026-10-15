@@ -105,7 +105,20 @@ Measured result: **Node's `fetch` (undici) does not read the system proxy by def
 So `net.js` makes the proxy explicit configuration:
 
 - Node-side fetching -> undici's `ProxyAgent` + `setGlobalDispatcher`
+- an http(s) proxy reached by hand -> the same `ProxyAgent`
+- a **SOCKS5** egress (Tor) -> a hand-written connector in `socks.js`, because `ProxyAgent` speaks http(s) only;
+  it performs the SOCKS5 handshake (domain targets, so DNS never leaves this machine) and wraps the tunnelled
+  socket in TLS itself, since replacing undici's connector also removes its TLS step
 - browser rendering -> Playwright's `proxy` option, chosen by `resolveBrowserEgress()` in `net.js`
+
+**A dispatcher only works with the `fetch` of its own generation.** Node's built-in `fetch` consumes the v1
+dispatcher handler API while `undici` 8's `Agent` implements v2, and only the `setGlobalDispatcher` path is
+mirrored back to v1 for legacy consumers. Measured on one fixture with one connector, npm `undici` 8.12.2
+against 7.30.1: the **global** `fetch` handed an npm-`undici` Agent sends **no CONNECT at all** (the proxy sees
+nothing and the request dies), while `undici`'s own `fetch` works on both versions. On 7 the generations
+happened to match, which is why this was invisible until an upgrade was attempted (BUGS #106). Every call
+site therefore takes its `fetch` from the same `undici` as its dispatcher, and `tools/integrity-check.mjs`
+refuses a file that pairs them across generations.
 
 `resolveBrowserEgress(cfg, subject)` is the one door a browser launch goes through: it resolves the egress with
 the same `resolveProxyMode()` every other fetch uses (so a source pinned to Tor renders through Tor rather than

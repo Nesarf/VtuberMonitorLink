@@ -78,8 +78,10 @@ jobs:
     # 20 was tried here on purpose, because the declaration said ">=20" and a floor no job runs is a hope. It
     # failed, and the failure is the measurement: `server/src/server.js` cannot even be imported on Node 20 -
     # "No such built-in module: node:sqlite", which the archive and the browser-cookie reader both use. So the
-    # floor was wrong by two majors, the declaration now says ">=22", and this leg is the one that keeps it
-    # true. If a future major is added to the matrix, add it here too rather than replacing a leg.
+    # floor was wrong by two majors, the declaration now says ">=22.19.0", and this leg is the one that keeps
+    # it true. The patch level is not decoration: `undici` 8 declares `>=22.19.0` for itself, so a 22.x below
+    # that cannot install it at all. If a future major is added to the matrix, add it here too rather than
+    # replacing a leg.
     #
     # The engine is cached across the legs. Without the cache each extra leg would download 90 MB of Firefox to
     # run checks that are identical on every major, and a job that is slow without producing a measurement is a

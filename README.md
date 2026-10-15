@@ -208,7 +208,7 @@ Coverage is **measured and pinned as a lower bound**: `verify:fast` compares aga
 
 > Naming: **user-facing files keep the full name** (launcher / zip / the unpacked folder), **internal identifiers use the short brand `VML`** (npm package names, `VML_*` environment variables, `vml-*` storage keys, temp files). `npm run brand` enforces the split.
 
-**2. Run from source** — `npm install`, then `npm run dev` (server 43110 + frontend 43111) or `npm run build && npm start`. **Node 22 or newer** is required, and declared in `package.json` (`engines.node`): the archive and the browser-cookie reader use the built-in `node:sqlite`, which Node 20 does not have. That floor is measured rather than assumed — it was written as `>=20`, a CI leg was added to run it, and that leg failed on exactly this import.
+**2. Run from source** — `npm install`, then `npm run dev` (server 43110 + frontend 43111) or `npm run build && npm start`. **Node 22.19 or newer** is required, and declared in `package.json` (`engines.node`). Two independent floors put it there: the archive and the browser-cookie reader use the built-in `node:sqlite`, which Node 20 does not have, and `undici` 8 — which the proxy and SOCKS paths depend on — declares `>=22.19.0` for itself. Both are measured rather than assumed: the floor was first written as `>=20`, a CI leg was added to run it, and that leg failed on exactly the `node:sqlite` import; the patch level came out of the lock file when `undici` 8 landed.
 
 ## Want to try it without spending tokens?
 

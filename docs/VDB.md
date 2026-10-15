@@ -114,7 +114,7 @@ The two sides arrived at the same order of magnitude independently, which counts
 | GET | `/api/vdb/groups` | Agency -> member count |
 | POST | `/api/vdb/import` | Turns the selected keys into follow targets, returns `added` / `skipped` |
 
-## 7. Self-check (`npm run test:vdb`, 25 items)
+## 7. Self-check (`npm run test:vdb`, 30 items)
 
 Offline assertions, no network:
 
@@ -122,7 +122,8 @@ Offline assertions, no network:
 - parsing: `{name:{cn,en}}` multilingual names, missing fields, any platform under `accounts`
 - index: agency grouping, platform counts, search (Chinese name / English name / bilibili mid / Twitch name / link with www / `@handle`)
 - import: the shape from `toPerson()` is accepted by `sanitizePerson()`; duplicate names / duplicate ids are blocked
-- **Reconciliation against the real tarball**: unpack the same archive with the machine's `tar.exe` and compare record counts item by item (our JS reader gets 10035 records, matching upstream's file count)
+- **artifact pin** (§9): the recorded digest is the sha256 of the bytes, a pin matches whatever case it was pasted in, a pin that is not a digest is reported as one, and `ensureIndex` is driven end to end against a **local HTTP server** (no network leaves the machine) to show the pin is enforced where the bytes arrive - accepted when it matches, refused with both digests named when it does not
+- **Reconciliation against the real tarball** (runs only with `VML_VDB_TARBALL` set): unpack the same archive with the machine's `tar.exe` and compare record counts item by item (our JS reader gets 10035 records, matching upstream's file count)
 
 > About that reconciliation: the entry names `tar.exe` produced had mojibake (`-大咲-` -> `-婢堝瓙-`), which made its record count come out low.
 > That in fact shows our reading path (explicitly decoding as UTF-8) is the correct one.
@@ -134,3 +135,24 @@ Offline assertions, no network:
 - **Agency attribution conflicts are not adjudicated automatically**: when the same person is marked with different agencies in different places, the `group` in the VDB record wins; we do not guess
 - **Graduation determination does not depend on VDB**: VDB is a roster, not a timeline, and has no "last activity time". The authoritative graduation signal still comes from our own
   items + silence detection (see `docs/DESIGN.md` §13). VDB only answers "which circle is this person in, and what other accounts do they have"
+- **The artifact pin is a config value, not a UI switch** (§9), the same choice as `vdb.allowLoopback`: it is a decision about bytes you have looked at, so it belongs where the other hand-written keys are
+
+## 9. The artifact pin (which bytes is this roster?)
+
+The roster comes from a **moving branch** (`.../tar.gz/refs/heads/master`), which is the right default for a
+snapshot that changes slowly - and it means a silent upstream change, a mirror serving something else and an
+ordinary refresh all look the same. So the tool now records what it accepted and can be told to accept only that:
+
+- every index records `artifact.sha256` and `artifact.bytes` (the digest and size of the archive it was built
+  from) plus `sourceUrl`, so the question is answerable from the cached file later, not only during the run that
+  fetched it; `indexSummary` shows the short form in the interface
+- the full digest is logged on every fetch, and that log line is where a value to pin comes from;
+- `"expectSha256": "<64 hex>"` under `vdb` in `config.json` makes a download whose bytes are not that artifact
+  **refused before anything is parsed** - the check is about the bytes, not about the records that happen to come
+  out of them - and the refusal names both digests and says how to accept the new version (clear the value);
+- a value that is not 64 hex characters is reported as **that**, rather than being used to refuse every refresh
+  with a message about content: a pin that can never match anything is a different problem from a roster that
+  changed, and the two want different answers.
+
+The digest is not a signature: it pins content you have already looked at, and it cannot tell you that upstream is
+trustworthy. What it removes is the *silent* part - "the roster is now something else" stops being invisible.

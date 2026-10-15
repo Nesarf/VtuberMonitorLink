@@ -117,14 +117,23 @@ export async function analyze({ cfg, results, watchResults = [], mode = 'daily',
       return { ok: false, error: msg, provider: { id: p.id, name: p.name, model: req.body.model } };
     }
     const j = JSON.parse(text);
-    const markdown = j?.choices?.[0]?.message?.content ?? '';
-    if (!markdown) return { ok: false, error: 'LLM 返回空内容 / empty completion' };
-    log?.info(`LLM ok ${markdown.length} chars`);
+    const done = completionOf(j);
+    if (!done.markdown) return { ok: false, error: 'LLM 返回空内容 / empty completion' };
+    if (done.truncated) {
+      // Visible on purpose: the caller logs it and the run record carries it, because a document that was cut
+      // off and does not say so is the one failure mode a long-output tool must not have.
+      log?.warn(
+        `LLM stopped at the token cap (finish_reason=length, max_tokens=${req.body.max_tokens}) - the document is cut off; raise maxTokens for this profile`
+      );
+    }
+    log?.info(`LLM ok ${done.markdown.length} chars${done.finishReason ? ' (' + done.finishReason + ')' : ''}`);
     return {
       ok: true,
-      markdown,
+      markdown: done.markdown,
+      finishReason: done.finishReason,
+      truncated: done.truncated,
       provider: { id: p.id, name: p.name, model: req.body.model },
-      usage: j?.usage ?? null,
+      usage: done.usage,
     };
   } catch (err) {
     log?.error(`LLM failed — ${err.message}`);
@@ -132,8 +141,34 @@ export async function analyze({ cfg, results, watchResults = [], mode = 'daily',
   }
 }
 
-/** Lightweight connectivity/balance probe before a run, so a long run does not wait for nothing / preflight check */
+/**
+ * What one completion actually contains: the text, and whether the model was cut off before it finished.
+ *
+ * Why the second half matters here more than in a chat toy: this product produces **documents** - a daily report,
+ * a merch scan - and the default cap is a token budget. Until this existed, a report that hit the cap came back
+ * as a shorter report with nothing anywhere saying so: `choices[0].message.content` was read, `finish_reason` was
+ * ignored, and the reader had no way to tell "the model had little to say" from "the model ran out of room".
+ * That is the one failure mode a long-output tool must not have, so `truncated` is derived from the provider's
+ * own `finish_reason` and travels with the result (the caller logs it and the run record carries it).
+ *
+ * Pure, and exported, so the mapping can be tested without a network: the shapes below are the whole contract.
+ */
+export function completionOf(json) {
+  const choice = json?.choices?.[0] ?? null;
+  const markdown = choice?.message?.content ?? '';
+  const finishReason = typeof choice?.finish_reason === 'string' ? choice.finish_reason : null;
+  return {
+    markdown,
+    finishReason,
+    // Only 'length' means the cap was hit. A missing finish_reason is unknown, and calling that "fine" would be a
+    // guess - `finishReason: null` is what says "the provider did not tell us".
+    truncated: finishReason === 'length',
+    usage: json?.usage ?? null,
+  };
+}
+
 export async function preflight(cfg, provider) {
+  // Lightweight connectivity/balance probe before a run, so a long run does not wait for nothing.
   const p = provider ?? activeProvider(cfg);
   if (!p.apiKey) return { ok: false, error: '未配置 API Key', provider: { id: p.id, name: p.name } };
   if (!p.baseUrl) return { ok: false, error: '未配置接口地址', provider: { id: p.id, name: p.name } };

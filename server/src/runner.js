@@ -278,6 +278,9 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
     runState.step = 'analyzing';
     log.info('analyzing with the LLM…');
     const a = await analyze({ cfg, results, watchResults, mode, log });
+    // A document that was cut off at the token cap has to be visible in the run record too, not only in the log:
+    // the report page is what a reader looks at, and the run history is what tells them why it is short.
+    if (a.ok && a.truncated) runState.truncated = true;
     // Accounting: how many tokens this analysis cost (when usage is unavailable record known=false, never guess a number)
     if (a.ok) {
       try {
@@ -492,6 +495,10 @@ export async function runOnce({ cfg, mode = 'daily', task = null, catchUp = fals
       items: items.length,
       provider: a.provider ?? null,
       chars: a.markdown.length,
+      // The provider's own reason for stopping, and whether the cap cut the document short. Recorded so the run
+      // history answers "why is this report shorter than the last one" without anyone reading the server log.
+      finishReason: a.finishReason ?? null,
+      truncated: a.truncated === true,
       task: task?.id ?? null,
       catchUp,
       // Sampling coverage: both the UI and the report have to say honestly "this round only looked at

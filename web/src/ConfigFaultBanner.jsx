@@ -20,13 +20,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n } from './i18n.jsx';
 import { api } from './api.js';
-import { bannerKeys, decideConfigFaultBanner, isHealthAnswer } from './config-fault.js';
-
-/** The identity of one standing fault: dismissed once, it stays dismissed until the fault is not the same one. */
-function faultKey(health) {
-  if (!isHealthAnswer(health)) return '';
-  return `${health.state}|${health.lastProblem?.at ?? health.at ?? ''}|${health.events?.length ?? 0}`;
-}
+// `faultKey` lives in config-fault.js beside the other two decisions. It started here, and that made the one rule
+// a reader is most likely to get wrong (a dismissal sticks until the fault is a *different* fault) the one rule no
+// test could reach - this project has no jsdom. Moving it made the rule testable; see tools/config-fault-test.mjs.
+import { bannerKeys, decideConfigFaultBanner, faultKey, isHealthAnswer } from './config-fault.js';
 
 export default function ConfigFaultBanner({ health, onRecovered }) {
   const { t } = useI18n();

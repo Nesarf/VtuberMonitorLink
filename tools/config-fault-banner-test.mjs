@@ -8,10 +8,11 @@
 // the UI walk asserts that a band is on screen anywhere - so the path was exercised by nothing.
 //
 // The header of this file used to add a third claim of its own - that `web/src/config-fault.js`, the decision
-// half, "is covered by the pure decision functions". It is not: `grep -rn 'config-fault|decideConfigFaultBanner'
-// tools/` matches this file and nothing else, so the decisions that this browser run cannot reach (a dismissal
-// that has to survive until the fault is a *different* one, a health answer that is not a health answer) have
-// no test either. Recorded here rather than quietly deleted, and recorded as an open gap in docs/BUGS.md #95.
+// half, "is covered by the pure decision functions". It was not: `grep -rn 'config-fault|decideConfigFaultBanner'
+// tools/` matched this file and nothing else. That gap is closed by `tools/config-fault-test.mjs`, which holds
+// the five pure functions with a control on every assertion and runs in the same gate as this file, before it -
+// cheap first, browser second. What does not move: this file is still the only harness that can say the band is
+// on screen, which is the claim the release notes got wrong.
 //
 // What this file does hold is the one thing none of the others could see: that the band appears in the shell
 // chrome, that it states the server's own condition, and that its recovery button is disabled with a reason

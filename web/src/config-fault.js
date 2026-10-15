@@ -147,3 +147,23 @@ export function decideConfigFaultBanner(h) {
     backupPath: baseName(h?.backupPath),
   };
 }
+
+/**
+ * The identity of one standing fault: dismissed once, it stays dismissed until the fault is not the same one.
+ *
+ * This function spent its first life inside `ConfigFaultBanner.jsx`, which made the dismissal rule - the part of
+ * the feature a reader is most likely to get wrong, since "dismiss closes it for ever" and "dismiss does nothing"
+ * are both bugs - untestable: this project has no jsdom, and a component cannot be driven from Node. It is a pure
+ * function of the health answer, so it belongs beside the other two decisions, and moving it here is what let the
+ * rule be held by tools/config-fault-test.mjs.
+ *
+ * The three parts are the condition, when it was recorded, and how many events the server has seen: the first two
+ * identify the fault, and the third catches a *new* event carrying the same state and the same timestamp (a
+ * second failed write inside the same second, say), which would otherwise arrive under a key that was dismissed.
+ * An answer that is not an answer yields '' - and '' is never a dismissal, so a broken payload shows the banner
+ * rather than hiding behind one.
+ */
+export function faultKey(health) {
+  if (!isHealthAnswer(health)) return '';
+  return `${health.state}|${health.lastProblem?.at ?? health.at ?? ''}|${health.events?.length ?? 0}`;
+}

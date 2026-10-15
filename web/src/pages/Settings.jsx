@@ -114,7 +114,10 @@ export default function Settings({ onLayout }) {
       const r = await api.listLlmModels(active);
       if (r.ok) {
         patchProvider('models', r.models);
-        flash(`${t('llmModelsFetched')}: ${r.models.length}`);
+        // "offered / total", because the filter hides what cannot see: a bare count would read as "this is how
+        // many models your provider has".
+        const total = r.vision?.total ?? r.models.length;
+        flash(`${t('llmModelsFetched')}: ${r.models.length} / ${total}`);
       } else {
         flash(`❌ ${r.error}`, 0);
       }

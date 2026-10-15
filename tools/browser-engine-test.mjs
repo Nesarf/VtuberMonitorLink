@@ -331,6 +331,17 @@ try {
 } catch (e) {
   process.stdout.write(JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }));
 }
+// Exit explicitly, once the answer is out.
+//
+// The claim this probe exists to check is "a browser really rendered", and the answer to that is on stdout. How
+// long the engine takes to tear down afterwards is a *different* claim, and the product already measures it:
+// renderUrl bounds its own teardown and reports "teardown did not finish within 6000ms" when it overruns.
+//
+// Letting the event loop drain instead made a **successful render report as a timeout**: measured on this
+// machine, the same data: render answered in 26.6 s while the browser connection kept the process alive, so
+// spawnSync never observed an exit and this check said "the render probe did not answer (exit null)" - after
+// waiting out its whole 180 s budget. The render had happened; the process simply had nothing left to say.
+process.exit(0);
 `;
 
 /** Does this sentence blame the SOCKS port? The predicate the control below runs on both inputs. */
@@ -550,7 +561,14 @@ if (withEngine.report?.engine) {
     } catch {
       out = null;
     }
-    assert.ok(out, `the render probe did not answer (exit ${child.status}): ${String(child.stdout).slice(-300)}${String(child.stderr).slice(-300)}`);
+    // Report *why* there was no answer. "exit null" was all this used to say, and null is what spawnSync
+    // reports both for a killed child and for a timeout - the two need very different follow-ups, and
+    // `child.error` is where spawnSync puts the difference.
+    const died = child.error ? String(child.error.code || child.error.message) : 'exit ' + child.status;
+    assert.ok(
+      out,
+      `the render probe did not answer (${died}); stdout tail: ${String(child.stdout).slice(-300)}; stderr tail: ${String(child.stderr).slice(-300)}`
+    );
     assert.equal(out.ok, true, `the render failed: ${out.error}`);
     assert.match(String(out.content), /vml-engine-probe/, 'the engine ran but the page did not come back');
   });

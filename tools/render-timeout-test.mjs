@@ -335,6 +335,68 @@ async function caseSlowSettlingPage() {
   }
 }
 
+/**
+ * The deadline has to reach the awaits Playwright gives no timeout of its own - `page.evaluate` above all.
+ *
+ * Both cases above hand the deadline something it can interrupt: the never-answering server is ended by
+ * `page.goto`'s own signal, and the slow-settling page by the signalled sleep. Neither covers the shape that
+ * actually hung. A page answers, the render gets *past* both of those, and only then does the page wedge its
+ * own main thread - so the next call the render makes is `page.evaluate`, which has no timeout, no signal, and
+ * nothing that could ever reject it while the renderer sat there busy. The documented `hardTimeoutMs` was
+ * therefore not the bound it claimed to be: measured on a machine where this same one-line render answered in
+ * 26.6 s once and had still not returned after 400 s on a later run, with the deadline having fired at 90 s in
+ * between. What ended it was the render closing what it owned.
+ *
+ * The fixture answers normally and blocks its main thread a moment *after* DOMContentLoaded, which is what
+ * puts the wedge past the navigation and past the wait and onto `page.evaluate`.
+ *
+ * The race is deliberate, and it is the difference between a gate that is red and a gate that hangs: without
+ * it a regression stops this suite instead of failing it, and a hanging gate teaches people to kill it.
+ */
+async function caseWedgedRenderer() {
+  const engine = await mod(MODULE_REL);
+  const http = await import('node:http');
+  const srv = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(
+      '<html><body>render-timeout-fixture</body>' +
+        '<script>setTimeout(function () { for (;;) {} }, 150);</script></html>'
+    );
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${srv.address().port}/`;
+  const cfg = renderCfg({ waitMs: 400, hardTimeoutMs: 4000 });
+  fs.mkdirSync(cfg.paths.tempDir, { recursive: true });
+  try {
+    const started = Date.now();
+    const raced = await Promise.race([
+      engine.renderUrl(url, cfg, { log: undefined, policy: { allowLoopback: true } }).then((r) => ({ r })),
+      sleep(30000).then(() => ({ timedOut: true })),
+    ]);
+    const ms = Date.now() - started;
+    t('a render whose page wedges its own main thread still returns, and it returns at the deadline', () => {
+      assert.ok(
+        !raced.timedOut,
+        'the render had not returned after 30 s: an await the deadline cannot reach is still unbounded'
+      );
+      assert.equal(raced.r.ok, false, `a wedged page was reported as rendered: ${JSON.stringify(raced.r).slice(0, 300)}`);
+      assert.equal(raced.r.code, 'render-timeout', `the answer is not a timeout: ${JSON.stringify(raced.r).slice(0, 300)}`);
+      assert.ok(ms < 25000, `the render took ${ms}ms, so the deadline is not what ended it`);
+    });
+    t('and a wedged render cleans up its browser and profile too', () => {
+      const live = firefoxProcessesMatching([cfg.paths.tempDir]);
+      assert.equal(live.ok, true, `could not read the process list: ${live.reason}`);
+      assert.deepEqual(live.hits, [], `a browser survived the wedged render:\n${live.hits.join('\n')}`);
+      assert.deepEqual(profileDirsMatching([cfg.paths.tempDir]), [], 'a profile survived the wedged render');
+    });
+  } finally {
+    // Not awaited: on the regression this case exists to catch, the render is still holding the connection and
+    // `close()` would wait for it, turning a red suite into a hanging one.
+    srv.closeAllConnections?.();
+    srv.close();
+  }
+}
+
 async function caseRefusedEgress() {
   const engine = await mod(MODULE_REL);
   // A port this test owned a moment ago and has closed: it refuses for the length of the run, without
@@ -531,6 +593,8 @@ await caseTimeout();
 section('C. a normal render still renders');
 await caseNormalRender();
 await caseSlowSettlingPage();
+section('C2. a page that wedges its own main thread cannot outlast the deadline either');
+await caseWedgedRenderer();
 section('D. a refused egress is still a reason; the cancellation primitive itself');
 await caseRefusedEgress();
 await caseCancellableSleep();

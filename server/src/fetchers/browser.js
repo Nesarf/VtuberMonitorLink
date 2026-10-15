@@ -272,6 +272,18 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
   const deadline = setTimeout(() => controller.abort(new RenderTimeoutError(hardMs)), hardMs);
   controller.signal.addEventListener('abort', () => {
     log?.error(`hard timeout after ${hardMs}ms — aborting the render and closing the browser (${url})`);
+    // The sentence above has always claimed a browser gets closed; this is the half that makes it true.
+    //
+    // Aborting the *signal* only reaches the operations that were handed it - `page.goto` and the sleep after
+    // it. Everything else inside this function had no bound of its own: `firefox.launch`, `newContext`, and
+    // above all `page.evaluate`, which Playwright gives no timeout at all. So when the renderer wedged, the
+    // render never returned and `hardTimeoutMs` was a promise this code did not keep - measured on a machine
+    // where the same one-line `data:` render answered in 26.6 s once and had still not returned after 400 s
+    // later, with the deadline having fired at 90 s in between.
+    //
+    // Closing what this render owns is what makes every pending call reject, whatever it was; the teardown in
+    // the `finally` below then finds the work already done and reports if it cannot finish.
+    Promise.allSettled([context?.close?.(), browser?.close?.()]).catch(() => {});
   }, { once: true });
 
   let browser = null;
@@ -334,10 +346,33 @@ export async function renderUrl(url, cfg, { log, waitMs, mode = 'text', subject 
       log?.warn(`browser request refused (${check.code}): ${target} — ${check.reason}`);
       return route.abort('addressunreachable').catch(() => {});
     });
-    // The deadline reaches the navigation as well as the sleep after it. `page.goto` has its own
-    // (shorter) timeout, and it is kept: it is what turns an unreachable host into a reason in ~45s
-    // instead of waiting for the hard deadline, which is meant for work that is *making progress*.
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000, signal: controller.signal });
+    // The deadline reaches the navigation by a race this code owns, not by a `signal` handed to `page.goto`.
+    //
+    // Playwright 1.63 documents `signal` for `page.goto`, and on this engine it does the opposite of what it
+    // promises: with a signal attached the navigation **never settles**. A one-line local page that resolves in
+    // 6.2 s without it had still not resolved 30 s later with it, and ended only when the signal aborted - with
+    // `waitUntil`, `timeout` and the route handler identical in both runs. The consequence was that no render
+    // could finish normally: every one ran to `hardTimeoutMs` and came back as a timeout, which is what
+    // `tools/render-timeout-test.mjs`'s ordinary-render case reports. Reproduced against the file with none of
+    // the surrounding changes in it, so it is not a side effect of them.
+    //
+    // Closing the browser on abort is not a substitute either - measured: with no signal at all, a navigation
+    // to a server that never answers still ran to `page.goto`'s own 45 s timeout, because closing waits for the
+    // navigation it is closing. So the deadline is raced against the navigation directly, which keeps both
+    // halves: a navigation that finishes normally, and a deadline that ends one that will not.
+    //
+    // `page.goto`'s own timeout stays: it is what turns an unreachable host into a reason in ~45 s instead of
+    // waiting for the hard deadline, which is meant for work that is *making progress*.
+    const navigation = page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    // The loser of the race is still pending and will reject later (the teardown closes the browser under it).
+    // Its rejection is the expected consequence of the deadline, not a finding, so it is consumed here rather
+    // than surfacing as an unhandled rejection in whatever process is embedding this.
+    navigation.catch(() => {});
+    const aborted = new Promise((_, reject) => {
+      if (controller.signal.aborted) return reject(controller.signal.reason);
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    });
+    await Promise.race([navigation, aborted]);
     await cancellableSleep(waitMs ?? bcfg.waitMs ?? 6000, controller.signal, hardMs);
     // A refused hop is the answer, not a footnote: the page content that did come back was fetched *around*
     // the refusal, so reporting it as a successful render would describe a page that was never fully loaded.

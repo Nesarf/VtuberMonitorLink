@@ -296,7 +296,21 @@ t('the chart offers exactly the ranges the server knows', () => {
   // Two lists that have to agree, in two files that cannot see each other: a range in the selector with no
   // entry in the server's table silently falls back to 30 days, which looks like the selector being
   // ignored rather than like a mistake.
-  const serverSrc = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
+  // The factory AND the route modules: the property is "the server knows these ranges", not "the table lives in
+  // server.js". /api/archive moved out, and its RANGES table went with the only code that used it, so a check
+  // reading one file reported a table that is present as missing. Sixth instance of this pattern in this
+  // repository, and the reason this is a concatenation rather than one readFileSync.
+  const routeDir = path.join(ROOT, 'server/src/routes');
+  const serverSrc = [fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8')]
+    .concat(
+      fs.existsSync(routeDir)
+        ? fs
+            .readdirSync(routeDir)
+            .filter((f) => f.endsWith('.js'))
+            .map((f) => fs.readFileSync(path.join(routeDir, f), 'utf8'))
+        : [],
+    )
+    .join('\n');
   const chartSrc = fs.readFileSync(path.join(ROOT, 'web/src/pages/Charts.jsx'), 'utf8');
   const serverBlock = /const RANGES = \{([\s\S]*?)\n\s*\};/.exec(serverSrc)?.[1];
 // A missing block must fail loudly rather than make the assertions below compare against an empty string: the

@@ -38,6 +38,7 @@ import { TARGET_KINDS, DEFAULT_RULES, allBaselines, baselineHealthSnapshot, chec
 import { DEFAULT_SAMPLES, isFresh, loadCache, probeUrl, updateCache } from './probe.js';
 import { clear as egressClear, decision as egressDecision, snapshot as egressSnapshot } from './egress.js';
 import { detectFromItems, marksFor, monthGrid, sanitizeEntry, upcoming } from './calendar.js';
+import { registerCalendarRoutes } from './routes/calendar.js';
 import { todayIn } from './day.js';
 import { adviceDir, diagnoseSource, listAdvice, readAdvice } from './diagnose.js';
 import { corpusSample, loadVocab, saveVocab, search, tagCloud } from './search.js';
@@ -2355,90 +2356,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     res.type(out.mime).send(out.body);
   });
 
-  // ── anniversary / birthday / 3D reveal countdown ─────────────────
-  // All the date arithmetic (leap-day shift, time zones, daylight saving) lives in calendar.js with its own self-test:
-  // tools/calendar-test.mjs (26 checks, covering 2/29 and cross-time-zone, cross-day cases).
-  app.get('/api/calendar', (req, res) => {
-    const cfg = getConfig();
-    const days = Math.max(1, Math.min(730, Number(req.query.days ?? cfg?.calendar?.reportDays ?? 60)));
-    const view = upcoming(cfg, { days });
-    const month = Number(req.query.month ?? 0);
-    const year = Number(req.query.year ?? 0);
-    const grid = month
-      ? monthGrid(year || Number(view.today.slice(0, 4)), month, Number(req.query.weekStart ?? 1), {
-          marks: marksFor(cfg, year || Number(view.today.slice(0, 4)), month),
-        })
-      : null;
-    res.json({ ...view, entries: cfg?.calendar?.entries ?? [], grid });
-  });
-
-  app.post('/api/calendar/entry', (req, res) => {
-    const cfg = getConfig();
-    const { entry, error } = sanitizeEntry(req.body ?? {});
-    if (error) return res.status(400).json({ error });
-    const list = [...(cfg.calendar?.entries ?? [])];
-    if (list.some((e) => e.id === entry.id)) return res.status(409).json({ error: `entry exists: ${entry.id}` });
-    list.push(entry);
-    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
-    res.json({ ok: true, entry, entries: list });
-  });
-
-  app.patch('/api/calendar/entry/:id', (req, res) => {
-    const cfg = getConfig();
-    const list = [...(cfg.calendar?.entries ?? [])];
-    const i = list.findIndex((e) => e.id === req.params.id);
-    if (i < 0) return res.status(404).json({ error: 'entry not found' });
-    const { entry, error } = sanitizeEntry({ ...list[i], ...req.body, id: list[i].id });
-    if (error) return res.status(400).json({ error });
-    list[i] = entry;
-    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
-    res.json({ ok: true, entry, entries: list });
-  });
-
-  app.delete('/api/calendar/entry/:id', (req, res) => {
-    const cfg = getConfig();
-    const list = (cfg.calendar?.entries ?? []).filter((e) => e.id !== req.params.id);
-    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
-    res.json({ ok: true, entries: list });
-  });
-
-  // add several hints at once (ticked in the UI and then submitted)
-  app.post('/api/calendar/import', (req, res) => {
-    const cfg = getConfig();
-    const incoming = Array.isArray(req.body?.entries) ? req.body.entries : [];
-    const list = [...(cfg.calendar?.entries ?? [])];
-    const added = [];
-    const skipped = [];
-    for (const raw of incoming) {
-      const { entry, error } = sanitizeEntry(raw);
-      if (error) {
-        skipped.push({ input: raw, error });
-        continue;
-      }
-      // the same day plus the same kind counts as a duplicate (hints often have several sources pointing at the same thing)
-      if (list.some((e) => e.date === entry.date && e.kind === entry.kind && e.name === entry.name)) {
-        skipped.push({ input: raw, error: 'duplicate' });
-        continue;
-      }
-      list.push(entry);
-      added.push(entry);
-    }
-    patchConfig(cfg, { calendar: { ...cfg.calendar, entries: list } });
-    res.json({ ok: true, added: added.length, skipped, entries: list });
-  });
-
-  // look for hints in the latest intel (**local regex, no network, no LLM**)
-  app.get('/api/calendar/detect', (req, res) => {
-    const cfg = getConfig();
-    const data = latestIntel(cfg, Number(req.query.limit ?? 300));
-    const found = detectFromItems(data.items ?? []);
-    const existing = new Set((cfg.calendar?.entries ?? []).map((e) => `${e.kind}|${e.date}`));
-    res.json({
-      ok: true,
-      scanned: (data.items ?? []).length,
-      suggestions: found.map((f) => ({ ...f, alreadyAdded: existing.has(`${f.kind}|${f.date}`) })),
-    });
-  });
+  // The countdown endpoints live in their own module now (server/src/routes/calendar.js), which is the shape the
+  // remaining groups will follow: a registrar that receives the live configuration and the one place that
+  // persists a patch of it, and imports everything else from the module that owns it.
+  registerCalendarRoutes(app, { getConfig, patchConfig, log });
 
   // once a probe succeeds the verdict is recomputed immediately, so the UI does not have to wait for the next run
 

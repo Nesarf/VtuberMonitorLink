@@ -89,6 +89,15 @@ function parseArgs(argv) {
     else if (a === '--with-browsers') out.browsers = true;
     else if (a === '--no-zip') out.zip = false;
     else if (a === '--fresh') out.fresh = true;
+    // Authenticode-sign the launcher, naming the certificate by thumbprint. Off by default so a
+    // developer build is not signed by accident: a signature is a claim about who made a file, and it
+    // should be made deliberately. The signing happens in stage 2, between the SEA step and the
+    // packing, because a manifest and a SHA256SUMS that describe an unsigned exe are both wrong the
+    // moment a signature is appended afterwards.
+    else if (a === '--sign') out.sign = String(argv[++i] || '').trim();
+    else if (a === '--sign-tool') out.signTool = path.resolve(String(argv[++i] || ''));
+    else if (a === '--sign-python') out.signPython = String(argv[++i] || 'python');
+    else if (a === '--sign-ledger') out.signLedger = path.resolve(String(argv[++i] || ''));
   }
   return out;
 }
@@ -431,6 +440,28 @@ function main() {
     }
     if (process.platform !== 'win32') fs.chmodSync(exeOut, 0o755);
     log('  -> ' + exeOut + '  (' + Math.round(fs.statSync(exeOut).size / 1048576) + ' MB)');
+
+    // ------------------------------------------------------------------ 2b. signature
+    // Here, and not later, because everything downstream describes these bytes: the package manifest
+    // lists per-file sizes, the release's SHA256SUMS lists the zip's hash, and the release notes name
+    // both. A signature appended after any of that makes each of them describe a file that no longer
+    // exists. Signing before the pack means the description is of the artifact people download.
+    if (args.sign) {
+      stage(2, 'Authenticode signature');
+      const signer = path.join(__dirname, 'sign-exe.cjs');
+      const signArgs = [signer, exeOut, '--thumbprint', args.sign];
+      const signTool = args.signTool || process.env.ONLYSIGN_DIR;
+      if (signTool) signArgs.push('--onlysign', signTool);
+      if (args.signPython) signArgs.push('--python', args.signPython);
+      // The ledger is named rather than defaulted. Measured: without this the record of what was signed
+      // lands in whichever directory the build was started from.
+      if (args.signLedger) signArgs.push('--ledger', args.signLedger);
+      // Fatal on failure. A build that ships an unsigned binary while the release notes claim a
+      // signature is worse than a build that stops, and omitting --sign is how you build without one.
+      run(process.execPath, signArgs);
+    } else {
+      log('  no --sign: the launcher is unsigned');
+    }
   } else {
     log('  skipped (--skip-sea), keeping ' + exeOut);
   }

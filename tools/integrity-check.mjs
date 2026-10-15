@@ -533,6 +533,17 @@ try {
   if (conditional.length) problems.push(`a login check is rendered conditionally, so it can be hidden: ${conditional.join(' | ')}`);
   else process.stdout.write('   [ok]   the login checks render unconditionally (no `{active && <button/>}` shape)\n');
 
+  // A route may live in the factory or in one of the route modules (server/src/routes/*.js, added by the route
+  // split); what this check is about is the guard, not the file, so the whole backend is searched. Found the
+  // hard way: moving /api/share/check-login into routes/share.js made this check report a missing guard that was
+  // still there, one file over.
+  const routeDir = path.join(ROOT, 'server', 'src', 'routes');
+  const backendSrc = [
+    serverSrc,
+    ...(fs.existsSync(routeDir)
+      ? fs.readdirSync(routeDir).filter((f) => f.endsWith('.js')).map((f) => fs.readFileSync(path.join(routeDir, f), 'utf8'))
+      : []),
+  ].join('\n');
   // (c) The routes those buttons call must exist, and the expensive ones must keep the in-flight guard.
   const routes = [
     ["/api/cookies/check", /app\.post\('\/api\/cookies\/check'/],
@@ -540,7 +551,7 @@ try {
     ["/api/share/check-login", /app\.get\('\/api\/share\/check-login', busyGuard\(/],
     ["/api/open", /app\.post\('\/api\/open'/],
   ];
-  const missingRoutes = routes.filter(([, re]) => !re.test(serverSrc));
+  const missingRoutes = routes.filter(([, re]) => !re.test(backendSrc));
   if (missingRoutes.length) problems.push(`check-login route(s) missing (or without their guard): ${missingRoutes.map(([r]) => r).join(', ')}`);
   else process.stdout.write(`   [ok]   the ${routes.length} routes behind those buttons exist (the long ones guarded)\n`);
 

@@ -34,12 +34,13 @@
 // browser eventually gives up on by itself): the point is a page that is genuinely still in flight when
 // the deadline arrives, so the abort is what ends it.
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SELF = fileURLToPath(import.meta.url);
@@ -151,28 +152,55 @@ async function answeringServer(body = '<html><body>render-timeout-fixture</body>
  * the runner is PowerShell's CIM query, and a machine where it is unavailable is reported as "cannot
  * tell" — never as "nothing is running", which would make the check pass by accident.
  */
-function firefoxProcessesMatching(needles) {
+const execFileAsync = promisify(execFile);
+
+/**
+ * Firefox processes whose command line names one of `needles`.
+ *
+ * Two things here are deliberate rather than incidental.
+ *
+ * **The CIM query is filtered at the WMI end.** Walking `Win32_Process` unfiltered materialises the
+ * `CommandLine` of every process on the machine before the pipeline discards any of them; filtering by name
+ * first lets WMI do that work. Measured here: 0.06 s filtered against 0.16 s unfiltered over 289 processes -
+ * the absolute numbers are not the point, the scaling with the whole process table is, and a CI runner's
+ * table is not a developer's.
+ *
+ * **It is asynchronous on purpose.** The previous version used `spawnSync`, which blocks this process's event
+ * loop for the whole query while a Playwright browser is alive and being driven over piped stdio - the shape
+ * that deadlocks. Measured on CI: the Node 22 leg hit the 60 s timeout with `status: null` (the child was
+ * **killed**, not failed) and this suite reported `could not read the process list: powershell query failed
+ * (null)`, while the same commit passed on Node 24. An async call cannot starve the loop it waits on.
+ */
+async function firefoxProcessesMatching(needles) {
   if (process.platform !== 'win32') {
-    const out = spawnSync('ps', ['-eo', 'pid,args'], { encoding: 'utf8' });
-    if (out.status !== 0) return { ok: false, reason: 'ps is unavailable' };
-    const hits = String(out.stdout ?? '')
-      .split('\n')
+    try {
+      const { stdout } = await execFileAsync('ps', ['-eo', 'pid,args'], { encoding: 'utf8' });
+      const hits = String(stdout ?? '')
+        .split('\n')
+        .filter((l) => needles.some((n) => l.includes(n)));
+      return { ok: true, hits };
+    } catch {
+      return { ok: false, reason: 'ps is unavailable' };
+    }
+  }
+  const script = "Get-CimInstance Win32_Process -Filter \"Name LIKE '%firefox%'\" | Select-Object -ExpandProperty CommandLine";
+  try {
+    const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 60000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const hits = String(stdout ?? '')
+      .split(/\r?\n/)
+      .filter(Boolean)
       .filter((l) => needles.some((n) => l.includes(n)));
     return { ok: true, hits };
+  } catch (e) {
+    // Naming *why* matters: the old message printed `(null)` for a killed child, which reads like an exit
+    // code and sent this failure down the wrong path once already (it looked like a version problem).
+    const why = e.killed ? `killed after the timeout (${e.signal ?? 'unknown signal'})` : (e.code ?? e.message);
+    return { ok: false, reason: `powershell query failed (${why})` };
   }
-  const script =
-    'Get-CimInstance Win32_Process | Where-Object { $_.Name -like "*firefox*" } | ' +
-    'Select-Object -ExpandProperty CommandLine';
-  const out = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
-    timeout: 60000,
-  });
-  if (out.status !== 0) return { ok: false, reason: `powershell query failed (${out.status})` };
-  const hits = String(out.stdout ?? '')
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .filter((l) => needles.some((n) => l.includes(n)));
-  return { ok: true, hits };
 }
 
 /** Every directory under the temp dir that looks like a Playwright/Firefox profile for this render. */
@@ -259,7 +287,7 @@ async function caseTimeout() {
       // The profile root is the needle: it belongs to this run, and any firefox whose command line names it
       // is this render's browser rather than one from something else running at the same time.
       await sleep(1500); // a process that was just killed can linger for a moment in the process list
-      const live = firefoxProcessesMatching([cfg.paths.tempDir]);
+      const live = await firefoxProcessesMatching([cfg.paths.tempDir]);
       assert.equal(live.ok, true, `could not read the process list: ${live.reason}`);
       assert.deepEqual(live.hits, [], `a browser from this render is still running:\n${live.hits.join('\n')}`);
     });
@@ -287,8 +315,8 @@ async function caseNormalRender() {
       assert.equal(r.code, undefined, 'a successful render carries a timeout code');
       assert.equal(r.timedOut, undefined);
     });
-    t('the ordinary path still cleans up its browser and profile', () => {
-      const live = firefoxProcessesMatching([cfg.paths.tempDir]);
+    await ta('the ordinary path still cleans up its browser and profile', async () => {
+      const live = await firefoxProcessesMatching([cfg.paths.tempDir]);
       assert.equal(live.ok, true, `could not read the process list: ${live.reason}`);
       assert.deepEqual(live.hits, [], `a browser survived a normal render:\n${live.hits.join('\n')}`);
       assert.deepEqual(profileDirsMatching([cfg.paths.tempDir]), [], 'a profile survived a normal render');
@@ -324,8 +352,8 @@ async function caseSlowSettlingPage() {
       assert.equal(r.code, 'render-timeout', `the answer is not a timeout: ${JSON.stringify(r).slice(0, 300)}`);
       assert.ok(ms < 30000, `the render took ${ms}ms: the deadline did not interrupt the settle`);
     });
-    t('and that timeout also cleans up after itself', () => {
-      const live = firefoxProcessesMatching([cfg.paths.tempDir]);
+    await ta('and that timeout also cleans up after itself', async () => {
+      const live = await firefoxProcessesMatching([cfg.paths.tempDir]);
       assert.equal(live.ok, true, `could not read the process list: ${live.reason}`);
       assert.deepEqual(live.hits, [], `a browser survived the deadline:\n${live.hits.join('\n')}`);
       assert.deepEqual(profileDirsMatching([cfg.paths.tempDir]), [], 'a profile survived the deadline');
@@ -383,8 +411,8 @@ async function caseWedgedRenderer() {
       assert.equal(raced.r.code, 'render-timeout', `the answer is not a timeout: ${JSON.stringify(raced.r).slice(0, 300)}`);
       assert.ok(ms < 25000, `the render took ${ms}ms, so the deadline is not what ended it`);
     });
-    t('and a wedged render cleans up its browser and profile too', () => {
-      const live = firefoxProcessesMatching([cfg.paths.tempDir]);
+    await ta('and a wedged render cleans up its browser and profile too', async () => {
+      const live = await firefoxProcessesMatching([cfg.paths.tempDir]);
       assert.equal(live.ok, true, `could not read the process list: ${live.reason}`);
       assert.deepEqual(live.hits, [], `a browser survived the wedged render:\n${live.hits.join('\n')}`);
       assert.deepEqual(profileDirsMatching([cfg.paths.tempDir]), [], 'a profile survived the wedged render');

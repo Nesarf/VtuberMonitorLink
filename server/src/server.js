@@ -85,6 +85,7 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerConfigRoutes } from './routes/config.js';
 import { registerEventsRoutes } from './routes/events.js';
 import { registerSourcesDiagnoseRoutes } from './routes/sources-diagnose.js';
 import { registerSourcesExtraRoutes } from './routes/sources-extra.js';
@@ -265,18 +266,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     next();
   });
 
-  // ── config ───────────────────────────────────────────────────────
-  // The whole config, minus its secrets: this route is what a DNS-rebound page used to be able to read, and
-  // it is also what every settings page round-trips. `publicConfig` masks at any depth and states which
-  // fields are secret in one place (config.js); the matching write-side restore lives in `persist`.
-  app.get('/api/config', (_req, res) => res.json(publicConfig(getConfig())));
-  app.put('/api/config', (req, res) => {
-    // The body is applied as sent (a settings page posts the whole config back), with the masked secrets
-    // restored from storage first. Narrow patches go through the same helper; see preserveSecretsIn below.
-    const next = persist(preserveSecretsIn(req.body ?? {}));
-    onConfigChanged?.(next);
-    res.json(publicConfig(next));
-  });
+  // Moved to server/src/routes/config.js (see its header for the shape the remaining groups follow).
+  registerConfigRoutes(app, { getConfig, patchConfig, log, onConfigChanged, persist, preserveSecretsIn });
+
+
 
   // ── config integrity ─────────────────────────────────────────────
   //

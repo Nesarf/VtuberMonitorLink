@@ -85,6 +85,7 @@ import { ensureIndex, indexSummary, loadCachedIndex, searchIndex, toPerson } fro
 // The documents the About panel may show (Readme, Privacy, Security) and the allowlist that keeps a caller to a
 // key in it rather than a path. See server/src/docs.js for why that lives in a module.
 import { docLang, pickDoc, readDocs } from './docs.js';
+import { registerSourcesRoutes } from './routes/sources.js';
 import { registerWatchRoutes } from './routes/watch.js';
 import { registerArchiveRoutes } from './routes/archive.js';
 import { registerShareRoutes } from './routes/share.js';
@@ -272,61 +273,10 @@ export function createApp({ getConfig, setConfig, log, onConfigChanged }) {
     if (result.ok) onConfigChanged?.(config);
   });
 
-  // ── source catalog ───────────────────────────────────────────────
-  app.get('/api/sources', (_req, res) => {
-    const cfg = getConfig();
-    // "last observed": when each source was last picked while observation mode is on.
-    // Given nothing but a sampling ratio, the user cannot tell which sources have not been looked at, and
-    // for how long — and that is exactly the evidence for judging whether coverage is sufficient.
-    const obs = loadObservationState(cfg);
-    const sources = effectiveSources(cfg).map((s) => ({
-      ...s,
-      lastObserved: obs.lastPicked?.[s.id] ?? null,
-    }));
-    res.json({
-      categories: CATEGORIES,
-      fetchKinds: FETCH_KINDS,
-      sources,
-      observation: {
-        enabled: cfg?.observation?.enabled === true,
-        rounds: obs.rounds ?? 0,
-        ratio: cfg?.observation?.sampleRatio ?? null,
-      },
-      selected: {
-        daily: selectSources(cfg, 'daily').length,
-        merch: selectSources(cfg, 'merch').length,
-      },
-    });
-  });
+  // Moved to server/src/routes/sources.js (see its header for the shape the remaining groups follow).
+  registerSourcesRoutes(app, { getConfig, patchConfig, log, persist, preserveSecretsIn });
 
-  app.patch('/api/sources/:id', (req, res) => {
-    let cfg = getConfig();
-    const { id } = req.params;
-    if (!effectiveSources(cfg).some((s) => s.id === id)) return res.status(404).json({ error: `unknown source: ${id}` });
-    const { enabled, login, url, uid, proxy, note, region } = preserveSecretsIn(req.body ?? {});
-    cfg.sources = cfg.sources ?? {};
-    cfg.sources[id] = {
-      ...(cfg.sources[id] ?? {}),
-      ...(enabled === undefined ? {} : { enabled: !!enabled }),
-      ...(login ? { login } : {}),
-    };
-    // overriding the handful of mutable fields of a built-in source (uid / url / egress / region) lands in
-    // the custom source list.
-    //
-    // The merge keeps only the fields actually sent (see mergeSourceOverride): spreading all of them at once
-    // writes `undefined` over a field the caller left out, and the sanitiser skips undefined values, so the
-    // entry's old value for that field is lost rather than kept. The region box on the sources page is what
-    // made that visible - editing a region wiped the url of the same override entry, silently.
-    const customIdx = (cfg.customSources ?? []).findIndex((s) => s.id === id);
-    if (url !== undefined || uid !== undefined || proxy !== undefined || note !== undefined || region !== undefined) {
-      const base = customIdx >= 0 ? cfg.customSources[customIdx] : effectiveSources(cfg).find((s) => s.id === id);
-      const merged = mergeSourceOverride(base, { url, uid, proxy, note, region });
-      if (customIdx >= 0) cfg.customSources[customIdx] = merged;
-      else cfg.customSources = [...(cfg.customSources ?? []), merged];
-    }
-    cfg = persist(cfg); // write through the secret-preserving path; the handler keeps using what was stored
-    res.json({ ok: true, sources: effectiveSources(cfg) });
-  });
+
 
   // ── custom sources ───────────────────────────────────────────────
   app.post('/api/sources/custom', (req, res) => {

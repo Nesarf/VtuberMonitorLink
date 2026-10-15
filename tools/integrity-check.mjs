@@ -460,9 +460,24 @@ try {
   if (spreadShape.url !== undefined) notes.push('the spread shape no longer loses an unmentioned field, so that check is now vacuous');
   else process.stdout.write('   [ok]   (and the spread shape it replaced really did lose it - the bug was not imaginary)\n');
 
-  const serverSrc2 = fs.readFileSync(path.join(ROOT, 'server/src/server.js'), 'utf8');
-  const routeBlock = serverSrc2.match(/app\.patch\('\/api\/sources\/:id'[\s\S]*?\n  \}\);/);
-  if (!routeBlock) problems.push('the source patch route could not be found, so its handling of region is unchecked');
+  // Search the factory AND the route modules, because the property under test is "the source patch route carries
+  // region through", not "that text lives in server.js". The group moved to server/src/routes/sources.js, and a
+  // check naming one file reports a moved route as a missing one - this is the fourth instance of the pattern
+  // (this file's own check-login guard, login-check-test and watch-baseline-test were the first three). The
+  // pattern is also indentation-tolerant now: inside a route module the body sits two spaces deeper than it did in
+  // the factory, so an exact "two spaces then });" stopped matching for a second reason.
+  const routeSources = [path.join(ROOT, 'server/src/server.js')].concat(
+    fs
+      .readdirSync(path.join(ROOT, 'server/src/routes'))
+      .filter((f) => f.endsWith('.js'))
+      .map((f) => path.join(ROOT, 'server/src/routes', f)),
+  );
+  let routeBlock = null;
+  for (const routeSource of routeSources) {
+    routeBlock = fs.readFileSync(routeSource, 'utf8').match(/app\.patch\('\/api\/sources\/:id'[\s\S]*?\n\s*\}\);/);
+    if (routeBlock) break;
+  }
+  if (!routeBlock) problems.push('the source patch route could not be found in server.js or server/src/routes/*.js, so its handling of region is unchecked');
   else if (!/region/.test(routeBlock[0])) problems.push('PATCH /api/sources/:id ignores region: the page would save a region that is never written');
   else process.stdout.write('   [ok]   the source patch route carries the region through\n');
 

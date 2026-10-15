@@ -29,9 +29,9 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function parseArgs(argv) {
   const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43198, mock: 43196, feed: 43195, headed: false, keep: false };
@@ -205,7 +205,16 @@ function seedConfig(mockPort, feedPort) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const base = 'http://127.0.0.1:' + args.port;
-  const exe = path.join(args.dir, path.basename(args.dir) + EXE);
+  // Resolved rather than assumed: the package under test may ship a launcher binary, or launcher/
+  // plus a bundled runtime with no exe. See tools/launch-target.cjs.
+  const target = resolveLaunch(args.dir);
+  if (!target) {
+    process.stderr.write('nothing in ' + args.dir + ' can start the app:\n');
+    for (const c of launchCandidates(args.dir)) {
+      process.stderr.write('  ' + (c.present ? 'present' : 'missing') + '  ' + c.what + ': ' + c.path + '\n');
+    }
+    process.exit(1);
+  }
 
   let firefox;
   try {
@@ -264,7 +273,7 @@ async function main() {
   // completely unrelated.
   const free = await waitPortFree(args.port, { onWait: (m) => process.stdout.write('  ' + m + '\n') });
   if (!free.free) process.stdout.write('  (warn) port ' + args.port + ' seems to stay occupied, the checks below may not line up\n');
-  const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(target.cmd, target.args.concat(['--no-open', '--port', String(args.port)]), { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(appOut);
   child.stderr.pipe(appOut);
   const restore = () => {

@@ -75,6 +75,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const { waitForAppReady } = require('./lib/app-ready.cjs');
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 let pass = 0;
 let fail = 0;
@@ -120,7 +121,10 @@ const enginePath = (() => {
 const enginePresent = !!enginePath && fs.existsSync(enginePath);
 
 const APP_DIR = path.join(ROOT, 'dist', 'VtuberMonitorLink');
-const EXE = path.join(APP_DIR, process.platform === 'win32' ? 'VtuberMonitorLink.exe' : 'VtuberMonitorLink');
+// How to start that package is resolved, not assumed: the shipped layout has no launcher binary at
+// all (launcher/ plus runtime/node.exe instead), and a walk that only knew about the exe would call
+// a perfectly runnable package "no packaged app" (tools/launch-target.cjs).
+const LAUNCH = resolveLaunch(APP_DIR);
 // Scratch goes under the OS temp directory, and `VML_TEST_TMP` overrides it.
 //
 // This line used to hard-code one machine's cache drive, which the repository's own sanitize check refused
@@ -258,7 +262,7 @@ async function startApp({ marker, configBytes, port }) {
   fs.writeFileSync(cfgPath, configBytes, 'utf8');
   const logPath = path.join(dir, 'app.log');
   const log = fs.openSync(logPath, 'w');
-  const child = spawn(EXE, ['--no-open', '--port', String(port)], {
+  const child = spawn(LAUNCH.cmd, LAUNCH.args.concat(['--no-open', '--port', String(port)]), {
     cwd: APP_DIR,
     // The override travels to the child here and nowhere else: a process started without it resolves the
     // config path exactly as it always did.
@@ -317,8 +321,11 @@ const CORRUPT_CONFIG = '{ "ui": { "theme": "dark", "layout": { "cols": 3 }';
 // A missing *engine* stays a failure, because that one is fixable in place (one `npx playwright install
 // firefox`, or the cache the fast job keeps) and because an engine that is absent would otherwise let a
 // misconfigured machine report "nothing to see here" as if it were the product's answer.
-if (!fs.existsSync(EXE)) {
-  process.stdout.write(`         no packaged app at ${EXE}: the banner's appearance is stated, not run\n`);
+if (!LAUNCH) {
+  const why = launchCandidates(APP_DIR)
+    .map((c) => (c.present ? 'present ' : 'missing ') + c.what)
+    .join('; ');
+  process.stdout.write(`         no runnable package at ${APP_DIR} (${why}): the banner's appearance is stated, not run\n`);
   process.stdout.write('         (build one with: npm run build:portable - the release workflow does this before the same gate)\n');
   process.exit(0);
 }

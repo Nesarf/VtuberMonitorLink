@@ -189,10 +189,10 @@ npm run i18n:coverage:update              # 覆盖度上涨后更新基线（棘
 
 **① 直接跑发行版**
 
-下载 `VtuberMonitorLink-1.0.0-win-x64.zip`（Releases 页），解压到任意目录，双击 `VtuberMonitorLink.exe`。
-不需要装 Node，不需要管理员权限，不需要命令行。
+下载 zip（Releases 页），解压到任意目录，双击 `launcher\launch.cmd`（Windows）或运行 `launcher/launch.sh`。
+不需要装 Node，不需要管理员权限，不需要命令行：包里自带 `runtime/` 运行时，没有安装程序，解压本身就是安装。
 
-> 命名约定：**面向使用者的文件用全名**（exe / zip / 解压出来的目录），**内部标识用短名 `VML`**
+> 命名约定：**面向使用者的文件用全名**（launcher / zip / 解压出来的目录），**内部标识用短名 `VML`**
 > （npm 包名、环境变量 `VML_*`、`localStorage` 的 `vml-*`、临时文件…）。
 > 这条规则由 `npm run brand` 守着，理由写在 `docs/RELEASE.md` 的 1.0.0 一节。
 

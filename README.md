@@ -204,9 +204,9 @@ Coverage is **measured and pinned as a lower bound**: `verify:fast` compares aga
 
 ## Two ways to run
 
-**1. Use the release build** — download `VtuberMonitorLink-1.0.0-win-x64.zip` from the Releases page, unpack anywhere, double-click `VtuberMonitorLink.exe`. No Node install, no admin rights, no terminal.
+**1. Use the release build** — download the zip from the Releases page, unpack anywhere, double-click `launcher\launch.cmd` (Windows) or run `launcher/launch.sh`. No Node install, no admin rights, no terminal: the package carries its own runtime under `runtime/`, so there is no installer and no build step — unpacking *is* the install.
 
-> Naming: **user-facing files keep the full name** (exe / zip / the unpacked folder), **internal identifiers use the short brand `VML`** (npm package names, `VML_*` environment variables, `vml-*` storage keys, temp files). `npm run brand` enforces the split.
+> Naming: **user-facing files keep the full name** (launcher / zip / the unpacked folder), **internal identifiers use the short brand `VML`** (npm package names, `VML_*` environment variables, `vml-*` storage keys, temp files). `npm run brand` enforces the split.
 
 **2. Run from source** — `npm install`, then `npm run dev` (server 43110 + frontend 43111) or `npm run build && npm start`. **Node 22 or newer** is required, and declared in `package.json` (`engines.node`): the archive and the browser-cookie reader use the built-in `node:sqlite`, which Node 20 does not have. That floor is measured rather than assumed — it was written as `>=20`, a CI leg was added to run it, and that leg failed on exactly this import.
 

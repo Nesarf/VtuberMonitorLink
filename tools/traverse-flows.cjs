@@ -1,6 +1,6 @@
 // tools/traverse-flows.cjs - walk the flows the other traversals never touch.
 //
-// ASCII only, CommonJS. Boots the packaged exe together with
+// ASCII only, CommonJS. Boots the packaged app together with
 //   - the mock LLM (so LLM-dependent routes can actually run), and
 //   - a local webhook receiver (so alert delivery is verified for real rather
 //     than assumed).
@@ -18,9 +18,9 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function parseArgs(argv) {
   const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43179, mock: 43178, hook: 43177, feed: 43176 };
@@ -45,14 +45,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const base = 'http://127.0.0.1:' + args.port;
-  const exe = path.join(args.dir, path.basename(args.dir) + EXE);
+  // Resolved rather than assumed: this package may ship a launcher binary, or launcher/ plus a
+  // bundled runtime with no exe at all. The walk is about the product, not about one layout.
+  const target = resolveLaunch(args.dir);
+  if (!target) {
+    process.stderr.write('nothing in ' + args.dir + ' can start the app:\n');
+    for (const c of launchCandidates(args.dir)) {
+      process.stderr.write('  ' + (c.present ? 'present' : 'missing') + '  ' + c.what + ': ' + c.path + '\n');
+    }
+    process.exit(1);
+  }
   const appDir = path.join(args.dir, 'app');
   const cfgPath = path.join(appDir, 'config.json');
   const hadConfig = fs.existsSync(cfgPath);
   const cfgBackup = hadConfig ? fs.readFileSync(cfgPath) : null;
   const created = ['reports', 'feeds', 'logs', 'watch', 'thumbs', 'advice'].filter((d) => !fs.existsSync(path.join(appDir, d)));
 
-  process.stdout.write('\nflow traversal: ' + args.dir + '\n\n');
+  process.stdout.write('\nflow traversal: ' + args.dir + '\n');
+  process.stdout.write('                ' + target.shown + '  (' + target.kind + ' layout)\n\n');
 
   // ── a webhook receiver, so delivery is observed rather than assumed
   const received = [];
@@ -171,7 +181,7 @@ ${entries}
   const appLog = path.join(appDir, 'logs', 'flow-app.txt');
   fs.mkdirSync(path.dirname(appLog), { recursive: true });
   const appOut = fs.createWriteStream(appLog, { flags: 'w' });
-  const child = spawn(exe, ['--no-open', '--port', String(args.port)], { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(target.cmd, target.args.concat(['--no-open', '--port', String(args.port)]), { cwd: args.dir, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.pipe(appOut);
   child.stderr.pipe(appOut);
 

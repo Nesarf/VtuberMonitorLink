@@ -6,23 +6,42 @@
 //
 //   --out <dir>        output root            (default <repo>/dist)
 //   --name <name>      package folder / exe   (default VtuberMonitorLink)
+//   --no-exe           do not build a launcher binary at all: ship launcher/ plus a bundled
+//                      runtime/node.exe instead of the SEA exe (implies --with-runtime).
+//                      This is the layout `npm run build:portable` uses.
 //   --skip-sea         do not rebuild the SEA launcher, reuse build/ exe
 //   --no-install       do not run npm install for app/server
-//   --with-runtime     also bundle runtime/node.exe (the SEA exe can run the
-//                      server in-process, so this is optional and doubles size)
+//   --with-runtime     also bundle runtime/node.exe (with the SEA exe this is optional, because
+//                      the exe can run the server in-process, but it doubles the package size)
 //   --with-browsers    also run `playwright install firefox` into pw-browsers/
 //                      (Firefox is the only engine this project ships: the bundled browser is
 //                       Playwright's Firefox, and the Chromium payload is gone)
 //
-// Output layout:
+// Output layout (default, `--no-exe`):
 //
 //   dist/VtuberMonitorLink/
-//     VtuberMonitorLink.exe     <- SEA single-file launcher + app runner
+//     launcher/                 <- double-click launch.cmd (Windows) or launch.sh
+//     runtime/node.exe          <- the bundled Node runtime the launcher spawns
 //     package.json              <- version source for the launcher
 //     README.txt                <- ASCII quickstart
 //     app/                      <- the application itself
 //       server/src/...  server/node_modules/...  web/dist/...
 //       config.json             <- created on first save (gitignored)
+//
+// Output layout (with the SEA launcher, i.e. no --no-exe):
+//
+//   dist/VtuberMonitorLink/
+//     VtuberMonitorLink.exe     <- SEA single-file launcher + app runner
+//     package.json  README.txt  app/   (and runtime/ only if --with-runtime was given)
+//
+// Why `--no-exe` is the shipped layout: the SEA step was measured at about 220 s of a 304 s
+// build - the single most expensive stage - and what it produced was a second copy of a Node
+// runtime (89 MB) whose only job was to load `launcher/launch.cjs`, which the package can carry
+// and run directly. Dropping it removes a build stage and one whole class of failure (a locked
+// or half-written exe, BUGS #13/#27) without removing a single feature.
+//
+// Every stage prints its own elapsed time: "each build costs ten-plus minutes" is a complaint
+// that deserves a number per stage rather than one number for the whole run.
 
 'use strict';
 
@@ -34,18 +53,37 @@ const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 function log(msg) {
   process.stdout.write(msg + '\n');
 }
 
+// Stage clock. The build took about 304 s before this existed and nobody could say which part of
+// it was the expensive one until it was measured by hand; a per-stage number is the difference
+// between "the build is slow" and "the SEA step is 220 s of a 304 s build".
+const STAGES = 9;
+let stageStart = Date.now();
+function stage(n, title) {
+  if (n > 1) log('       (' + ((Date.now() - stageStart) / 1000).toFixed(1) + 's in the previous stage)');
+  stageStart = Date.now();
+  log('[' + n + '/' + STAGES + '] ' + title);
+}
+
 function parseArgs(argv) {
-  const out = { out: path.join(ROOT, 'dist'), name: 'VtuberMonitorLink', sea: true, install: true, browsers: false, runtime: false, zip: true, fresh: false };
+  const out = { out: path.join(ROOT, 'dist'), name: 'VtuberMonitorLink', exe: true, sea: true, install: true, browsers: false, runtime: false, zip: true, fresh: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out') out.out = path.resolve(argv[++i]);
     else if (a === '--name') out.name = String(argv[++i] || '').trim() || out.name;
-    else if (a === '--skip-sea') out.sea = false;
+    else if (a === '--no-exe') {
+      // One flag, three consequences, stated here rather than spread over the file: no launcher
+      // binary, no SEA step, and therefore a bundled runtime is not optional any more (without
+      // one there would be nothing left that can start the app).
+      out.exe = false;
+      out.sea = false;
+      out.runtime = true;
+    } else if (a === '--skip-sea') out.sea = false;
     else if (a === '--no-install') out.install = false;
     else if (a === '--with-runtime') out.runtime = true;
     else if (a === '--with-browsers') out.browsers = true;
@@ -144,7 +182,62 @@ function dirBytes(dir) {
   return total;
 }
 
-const README_TXT = [
+// The quickstart shipped in the package. Two variants on purpose: the shipped layout has no
+// launcher binary, so a README that says "double-click VtuberMonitorLink.exe" would be describing
+// a file that is not in the zip - the one kind of documentation error a user cannot work around.
+const README_TXT_LAUNCHER = [
+  "Vtuber's Monitor Link",
+  '=====================',
+  '',
+  'A local web console that collects VTuber intelligence from public sources,',
+  'analyzes it with your own LLM API key, and writes dated reports on disk.',
+  '',
+  'QUICK START',
+  '-----------',
+  '  1. Double-click launcher\\launch.cmd   (Windows)',
+  '     or run          launcher/launch.sh  (Linux / macOS)',
+  '  2. Your browser opens http://127.0.0.1:43110 automatically.',
+  '  3. Open "Settings": paste your LLM API key and pick a browser.',
+  '  4. Open "Sources": choose which sites to crawl and whether each needs login.',
+  '  5. Open "Run" and press Start.',
+  '',
+  'COMMAND LINE',
+  '------------',
+  '  launcher\\launch.cmd --help      show all options',
+  '  launcher\\launch.cmd --doctor    check this installation',
+  '  launcher\\launch.cmd --paths     print the resolved paths',
+  '  launcher\\launch.cmd --port 8080 use another port',
+  '  launcher\\launch.cmd --no-open   do not open a browser',
+  '',
+  'WHAT IS WRITTEN WHERE',
+  '---------------------',
+  '  app/config.json   your settings (API key included - keep it private)',
+  '  app/reports/      generated reports',
+  '  app/feeds/        raw fetched content',
+  '  app/logs/         run logs',
+  '',
+  'PRIVACY',
+  '-------',
+  '  This package ships no account, cookie, token, or API key.',
+  '  Everything runs on 127.0.0.1 and only talks to the sites you enable',
+  '  plus the LLM endpoint you configure. Login state is only ever reused',
+  '  from the browser profile you point it at.',
+  '',
+  'REQUIREMENTS',
+  '------------',
+  '  Windows 10/11 (x64). No installer, no admin rights, no Node.js install:',
+  '  runtime\\node.exe is included.',
+  '  Keep launcher\\, runtime\\ and app\\ together - launch.cmd starts the',
+  '  server from app\\ using runtime\\node.exe. The whole folder may be moved',
+  '  or renamed freely, but the parts have to stay together.',
+  '  For browser-rendered sources, either let it use its own Firefox',
+  '  (Settings > Browser > bundled, one-time download) or point it at an',
+  '  already installed Firefox.',
+  '',
+].join('\r\n');
+
+/** The same quickstart for the SEA layout, still built by --skip-sea for existing users. */
+const README_TXT_EXE = [
   "Vtuber's Monitor Link",
   '=====================',
   '',
@@ -195,6 +288,7 @@ const README_TXT = [
 ].join('\r\n');
 
 function main() {
+  const BUILD_START = Date.now();
   const args = parseArgs(process.argv.slice(2));
   const pkgDir = path.join(args.out, args.name);
   const appDir = path.join(pkgDir, 'app');
@@ -207,10 +301,11 @@ function main() {
   log('  output  : ' + pkgDir);
   log('  version : ' + rootPkg.version);
   log('  node    : ' + process.version + ' (' + process.execPath + ')');
+  log('  layout  : ' + (args.exe ? 'SEA launcher binary' : 'launcher/ + bundled runtime (no exe)'));
   log('');
 
   // ------------------------------------------------------------------ 1. web
-  log('[1/7] web UI build');
+  stage(1, 'web UI build');
   const distIndex = path.join(ROOT, 'web', 'dist', 'index.html');
   // "Reusing the old artifacts" is a trap: you change the UI but forget to run npm run build
   // first, and the package still contains the old bundle — while the build log looks perfectly
@@ -244,12 +339,21 @@ function main() {
   }
 
   // ------------------------------------------------------------------ 2. SEA
-  log('[2/7] SEA launcher');
+  stage(2, 'SEA launcher');
   const exeName = args.name + EXE;
   const exeOut = path.join(pkgDir, exeName);
   fs.mkdirSync(pkgDir, { recursive: true });
 
-  if (args.sea) {
+  if (!args.exe) {
+    // A launcher binary left behind by an earlier build must not survive into the zip: the package
+    // would then contain both layouts, the traversals would start it as the exe layout, and the
+    // launcher layout - the one this package is supposed to be - would go unexercised.
+    if (fs.existsSync(exeOut)) {
+      rmrf(exeOut);
+      log('  removed a launcher binary left by an earlier build: ' + exeOut);
+    }
+    log('  skipped (--no-exe): this package ships launcher/ + runtime/ instead');
+  } else if (args.sea) {
     fs.mkdirSync(buildDir, { recursive: true });
     const seaConfig = path.join(buildDir, 'sea-config.json');
     const blob = path.join(buildDir, 'sea-prep.blob');
@@ -314,19 +418,38 @@ function main() {
   }
 
   // -------------------------------------------------------------- 3. runtime
-  log('[3/7] bundled Node runtime');
+  stage(3, 'bundled Node runtime');
   const runtimeDir = path.join(pkgDir, 'runtime');
   if (args.runtime) {
     fs.mkdirSync(runtimeDir, { recursive: true });
-    copyFile(process.execPath, path.join(runtimeDir, 'node' + EXE));
-    log('  -> runtime/node' + EXE + '  (the exe will spawn this instead of running inline)');
+    const nodeOut = path.join(runtimeDir, 'node' + EXE);
+    copyFile(process.execPath, nodeOut);
+    log(
+      '  -> runtime/node' + EXE + '  (' + (fs.statSync(nodeOut).size / 1048576).toFixed(1) + ' MB, ' +
+        (args.exe ? 'the exe will spawn this instead of running inline' : 'the launcher spawns this; nothing else can start the app') + ')'
+    );
   } else {
     rmrf(runtimeDir);
     log('  skipped (optional; the SEA exe runs the server in-process)');
   }
 
-  // ------------------------------------------------------------- 4. app tree
-  log('[4/7] application files');
+  // ------------------------------------------------------------- 4. launcher
+  // The launcher is what a user double-clicks, so it has to be *in* the package for the launcher
+  // layout to exist at all. It used to be embedded into the exe by the SEA step and never copied,
+  // which is why a package without the exe had nothing to start it with.
+  stage(4, 'launcher scripts');
+  if (!args.exe) {
+    const launcherOut = path.join(pkgDir, 'launcher');
+    rmrf(launcherOut);
+    copyDir(path.join(ROOT, 'launcher'), launcherOut);
+    const copied = fs.readdirSync(launcherOut).sort();
+    log('  -> launcher/  (' + copied.join(', ') + ')');
+  } else {
+    log('  skipped (the SEA exe embeds launcher/launch.cjs)');
+  }
+
+  // ------------------------------------------------------------- 5. app tree
+  stage(5, 'application files');
   //
   // Runtime data has to survive this build.
   // This used to be "rmrf(appDir) and rebuild", while app/ holds **the user's config.json
@@ -410,8 +533,8 @@ function main() {
     log('  restored runtime state: ' + stashed.join(', '));
   }
 
-  // ------------------------------------------------------------- 5. runtime deps
-  log('[5/7] server dependencies');
+  // ------------------------------------------------------------- 6. runtime deps
+  stage(6, 'server dependencies');
   const serverDir = path.join(appDir, 'server');
   const serverModules = path.join(serverDir, 'node_modules');
   rmrf(serverModules);
@@ -447,8 +570,8 @@ function main() {
     log('  skipped (--no-install)');
   }
 
-  // --------------------------------------------------------------- 6. extras
-  log('[6/7] launcher extras');
+  // --------------------------------------------------------------- 7. extras
+  stage(7, 'package manifest and README');
   // A purpose-built manifest, not a copy of the repo one: the repo file is
   // bilingual (non-ASCII) and declares npm workspaces that do not exist here.
   const releaseManifest = {
@@ -460,8 +583,10 @@ function main() {
     type: 'module',
   };
   fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify(releaseManifest, null, 2) + '\n', 'ascii');
-  fs.writeFileSync(path.join(pkgDir, 'README.txt'), README_TXT, 'ascii');
-  log('  -> package.json, README.txt');
+  // The quickstart describes the layout that is actually in the zip, so the two cannot drift into
+  // telling the user to double-click a file this build did not produce.
+  fs.writeFileSync(path.join(pkgDir, 'README.txt'), args.exe ? README_TXT_EXE : README_TXT_LAUNCHER, 'ascii');
+  log('  -> package.json, README.txt (' + (args.exe ? 'exe layout' : 'launcher layout') + ')');
 
   if (args.browsers) {
     const pwDir = path.join(pkgDir, 'pw-browsers');
@@ -475,31 +600,39 @@ function main() {
     log('  pw-browsers/ payload: ' + (dirBytes(pwDir) / 1048576).toFixed(1) + ' MB');
   }
 
-  // -------------------------------------------------------------- 7. verify
-  log('[7/7] verify');
-  const exe = path.join(pkgDir, exeName);
-  if (fs.existsSync(exe)) {
-    const doctor = spawnSync(exe, ['--doctor'], { encoding: 'utf8', cwd: pkgDir });
-    process.stdout.write(doctor.stdout || '');
-    if (doctor.stderr) process.stderr.write(doctor.stderr);
-    if (doctor.status !== 0) throw new Error('--doctor reported a problem');
-  } else {
-    log('  (no exe to verify)');
+  // -------------------------------------------------------------- 8. verify
+  stage(8, 'verify');
+  // Verify through the same resolution the traversals use, so "the build verified itself" means
+  // the package can actually be started - not merely that a file with the right name exists.
+  const target = resolveLaunch(pkgDir);
+  if (!target) {
+    throw new Error(
+      'the built package cannot be started: no launcher binary and no launcher/ + runtime/ pair\n' +
+        launchCandidates(pkgDir)
+          .map((c) => '    ' + (c.present ? 'present ' : 'missing ') + c.what + ': ' + c.path)
+          .join('\n')
+    );
   }
+  log('  starting via ' + target.kind + ' layout: ' + target.shown);
+  const doctor = spawnSync(target.cmd, target.args.concat(['--doctor']), { encoding: 'utf8', cwd: pkgDir });
+  process.stdout.write(doctor.stdout || '');
+  if (doctor.stderr) process.stderr.write(doctor.stderr);
+  if (doctor.status !== 0) throw new Error('--doctor reported a problem');
 
   // -------------------------------------------------------------- 8. release zip
   // The release package has to be clean: runtime data (API key / history) must not go into it,
   // which make-zip.mjs guarantees.
   if (args.zip) {
-    log('');
-    log('[8/8] release zip');
+    stage(9, 'release zip');
     const plat = process.platform === 'win32' ? 'win' : process.platform;
     const zipName = `${args.name}-${rootPkg.version}-${plat}-${process.arch}.zip`;
     run(process.execPath, [path.join(__dirname, 'make-zip.mjs'), pkgDir, path.join(args.out, zipName)]);
   }
 
+  log('       (' + ((Date.now() - stageStart) / 1000).toFixed(1) + 's in the previous stage)');
   log('');
   log('done: ' + pkgDir);
+  log('total: ' + ((Date.now() - BUILD_START) / 1000).toFixed(1) + 's');
   log('');
 }
 

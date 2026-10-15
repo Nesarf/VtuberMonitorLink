@@ -287,8 +287,9 @@ const releaseNotes = `# Vtuber's Monitor Link ${version}
 
 ## Installation
 
-Unpack it and run \`VtuberMonitorLink.exe\` directly; the browser opens the local interface (by default
-\`http://127.0.0.1:43110\`). It needs no Node.js installation and reports no data over the network.
+Unpack it and run \`launcher\\launch.cmd\` (Windows) or \`launcher/launch.sh\`; the browser opens the local
+interface (by default \`http://127.0.0.1:43110\`). It needs no Node.js installation - the package carries
+its own runtime - and reports no data over the network.
 
 Full details are in \`README.md\` and \`docs/\`.
 `;

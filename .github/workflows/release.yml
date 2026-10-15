@@ -97,8 +97,11 @@ jobs:
           }
           exit $code
 
-      - name: Build web UI, portable exe and release zip
-        run: node tools/build-portable.cjs
+      - name: Build web UI, portable package and release zip
+        # The shipped layout has no SEA launcher binary: the package carries launcher/ plus a
+        # bundled runtime/node.exe, and launcher/launch.cmd is what a user double-clicks. Building
+        # it also skips the single most expensive stage of the old build (the SEA step, ~220 s).
+        run: node tools/build-portable.cjs --no-exe
 
       - name: Full verify (release layout, secrets, run data)
         run: npm run verify

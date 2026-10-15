@@ -134,17 +134,30 @@ The UI can probe the common local proxy ports: it tries them one by one and fill
 
 ## 5. Packaging
 
-The shape actually adopted: **a single-file launcher + an `app/` directory**.
+The shape actually adopted: **a launcher directory + a bundled runtime + an `app/` directory**.
 
 ```
 dist/VtuberMonitorLink/
-  VtuberMonitorLink.exe     Node SEA single-file launcher (Node runtime embedded, about 90 MB)
+  launcher/                 launch.cmd / launch.sh / launch.cjs - what the user double-clicks
+  runtime/node.exe          the bundled Node runtime the launcher spawns (about 90 MB)
   package.json              the launcher reads the version number
   README.txt                plain-ASCII quick start
   app/                      the program itself (server/ + web/dist/ + node_modules/)
 ```
 
-### 5.1 Why the launcher is built as a SEA
+This replaced an earlier shape built around a **single-file SEA launcher** (`VtuberMonitorLink.exe`).
+That shape still builds (`npm run build:exe`) and section 5.1 keeps its design notes, but it is no
+longer what ships, for a measured reason. The SEA step was **about 220 s of a 304 s build** - the
+single most expensive stage - and what it produced was a second copy of a Node runtime (89 MB) whose
+only job was to load `launcher/launch.cjs`, a file the package can simply carry. Dropping it removed
+a build stage and a whole class of failure (a locked or half-written exe, BUGS #13 and #27) without
+removing a single feature. Every build stage now prints its own elapsed time, so the next decision
+of this kind starts from numbers instead of from a feeling that "the build is slow".
+
+### 5.1 Why the launcher can also be built as a SEA
+
+Still supported (`npm run build:exe`), no longer the shipped shape - see the note at the top of
+section 5 for the measurement that decided it.
 
 - Use Node's built-in SEA (single executable application) to inject `launcher/launch.cjs`
   into a copy of `node.exe`, which yields a real single-file exe. The user does not need to install Node.
@@ -166,9 +179,10 @@ dist/VtuberMonitorLink/
 
 | Option | Artifact | Notes |
 | --- | --- | --- |
-| single file + app/ (current) | `VtuberMonitorLink.exe` + `app/` | about 112 MB; no external dependencies, unzip and run |
-| the same + bundled engine | plus `pw-browsers/` | `npm run build:portable`; no dependency on a system browser at all |
-| with a separate runtime | plus `runtime/node.exe` | `--with-runtime`; the launcher switches to `spawn` mode |
+| launcher/ + runtime/ + app/ (shipped) | `launcher/` + `runtime/node.exe` + `app/` | about 112 MB; no external dependencies, unzip and run; `--no-exe`, and the default of `npm run build:portable` |
+| single file + app/ (older shape) | `VtuberMonitorLink.exe` + `app/` | still built by `npm run build:exe`; the SEA stage costs about 220 s and duplicates the runtime |
+| either of the above + bundled engine | plus `pw-browsers/` | `--with-browsers`; no dependency on a system browser at all |
+| with a separate runtime | plus `runtime/node.exe` | `--with-runtime`; the launcher switches to `spawn` mode (implied by `--no-exe`) |
 
 ### 5.3 Release verification
 

@@ -119,7 +119,7 @@ that reached a public clone must be treated as known. Rotating first, rewriting 
 
 ## Distribution form
 
-- **Portable package**: `VtuberMonitorLink.exe` (a single-file launcher) + `app/`, unzip and run;
+- **Portable package**: `launcher/` (a launcher script) + `runtime/` (the Node runtime it spawns) + `app/`, unzip and run;
   the package **contains no** user data, account, cookie or Key.
 - `app/config.json` is generated on first run, and the user fills in the LLM Key, browser path and proxy themselves.
 - The packaging script builds `app/` from `server/`, `web/dist/` and `docs/` (plus the two Readmes and `LICENSE`),

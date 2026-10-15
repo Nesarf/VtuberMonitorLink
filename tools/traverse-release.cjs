@@ -1,6 +1,6 @@
 // tools/traverse-release.cjs - walk the whole surface of a built release.
 //
-// ASCII only, CommonJS. Starts the packaged exe, exercises every HTTP route the
+// ASCII only, CommonJS. Starts the packaged app, exercises every HTTP route the
 // console exposes, checks the static/SPA layer, and verifies the error paths.
 //
 //   node tools/traverse-release.cjs [--dir dist/VtuberMonitorLink] [--port 43199]
@@ -14,10 +14,12 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 const { waitPortFree, waitChildExit } = require('./lib/wait-port.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXE = process.platform === 'win32' ? '.exe' : '';
+// This walk no longer computes a launcher path itself: see tools/launch-target.cjs. It only needs
+// to know how to *start* a package, not what the package is called or where its binary sits.
 
 function parseArgs(argv) {
   const out = { dir: path.join(ROOT, 'dist', 'VtuberMonitorLink'), port: 43199, keep: false, withRun: false };
@@ -64,16 +66,21 @@ function sleep(ms) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const base = 'http://127.0.0.1:' + args.port;
-  const exeName = path.basename(args.dir) + EXE;
-  const exe = path.join(args.dir, exeName);
+  // Whatever layout this package uses - the SEA launcher binary, or launcher/ + runtime/ with no
+  // exe at all. Resolved by tools/launch-target.cjs so this walk is a statement about the product
+  // rather than about one packaging choice.
+  const target = resolveLaunch(args.dir);
 
-  if (!fs.existsSync(exe)) {
-    process.stderr.write('exe not found: ' + exe + '\n');
+  if (!target) {
+    process.stderr.write('nothing in ' + args.dir + ' can start the app:\n');
+    for (const c of launchCandidates(args.dir)) {
+      process.stderr.write('  ' + (c.present ? 'present' : 'missing') + '  ' + c.what + ': ' + c.path + '\n');
+    }
     process.exit(1);
   }
 
   process.stdout.write('\ntraversing: ' + args.dir + '\n');
-  process.stdout.write('            ' + exe + '  on port ' + args.port + '\n\n');
+  process.stdout.write('            ' + target.shown + '  (' + target.kind + ' layout)  on port ' + args.port + '\n\n');
 
   // Snapshot anything the run will touch, so the folder can be restored clean.
   const appDir = path.join(args.dir, 'app');
@@ -101,7 +108,7 @@ async function main() {
     process.exit(1);
   }
 
-  const child = spawn(exe, ['--no-open', '--port', String(args.port)], {
+  const child = spawn(target.cmd, target.args.concat(['--no-open', '--port', String(args.port)]), {
     cwd: args.dir,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const EXE = process.platform === 'win32' ? '.exe' : '';
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 const TEXT_EXT = new Set([
   '.js', '.cjs', '.mjs', '.jsx', '.ts', '.json', '.md', '.txt', '.html',
@@ -216,7 +217,11 @@ function main() {
   }
 
   const name = path.basename(args.dir);
-  const exe = path.join(args.dir, name + EXE);
+  // How this package is started, resolved rather than assumed. Two layouts are legitimate: the SEA
+  // launcher binary, and launcher/ plus a bundled runtime with no exe. Proofreading used to require
+  // the binary by name, so the layout this project actually ships would have failed its own release
+  // check while being perfectly runnable (tools/launch-target.cjs).
+  const target = resolveLaunch(args.dir);
   process.stdout.write('\nproofreading: ' + args.dir + '\n\n');
 
   // ---------------------------------------------------------------- 1. layout
@@ -228,7 +233,6 @@ function main() {
   // the checker's mouth shut), give it a proper mode.
   if (!args.scanOnly) {
   const required = [
-    [name + EXE, 'launcher executable'],
     ['package.json', 'version source'],
     ['README.txt', 'ASCII quickstart'],
     [path.join('app', 'server', 'src', 'index.js'), 'server entry'],
@@ -240,6 +244,14 @@ function main() {
     [path.join('app', 'README.md'), 'README for the About panel (English)'],
     [path.join('app', 'README.zh-CN.md'), 'README for the About panel (Chinese)'],
   ];
+  // The launcher is required in every layout, but *which file it is* is a property of the layout.
+  // Both lists are checked the same way, so a package with neither still reports a missing launcher.
+  if (target && target.kind === 'launcher') {
+    required.unshift([path.join('launcher', 'launch.cjs'), 'launcher script (no-exe layout)']);
+    required.unshift(['runtime/node' + EXE, 'bundled Node runtime (no-exe layout)']);
+  } else {
+    required.unshift([name + EXE, 'launcher executable (SEA layout)']);
+  }
   process.stdout.write('1. required files\n');
   for (const [rel, why] of required) {
     let ok = fs.existsSync(path.join(args.dir, rel));
@@ -252,19 +264,25 @@ function main() {
   }
 
   // --------------------------------------------------------------- 2. doctor
-  process.stdout.write('\n2. exe self-check (--doctor)\n');
-  if (fs.existsSync(exe)) {
-    const r = spawnSync(exe, ['--doctor'], { encoding: 'utf8', cwd: args.dir, timeout: 60000 });
+  process.stdout.write('\n2. launcher self-check (--doctor)\n');
+  if (target) {
+    process.stdout.write('   via ' + target.shown + '  (' + target.kind + ' layout)\n');
+    const r = spawnSync(target.cmd, target.args.concat(['--doctor']), { encoding: 'utf8', cwd: args.dir, timeout: 60000 });
     const text = (r.stdout || '') + (r.stderr || '');
     for (const line of text.trim().split(/\r?\n/)) process.stdout.write('   | ' + line + '\n');
     if (r.status !== 0) problems.push('--doctor exited with ' + r.status);
-    const v = spawnSync(exe, ['--version'], { encoding: 'utf8', cwd: args.dir, timeout: 30000 });
+    const v = spawnSync(target.cmd, target.args.concat(['--version']), { encoding: 'utf8', cwd: args.dir, timeout: 30000 });
     const ver = (v.stdout || '').trim();
     process.stdout.write('   --version -> ' + ver + '\n');
     const pkgVer = JSON.parse(fs.readFileSync(path.join(args.dir, 'package.json'), 'utf8')).version;
-    if (ver !== pkgVer) problems.push('exe version ' + JSON.stringify(ver) + ' != package.json ' + pkgVer);
+    if (ver !== pkgVer) problems.push('launcher version ' + JSON.stringify(ver) + ' != package.json ' + pkgVer);
   } else {
-    problems.push('no executable to check');
+    problems.push(
+      'no runnable launcher: ' +
+        launchCandidates(args.dir)
+          .map((c) => (c.present ? 'present ' : 'missing ') + c.what)
+          .join('; ')
+    );
   }
   } // <- /--scan-only skips sections 1 and 2
 
@@ -291,12 +309,16 @@ function main() {
     const rel = path.relative(args.dir, abs).replace(/\\/g, '/');
     if (rel === name + EXE) continue;
     const ext = path.extname(abs).toLowerCase();
-    const buf = fs.readFileSync(abs);
 
+    // Classify before reading, not after: the read used to happen first, so every check loaded the
+    // whole launcher binary into memory only to label it "binary" one line later. That was one
+    // 89 MB read per check run and it is two now (the SEA binary, or the bundled runtime).
     if (!TEXT_EXT.has(ext)) {
       binaryFiles++;
       continue;
     }
+
+    const buf = fs.readFileSync(abs);
     // A NUL byte in the first 4 KB means it is really a binary blob.
     if (buf.subarray(0, 4096).includes(0)) {
       binaryFiles++;

@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const { READY_SELECTOR, waitForAppReady } = require('./lib/app-ready.cjs');
+const { resolveLaunch, launchCandidates } = require('./launch-target.cjs');
 
 let pass = 0;
 let fail = 0;
@@ -175,15 +176,22 @@ if (!enginePresent) {
   });
   stray.server.close();
 
-  // (a) the real direction, against the exe this walk drives. Skipped with a statement when the package
-  // is not built, because the walk itself cannot run then either.
+  // (a) the real direction, against the package this walk drives. Skipped with a statement when the
+  // package is not built, because the walk itself cannot run then either. Which layout the package
+  // uses is resolved rather than assumed: a build with no launcher binary is a runnable package too
+  // (tools/launch-target.cjs), and reporting it as "no packaged app" would be a false negative.
   const dir = path.join(ROOT, 'dist', 'VtuberMonitorLink');
-  const exe = path.join(dir, process.platform === 'win32' ? 'VtuberMonitorLink.exe' : 'VtuberMonitorLink');
-  if (!fs.existsSync(exe)) {
-    process.stdout.write('         no packaged exe at dist/VtuberMonitorLink: the live direction is stated, not run\n');
+  const target = resolveLaunch(dir);
+  if (!target) {
+    const why = launchCandidates(dir)
+      .map((c) => (c.present ? 'present ' : 'missing ') + c.what)
+      .join('; ');
+    process.stdout.write(
+      '         no runnable package at dist/VtuberMonitorLink (' + why + '): the live direction is stated, not run\n'
+    );
   } else {
     const port = await freePort();
-    const app = spawn(exe, ['--no-open', '--port', String(port)], { cwd: dir, stdio: 'ignore' });
+    const app = spawn(target.cmd, target.args.concat(['--no-open', '--port', String(port)]), { cwd: dir, stdio: 'ignore' });
     try {
       await waitHttp('http://127.0.0.1:' + port + '/api/state', 30000);
       await ta('a running app reaches readiness, and it is the app (the direction that keeps the gate usable)', async () => {

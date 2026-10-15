@@ -280,7 +280,9 @@ npm run release       # all of the above
 
 `npm test` and `npm run verify:fast` are the same chain: it is the project's whole self-check surface, so the
 command a newcomer types first is not a subset that quietly passes. The per-suite entries are also there
-individually (`npm run test:cluster`, `npm run test:archive`, ...) when one of them is what you want.
+individually (`npm run test:cluster`, `npm run test:archive`, ...) when one of them is what you want, and every
+suite the chain runs has one - `npm run` prints the whole table, which is the list to trust rather than this
+sentence.
 
 Four convention guards ride along in the same chain (`verify:fast`):
 `tools/english-logic.mjs` (the engineering layer is English only — comments and logs; UI strings and

@@ -10,11 +10,11 @@
     "web"
   ],
   "scripts": {
+    "test": "npm run verify:fast",
     "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "node server/src/index.js",
     "dev:web": "vite --config web/vite.config.js",
     "build": "vite build --config web/vite.config.js",
-    "test": "npm run verify:fast",
     "i18n:hant": "node tools/i18n-hant.mjs",
     "i18n:translate": "node tools/i18n-translate.mjs",
     "i18n:review": "node tools/i18n-translate.mjs --review",
@@ -65,7 +65,23 @@
     "test:cost": "node tools/cost-test.mjs",
     "test:vdb": "node tools/vdb-test.mjs",
     "test:hint-md": "node tools/hint-md-test.mjs",
-    "test:archive-day": "node tools/archive-day-test.mjs"
+    "test:archive-day": "node tools/archive-day-test.mjs",
+    "test:docs": "node tools/docs-test.mjs",
+    "test:privacy": "node tools/privacy-test.mjs",
+    "test:proxyctl": "node tools/proxyctl-test.mjs",
+    "test:completion": "node tools/completion-test.mjs",
+    "test:config-fault": "node tools/config-fault-test.mjs",
+    "test:config-fault-banner": "node tools/config-fault-banner-test.mjs",
+    "test:remote-url": "node tools/remote-url-test.mjs",
+    "test:config-secrets": "node tools/config-secrets-test.mjs",
+    "test:config-durability": "node tools/config-durability-test.mjs",
+    "test:watch-baseline": "node tools/watch-baseline-test.mjs",
+    "test:watch-ua": "node tools/watch-ua-test.mjs",
+    "test:readiness": "node tools/readiness-test.mjs",
+    "test:uncaught-exit": "node tools/uncaught-exit-test.mjs",
+    "test:render-timeout": "node tools/render-timeout-test.mjs",
+    "test:cluster-identity": "node tools/cluster-identity-test.mjs",
+    "test:browser-engine": "node tools/browser-engine-test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

@@ -1656,6 +1656,16 @@ async function main() {
     await page.locator('[data-testid="about-open"]').click();
     await page.waitForSelector('.about-modal', { timeout: 5000 });
     check('the About button opens the panel without leaving the page', await page.locator('.about-modal').isVisible(), 'panel visible');
+    // The panel fetches the document over HTTP *after* it opens, so "the modal exists" is not "the document is
+    // there". Measured: with the read happening straight after the modal appeared, this pair of checks failed
+    // with the loading placeholder ("加载中…", 0 headings) in a run that overlapped a build and a second browser
+    // harness, while the same walk passed 242 of 242 alone - a gate asserting how busy the machine is, which is
+    // the same defect `data-vml-ready` was introduced to remove elsewhere. The wait is on the content the checks
+    // below assert rather than on a duration, and it is deliberately not fatal: a document that never arrives
+    // still fails, at the checks, with their own specific messages instead of a bare timeout here.
+    await page
+      .waitForFunction(() => document.querySelectorAll('.readme-doc h2').length > 3, null, { timeout: 15000 })
+      .catch(() => {});
     const aboutBody = async () => (await page.locator('.modal-body').innerText()).trim();
     const aboutShown = await aboutBody();
     check('the panel renders the document (a heading, not escaped markup)', aboutShown.includes("Vtuber's Monitor Link") && !aboutShown.includes('## '), aboutShown.slice(0, 60).replace(/\n/g, ' '));

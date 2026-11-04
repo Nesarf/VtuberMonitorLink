@@ -1,6 +1,6 @@
 name: workers
 
-# The multilingual worker layer, built and diffed on three platforms.
+# The multilingual worker layer, built and diffed on several platforms.
 #
 # This is what "Linux adaptation" means for this layer: the same contract, the same corpus, a
 # different toolchain - and the same answer. It is a separate workflow from ci.yml on purpose, since
@@ -17,19 +17,32 @@ name: workers
 #   macos   - the reference, java, cpp (clang++), go, python3, pwsh, csharp, perl 5.44, bash 3.2.57
 #   no Rscript on the linux or macos image (measured, not assumed)
 #
-# macOS is informational again as of BUGS #110, and the reason is a measurement rather than a mood. It
-# became a gating leg on evidence - it ran the whole corpus and the fuzzer green twice while it was
-# only informational (8fd1d74 moved the C# worker onto `dotnet <dll>`, fb730ea fixed the Perl worker) -
-# and it stopped being one on evidence too: from 2026-11-04 14:58 every run of it was cancelled with
-# "The job was not acquired by Runner of type hosted", nine in a row, while ubuntu and windows passed
-# on all nine commits. That is GitHub's macOS arm64 capacity, neither a flake nor a product defect, and
-# a gate that never starts covers nothing while its red hides the failures that are real. Its own job
-# still runs and still reports; only the blocking is withdrawn. Promoting it back is one word, and the
-# commit that does it records the two green runs that justified it, in docs/BUGS.md like the first.
+# The macOS leg is not in the push matrix as of BUGS #110, and both halves of that decision are
+# measurements. It became a gating leg on evidence - it ran the whole corpus and the fuzzer green
+# twice while it was only informational (8fd1d74 moved the C# worker onto `dotnet <dll>`, fb730ea
+# fixed the Perl worker). It stopped being one on evidence too: from 2026-11-04 14:58 every run of it
+# was cancelled with "The job was not acquired by Runner of type hosted", nine in a row, while ubuntu
+# and windows passed on all nine commits. That is GitHub's hosted macOS arm64 capacity, neither a
+# flake nor a product defect, and a gate that never starts covers nothing while its red hides the
+# failures that are real.
+#
+# `continue-on-error` was tried first and does not fix it, which is also measured: with
+# `experimental: true` in the matrix, run 41870457773 on 8d93b1d still ended `failure`, with
+# `macos-latest` cancelled and both other legs green. The flag covers a job that runs and fails; it
+# does not cover a job that is cancelled before it is ever assigned to a runner.
+#
+# So the leg is its own job now, and it runs where a queue is more likely to be able to serve it: one
+# scheduled run a day and a manual dispatch. When it runs it is a real gate again - not a matrix flag
+# claiming to be one - and it carries no `continue-on-error`, so a genuine failure there is a genuine
+# failure. Promoting it back into the push matrix means two green acquired runs, recorded in
+# docs/BUGS.md like the first promotion was.
 on:
   push:
     branches: ['**']
   pull_request:
+  schedule:
+    # 04:17 UTC daily. The hour is not load-bearing; having a queue that is not a burst of pushes is.
+    - cron: '17 4 * * *'
   workflow_dispatch:
 
 permissions:
@@ -38,19 +51,16 @@ permissions:
 jobs:
   conformance:
     name: workers (${{ matrix.os }})
+    # Not on the daily schedule: that slot exists for the macOS leg, and two more full legs a day
+    # would be spending minutes to re-learn what every push already answers.
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            experimental: false
           - os: windows-latest
-            experimental: false
-          - os: macos-latest
-            # BUGS #110: cancelled by runner capacity, not by the layer. Still runs, still reports.
-            experimental: true
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,8 +77,8 @@ jobs:
 
       # Go is present on the Linux and Windows runners but not on the macOS one, which is how the
       # first run of this job found out: the macOS job reported go-text as "no hint directories" and
-      # the harness treated it as a skip. Installing it makes the three platforms comparable, which is
-      # the entire point of the matrix.
+      # the harness treated it as a skip. Installing it makes the platforms comparable, which is the
+      # entire point of running more than one of them.
       - uses: actions/setup-go@v5
         with:
           go-version-file: workers/go/go.mod
@@ -79,11 +89,11 @@ jobs:
       - name: Build every implementation that can be built here, then diff the corpus
         run: node tools/workers.mjs
 
-      # Measured rather than assumed, on all three platforms at once. The Perl implementation lives in
-      # the machine-local overlay because nobody had checked whether `perl` is on these runners; "it
-      # probably is" is not a measurement, and the cheapest way to get one is to ask the runners. This
-      # step prints the version or says it is absent and never fails, so the answer arrives in the log
-      # without touching the gate.
+      # Measured rather than assumed. The Perl implementation lives in the machine-local overlay
+      # because nobody had checked whether `perl` is on these runners; "it probably is" is not a
+      # measurement, and the cheapest way to get one is to ask the runners. This step prints the
+      # version or says it is absent and never fails, so the answer arrives in the log without
+      # touching the gate.
       - name: Does this runner have Perl? (measured, not assumed)
         shell: bash
         run: |
@@ -120,6 +130,66 @@ jobs:
         run: |
           {
             echo "### workers: conformance failed on ${{ matrix.os }}"
+            echo
+            echo "Every implementation that answered agrees, or one of them does not follow the contract."
+            echo "The DIVERGES lines name the implementations and show their answers side by side;"
+            echo "docs/WORKERS.md section 5 says which of the two is at fault when they disagree."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The third platform, in the slot that can actually be served. The steps are the ones above on
+  # purpose: the point of this leg is that the same contract and the same corpus produce the same
+  # answers under clang++, perl 5.44 and bash 3.2.57, so running a reduced version of the harness would
+  # answer a different question than the one it exists for. Only the trigger and the label differ.
+  conformance-macos:
+    name: workers (macos-latest)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: workers/go/go.mod
+          cache: false
+
+      - name: Build every implementation that can be built here, then diff the corpus
+        run: node tools/workers.mjs
+
+      - name: Does this runner have Perl? (measured, not assumed)
+        shell: bash
+        run: |
+          perl -e 'print "perl $^V on $^O\n"' 2>/dev/null || echo "perl: absent on this runner"
+
+      - name: Do these runners have R and the shell the worker would need? (measured, not assumed)
+        shell: bash
+        run: |
+          if command -v Rscript >/dev/null 2>&1; then Rscript --version 2>&1 | head -1; else echo "Rscript: absent on this runner"; fi
+          if command -v bash >/dev/null 2>&1; then bash --version | head -1; else echo "bash: absent on this runner"; fi
+
+      - name: Diff the implementations over generated input
+        shell: bash
+        run: node tools/workers-diff.mjs --n 150 --seed 20260101
+
+      - name: Report which implementations this platform ran
+        if: always()
+        shell: bash
+        run: node tools/workers.mjs --list || true
+
+      - name: Note a red run in the summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### workers: conformance failed on macos-latest"
             echo
             echo "Every implementation that answered agrees, or one of them does not follow the contract."
             echo "The DIVERGES lines name the implementations and show their answers side by side;"

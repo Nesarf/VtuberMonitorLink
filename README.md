@@ -1,7 +1,7 @@
 # Vtuber's Monitor Link
 
 > **A local-web VTuber intelligence monitor** — pick your own browser, your own sources, and the exact pages you want watched.
-> Everything runs on your machine: one executable, a local web UI, no account, no service in the middle.
+> Everything runs on your machine: one download that carries its own runtime, a local web UI, no account, no service in the middle.
 
 **English** · [简体中文](README.zh-CN.md)
 

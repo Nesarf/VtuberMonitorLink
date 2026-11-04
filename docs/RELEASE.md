@@ -611,6 +611,14 @@ point for it either.
 | i18n | `npm run i18n:coverage` / `i18n:proofread` | every shipped locale **638/638 = 100%**; proofread hard failures **0** |
 | Release chain | `npm run release` | build ✓; proofread clean; both traversals passed |
 
+### Packaging note
+
+The 1.0.1 artifact is 358.4 MB where its neighbours are about 40 MB, and both sizes describe what they say: this
+build carried the bundled browser. Unpacked it came to 819.2 MB, of which `pw-browsers/` was 705.6 MB - the same
+705.6 MB the 1.0.4 notes record as the Chromium payload that release replaced with Playwright Firefox and shrank
+to 345.3 MB. 1.0.0 and 1.0.2 were built without it. This is the optional bundled-engine build the 1.0.0 notes
+describe, not a packaging fault.
+
 ### Not yet verified
 
 Same as 1.0.0: sending danmaku from a real account and doing vision tagging with a real key both need the

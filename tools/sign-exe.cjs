@@ -146,8 +146,8 @@ if (!args.onlysign) {
 }
 if (!args.ledger) {
   // Without this the tool writes its record into whatever directory the build was started from, which
-  // was measured: a build run from E:\DSH left a ledger at E:\DSH\.onlysign\signings.ndjson. A record of
-  // what was signed is only useful if it is in one known place, so this refuses to guess.
+  // was measured: a build run from <drive>:\DSH left a ledger at <drive>:\DSH\.onlysign\signings.ndjson.
+  // A record of what was signed is only useful if it is in one known place, so this refuses to guess.
   process.stderr.write(
     'sign-exe: no --ledger path.\n' +
       '  The signing ledger must be named explicitly: a record of what was signed, scattered across\n' +

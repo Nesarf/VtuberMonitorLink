@@ -44,8 +44,8 @@ node tools/build-portable.cjs --no-exe --sign <certificate thumbprint> \
 
 Three deliberate refusals in it. The certificate is named by **thumbprint**, because a subject string is something
 any certificate can claim and a thumbprint is not. The **ledger path is required**, because without it the record
-of what was signed lands in whichever directory the build ran from - measured, a build started from `E:\DSH` left
-one at `E:\DSH\.onlysign\signings.ndjson`, which is not a record of anything. And **failure is fatal**: a release
+of what was signed lands in whichever directory the build ran from - measured, a build started from
+`<drive>:\DSH` left one at `<drive>:\DSH\.onlysign\signings.ndjson`, which is not a record of anything. And **failure is fatal**: a release
 whose notes claim a signature while shipping an unsigned binary is worse than a build that stops, and omitting
 `--sign` is how you build without one.
 

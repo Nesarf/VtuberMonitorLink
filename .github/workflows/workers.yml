@@ -17,11 +17,15 @@ name: workers
 #   macos   - the reference, java, cpp (clang++), go, python3, pwsh, csharp, perl 5.44, bash 3.2.57
 #   no Rscript on the linux or macos image (measured, not assumed)
 #
-# macOS is a gating leg as of this commit. It earned that by running the whole corpus and the fuzzer
-# green twice while it was only informational - 8fd1d74, the commit that moved the C# worker onto
-# `dotnet <dll>`, and fb730ea, the commit that fixed the Perl worker - so the promotion is a decision
-# made on evidence rather than on optimism. If that runner turns out to flake, the flag is one word to
-# put back, and putting it back is a change to a gate: it belongs in docs/BUGS.md like any other.
+# macOS is informational again as of BUGS #110, and the reason is a measurement rather than a mood. It
+# became a gating leg on evidence - it ran the whole corpus and the fuzzer green twice while it was
+# only informational (8fd1d74 moved the C# worker onto `dotnet <dll>`, fb730ea fixed the Perl worker) -
+# and it stopped being one on evidence too: from 2026-11-04 14:58 every run of it was cancelled with
+# "The job was not acquired by Runner of type hosted", nine in a row, while ubuntu and windows passed
+# on all nine commits. That is GitHub's macOS arm64 capacity, neither a flake nor a product defect, and
+# a gate that never starts covers nothing while its red hides the failures that are real. Its own job
+# still runs and still reports; only the blocking is withdrawn. Promoting it back is one word, and the
+# commit that does it records the two green runs that justified it, in docs/BUGS.md like the first.
 on:
   push:
     branches: ['**']
@@ -43,7 +47,8 @@ jobs:
           - os: windows-latest
             experimental: false
           - os: macos-latest
-            experimental: false
+            # BUGS #110: cancelled by runner capacity, not by the layer. Still runs, still reports.
+            experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     steps:

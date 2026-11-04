@@ -38,8 +38,11 @@ its `DAY_KEY_CALLERS` inventory).
 
 **Collecting and planning.** `sources.js` (the catalogue), `runner.js` (one run), `scheduler.js`,
 `fetchplan.js` (who is due, what fits a budget), `reports.js` (writes the feed files and an item's JSON),
-`items.js`, `archive.js` (the sqlite mirror and its aggregates), `cluster.js` (the same event seen from
-several sources), `identity.js` / `entities.js` / `people.js` (who is who), `observe.js` (observation
+`items.js`, `archive.js` (the incremental sqlite mirror: idempotent writes per item id, daily rollups so
+charts need not scan the table, and the series that trend questions read), `cluster.js` (one event reported
+by several sources: character-bigram similarity for CJK plus word tokens for Latin, a time window so "the
+same event" is text *and* time, and source weights that learn from who reported it first),
+`identity.js` / `entities.js` / `people.js` (who is who), `observe.js` (observation
 mode: sparse sampling, temporal jitter, and which egress each source leaves by - it is what decides who
 this round looks at, which is why it sits here rather than with the reporting modules).
 
@@ -54,9 +57,14 @@ hand-written SOCKS5 connector used for Tor), `egress.js`, `proxyctl.js` (discove
 `features.js` (extraction with a cache), `digest.js`, `diff.js`.
 
 **Judging and telling.** `notify.js` (channels, quiet hours), `silence.js`, `dormant.js`, `groups.js`,
-`watch.js` (targets, baselines, change digests), `cost.js`.
+`watch.js` (four target kinds - a plain url, a mediawiki page, the recent-changes stream, and the watchlist
+behind a login - plus the alarm rules that turn "it changed" into "what changed, how much, is it worth
+reading"; the baseline and digest machinery live here), `cost.js`.
 
-**Everything else with a subject.** `search.js` (the local index, its `days` window), `share.js`,
+**Everything else with a subject.** `search.js` (the local index, its `days` window), `share.js` (two
+classes that differ in exactly one thing: exporting a single file or pushing to a webhook needs no login,
+while posting to a site must answer the account / verification / send stages separately and is **never sent
+by a scheduled run**, because speaking in public is irreversible),
 `vdb.js`, `calendar.js`, `privacy.js`, `office.js`, `tar.js`, `thumbs.js`, `docs.js` (the About panel's
 fixed document list), `openfile.js`, `diagnose.js`.
 

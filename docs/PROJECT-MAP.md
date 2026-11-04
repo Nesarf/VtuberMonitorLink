@@ -3,10 +3,11 @@
 Where things are, what each part owns, and which door an edit comes in through. This is a navigational
 document: the reasons live in `DESIGN.md`, the history in `BUGS.md`, and the rules in `ENGLISH-LOGIC.md`.
 
-Measured at the time of writing, from the tree itself: `server/src` holds **50 top-level modules and 45
-route modules**; `web/src` holds 56 files; `tools` holds 71 scripts plus 7 in `tools/lib`; `workers`
-holds **16 implementations across 13 languages**. `server.js` is 423 lines and registers **no `/api/*`
-route of its own** - every one of them lives in `server/src/routes/`.
+Measured from the tree rather than estimated: `server/src` holds **50 top-level modules and 45 route
+modules**; `web/src` holds 56 files; `tools` holds 72 scripts plus 7 in `tools/lib`; `workers` holds **16
+implementations across 10 languages** (13 directories, but `bash` and `j` carry no worker). `server.js` is
+567 lines, 423 of them non-blank, and registers **no `/api/*` route of its own** - every one of them lives
+in `server/src/routes/`.
 
 ## Top-level layout
 
@@ -14,7 +15,7 @@ route of its own** - every one of them lives in `server/src/routes/`.
 | --- | --- |
 | `server/` | The application: `src/` (the whole runtime) and `scripts/` (the sanitize suite: `sanitize-check`, `sanitize-history`, `sanitize-rules`, `smoke`) |
 | `web/` | The React front end: `src/` plus `dist/` (a build output) |
-| `workers/` | The multilingual worker layer - 13 language directories, `spec/`, and `registry.json` |
+| `workers/` | The multilingual worker layer - 13 language directories holding 16 implementations in 10 languages, plus `spec/` and `registry.json` |
 | `tools/` | Every gate, traversal and build script; `lib/` holds shared helpers |
 | `docs/` | The written record (see below) |
 | `launcher/` | How the shipped zip starts: `launch.cmd`, `launch.sh`, `launch.cjs` |
@@ -38,7 +39,9 @@ its `DAY_KEY_CALLERS` inventory).
 **Collecting and planning.** `sources.js` (the catalogue), `runner.js` (one run), `scheduler.js`,
 `fetchplan.js` (who is due, what fits a budget), `reports.js` (writes the feed files and an item's JSON),
 `items.js`, `archive.js` (the sqlite mirror and its aggregates), `cluster.js` (the same event seen from
-several sources), `identity.js` / `entities.js` / `people.js` (who is who).
+several sources), `identity.js` / `entities.js` / `people.js` (who is who), `observe.js` (observation
+mode: sparse sampling, temporal jitter, and which egress each source leaves by - it is what decides who
+this round looks at, which is why it sits here rather than with the reporting modules).
 
 **Network.** `net.js` (egress choice, the global dispatcher, redirect-safe fetching), `socks.js` (the
 hand-written SOCKS5 connector used for Tor), `egress.js`, `proxyctl.js` (discovery and diagnosis),
@@ -72,8 +75,9 @@ always wins.
 
 ## The worker layer
 
-`workers/registry.json` is the source of truth: 16 implementations, each declaring its language, the
-capabilities it implements, a build argv, the artifact that must exist afterwards, and a launch prefix.
+`workers/registry.json` is the source of truth: 16 implementations across 10 languages (13 directories,
+but `bash` and `j` carry no worker of their own), each declaring its language, the capabilities it
+implements, a build argv, the artifact that must exist afterwards, and a launch prefix.
 The host appends `--capability <name>`. A missing artifact is reported as a skip, never as a pass.
 
 The capability matrix, as measured:

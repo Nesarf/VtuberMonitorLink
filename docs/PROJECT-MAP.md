@@ -4,7 +4,7 @@ Where things are, what each part owns, and which door an edit comes in through. 
 document: the reasons live in `DESIGN.md`, the history in `BUGS.md`, and the rules in `ENGLISH-LOGIC.md`.
 
 Measured from the tree rather than estimated: `server/src` holds **50 top-level modules and 45 route
-modules**; `web/src` holds 56 files; `tools` holds 73 scripts plus 7 in `tools/lib`; `workers` holds **16
+modules**; `web/src` holds 38 files; `tools` holds 73 scripts plus 7 in `tools/lib`; `workers` holds **16
 implementations across 10 languages** (13 directories, but `bash` and `j` carry no worker); and `docs`
 holds 11 files. `server.js` is 567 lines, 423 of them non-blank, and registers **no `/api/*` route of its
 own** - every one of them lives in `server/src/routes/`.

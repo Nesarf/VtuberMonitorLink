@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MAP = path.join(ROOT, 'docs', 'PROJECT-MAP.md');
@@ -29,6 +30,20 @@ const t = (name, fn) => {
   }
 };
 
+// Count what the *repository* contains, not what this checkout happens to hold. The difference is real and
+// it bit this suite on its first CI run: `web/src` has 56 files on a developer machine and 38 in a fresh
+// checkout, because `web/src/locales/.cache/` is a gitignored translation cache. A map describes the
+// repository, so the numbers have to come from the repository.
+const committed = (prefix) =>
+  execFileSync('git', ['ls-files', prefix], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
+/** files committed under a prefix, at any depth */
+const committedUnder = (prefix) => committed(prefix).length;
+/** committed files directly under a prefix, optionally by extension */
+const committedTop = (prefix, ext) =>
+  committed(prefix).filter((p) => {
+    const rest = p.slice(prefix.length + 1);
+    return !rest.includes('/') && (!ext || p.endsWith(ext));
+  }).length;
 const map = fs.readFileSync(MAP, 'utf8');
 // Markdown wraps prose at ~100 columns, so a claim can straddle two lines. Every pattern below matches
 // against lat, which is the map with its whitespace collapsed - otherwise a rewrapped paragraph would
@@ -54,33 +69,27 @@ const claim = (re, what) => {
 t('the opening sentence still states every count it used to', () => {
   const m = /`server\/src` holds \*\*(\d+) top-level modules and (\d+) route modules\*\*/.exec(flat);
   assert.ok(m, 'the opening count sentence is gone from the map');
-  assert.equal(Number(m[1]), listing('server/src').filter((n) => n.endsWith('.js')).length, 'top-level module count differs from the tree');
-  assert.equal(Number(m[2]), listing('server/src/routes').filter((n) => n.endsWith('.js')).length, 'route module count differs from the tree');
+  assert.equal(Number(m[1]), committedTop('server/src', '.js'), 'top-level module count differs from the repository');
+  assert.equal(Number(m[2]), committedTop('server/src/routes', '.js'), 'route module count differs from the repository');
 });
 
 t('the web file count matches', () => {
   const want = claim(/`web\/src` holds (\d+) files/, 'the web/src file count');
-  let n = 0;
-  (function walk(d) {
-    for (const e of fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })) {
-      if (e.isDirectory()) walk(path.join(d, e.name));
-      else n++;
-    }
-  })('web/src');
-  assert.equal(n, want, `the map says ${want} files under web/src, the tree has ${n}`);
+  const got = committedUnder('web/src');
+  assert.equal(got, want, `the map says ${want} files under web/src, the repository has ${got}`);
 });
 
 t('the tools script count matches', () => {
   const want = claim(/`tools` holds (\d+) scripts/, 'the tools script count');
-  const got = listing('tools').filter((n) => /\.(mjs|cjs|js)$/.test(n)).length;
-  assert.equal(got, want, `the map says ${want} scripts in tools, the tree has ${got}`);
+  const scripts = committed('tools').filter((p) => !p.slice('tools'.length + 1).includes('/') && /\.(mjs|cjs|js)$/.test(p)).length;
+  assert.equal(scripts, want, `the map says ${want} scripts in tools, the repository has ${scripts}`);
   const lib = claim(/plus (\d+) in `tools\/lib`/, 'the tools/lib count');
-  assert.equal(listing('tools/lib').length, lib, 'the tools/lib count differs');
+  assert.equal(committedUnder('tools/lib'), lib, 'the tools/lib count differs');
 });
 
 t('the document count matches', () => {
   const want = claim(/`docs` holds (\d+) files|holds (\d+)\s+documents/, 'the docs count') ?? null;
-  const docs = listing('docs').filter((n) => n.endsWith('.md')).length;
+  const docs = committed('docs').filter((p) => p.endsWith('.md')).length;
   if (want === null) {
     // the map may not spell the docs count out; that is not a failure, only an absent claim
     process.stdout.write('         (the map does not state a document count, so nothing to compare)\n');

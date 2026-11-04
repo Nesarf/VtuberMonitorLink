@@ -1,4 +1,6 @@
 {
+  "specific-drive|docs/RELEASE.md": 2,
+  "specific-drive|tools/sign-exe.cjs": 2,
   "escaped-drive|docs/BUGS.md": 1,
   "escaped-drive|tools/config-fault-banner-test.mjs": 2,
   "cookie-blob|tools/browser-config-test.mjs": 1,

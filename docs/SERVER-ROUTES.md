@@ -19,14 +19,18 @@ export function registerArchiveRoutes(app, { getConfig, patchConfig, log }) { /*
   module's own destructuring - never by widening the default for every group.
 - **the registrar is called where the block was**, so registration order is preserved.
 
-Moved so far: `calendar`, `vdb`, `people`, `search`, `advice`, `egress`, `proxy` (the control-discovery route),
-`share`, `archive` (`stats` and `rebuild`).
+**The split is complete.** All 45 groups live in `server/src/routes/`, and the factory registers **no `/api/*`
+route of its own** - a property `tools/project-map-test.mjs` refuses to let regress. The nine groups that used
+to be the whole story (`calendar`, `vdb`, `people`, `search`, `advice`, `egress`, `proxy`, `share`, `archive`)
+were the first slices; the rest followed, the last of them by hand (see the two that resisted, below).
 
 ## What stays in the factory on purpose
 
-The error boundary, the static assets, the SPA fallback, the config-write path (`persist`, `onConfigChanged`), the
-busy guards, and the health/state endpoints that the shell itself depends on. These are the parts that make the
-process a server rather than a set of handlers, and the split is not finished when they move - it is broken.
+The error boundary, the static assets, the SPA fallback, the request guard, and the two shared helpers that the
+groups are *given* rather than own: `persist` (the config-write path, together with `onConfigChanged`) and
+`busyGuard`. These are the parts that make the process a server rather than a set of handlers, and the split is
+not finished when they move - it is broken. The health and state endpoints were once listed here too; they are
+ordinary groups now, because the shell asks for them over the same HTTP surface a user does.
 
 ## Moving a group: the three rules, learned by breaking them
 
@@ -49,7 +53,10 @@ process a server rather than a set of handlers, and the split is not finished wh
   while answering correctly from the source server against an empty config. The difference is runtime state, and
   the reproduction has to include the run step.
 
-Both are recorded as findings (#99, #100, #101) in [BUGS.md](BUGS.md) rather than only in commit messages.
+Both are recorded as findings (#99, #100, #101) in [BUGS.md](BUGS.md) rather than only in commit messages, and
+both are **closed**. `/api/events` left the factory once the extraction learned to see a declaration written at
+column 0; `/api/config` came out by hand with the ordering made explicit, and its health and transfer routes
+followed in the same shape.
 
 ## Before moving the next one
 

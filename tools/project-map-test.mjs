@@ -167,5 +167,17 @@ t('every path the map points at exists', () => {
   assert.deepEqual(missing, [], `the map points at paths that do not exist: ${missing.join(', ')}`);
 });
 
+// The route index is the map's sibling and carries the same risk: it was written while the split was half
+// done, so it said "moved so far" and listed nine groups long after there were forty-five. A document that
+// describes a migration is exactly the document nobody re-reads once the migration finishes.
+t('the route index agrees with the route modules it indexes', () => {
+  const doc = fs.readFileSync(path.join(ROOT, 'docs', 'SERVER-ROUTES.md'), 'utf8').replace(/\s+/g, ' ');
+  const m = /All (\d+) groups live in/.exec(doc);
+  assert.ok(m, 'SERVER-ROUTES.md no longer states how many groups there are, so this check has nothing to compare');
+  const actual = committedTop('server/src/routes', '.js');
+  assert.equal(Number(m[1]), actual, `SERVER-ROUTES.md says ${m[1]} groups, the tree has ${actual}`);
+  assert.match(doc, /registers \*\*no `\/api\/\*` route of its own\*\*/, 'SERVER-ROUTES.md no longer states the property that makes the split complete');
+});
+
 process.stdout.write(`\nproject map: ${pass} ok, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
